@@ -176,9 +176,7 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			}
 		}
 		return cfg, errors.New(
-			"brain: Anthropic credentials not found\n" +
-				"  - API key:         export ANTHROPIC_API_KEY=sk-ant-api03-...\n" +
-				"  - Claude Code auth: export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)",
+			"brain: Anthropic credentials not found, set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN",
 		)
 
 	case ProviderOpenAI:
@@ -188,8 +186,7 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			return cfg, nil
 		}
 		return cfg, errors.New(
-			"brain: OpenAI credentials not found; " +
-				"export OPENAI_API_KEY=sk-...",
+			"brain: OpenAI credentials not found, set OPENAI_API_KEY",
 		)
 
 	case ProviderOllama:
