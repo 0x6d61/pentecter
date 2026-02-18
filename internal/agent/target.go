@@ -1,7 +1,11 @@
 // Package agent defines the data model for pentest targets and session state.
 package agent
 
-import "time"
+import (
+	"time"
+
+	"github.com/0x6d61/pentecter/internal/tools"
+)
 
 // Status represents the current operational state of a target host.
 type Status string
@@ -66,6 +70,24 @@ type Target struct {
 	Status   Status
 	Logs     []LogEntry
 	Proposal *Proposal
+	// Entities はツール出力から抽出された発見済みエンティティ（ナレッジグラフ）。
+	// Brain のスナップショット生成に使われる。
+	Entities []tools.Entity
+}
+
+// AddEntities は新しいエンティティを重複なしで追加する。
+func (t *Target) AddEntities(entities []tools.Entity) {
+	seen := make(map[string]bool, len(t.Entities))
+	for _, e := range t.Entities {
+		seen[string(e.Type)+":"+e.Value] = true
+	}
+	for _, e := range entities {
+		key := string(e.Type) + ":" + e.Value
+		if !seen[key] {
+			seen[key] = true
+			t.Entities = append(t.Entities, e)
+		}
+	}
 }
 
 // NewTarget creates a new Target with default idle state.
