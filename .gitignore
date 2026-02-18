@@ -20,6 +20,9 @@ coverage.out
 *.swp
 *.swo
 
+# 秘密情報
+.env
+
 # OS
 .DS_Store
 Thumbs.db

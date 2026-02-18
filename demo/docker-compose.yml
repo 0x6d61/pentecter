@@ -1,0 +1,40 @@
+services:
+  pentecter:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile.pentecter
+    container_name: pentecter
+    stdin_open: true
+    tty: true
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-}
+    networks:
+      pentecter-demo:
+        ipv4_address: 172.30.0.10
+    depends_on:
+      target:
+        condition: service_started
+
+  target:
+    image: tleemcjr/metasploitable2:latest
+    container_name: pentecter-demo-target
+    hostname: metasploitable
+    networks:
+      pentecter-demo:
+        ipv4_address: 172.30.0.20
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+networks:
+  pentecter-demo:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

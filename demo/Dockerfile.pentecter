@@ -1,0 +1,21 @@
+# Stage 1: Go ビルド
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /pentecter ./cmd/pentecter
+
+# Stage 2: ランタイム（ペンテストツール入り）
+FROM alpine:3.21
+RUN apk add --no-cache \
+    nmap nmap-scripts \
+    nikto \
+    curl \
+    bash
+COPY --from=builder /pentecter /usr/local/bin/pentecter
+COPY tools/  /app/tools/
+COPY skills/ /app/skills/
+COPY config/ /app/config/
+WORKDIR /app
+ENTRYPOINT ["pentecter"]
