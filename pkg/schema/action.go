@@ -13,9 +13,22 @@ const (
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).
+//
+// Args は map[string]any 形式で統一する。
+//   - YAML ツール: ToolDef.ArgsTemplate で CLI 引数に変換される
+//   - MCP ツール:  そのまま MCP tools/call の arguments として渡される
+//
+// 例（nmap）:
+//
+//	{
+//	  "thought": "start port scan",
+//	  "action":  "run_tool",
+//	  "tool":    "nmap",
+//	  "args":    {"target": "10.0.0.5", "ports": "21,22,80", "flags": ["-sV"]}
+//	}
 type Action struct {
-	Thought string     `json:"thought"`
-	Action  ActionType `json:"action"`
-	Tool    string     `json:"tool,omitempty"`
-	Args    []string   `json:"args,omitempty"`
+	Thought string         `json:"thought"`
+	Action  ActionType     `json:"action"`
+	Tool    string         `json:"tool,omitempty"`
+	Args    map[string]any `json:"args,omitempty"`
 }

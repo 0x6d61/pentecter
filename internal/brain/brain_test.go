@@ -78,7 +78,7 @@ func jsonEscape(s string) string {
 // --- テストケース ---
 
 func TestAnthropicBrain_Think_APIKey(t *testing.T) {
-	action := `{"thought":"port 80 found","action":"run_tool","tool":"nikto","args":["-h","10.0.0.5"]}`
+	action := `{"thought":"port 80 found","action":"run_tool","tool":"nikto","args":{"target":"10.0.0.5"}}`
 	srv := mockAnthropicServer(t, anthropicResponse(action))
 	defer srv.Close()
 
@@ -140,7 +140,7 @@ func TestAnthropicBrain_Think_OAuthToken(t *testing.T) {
 }
 
 func TestOpenAIBrain_Think(t *testing.T) {
-	action := `{"thought":"checking service","action":"run_tool","tool":"curl","args":["-si","http://10.0.0.5/"]}`
+	action := `{"thought":"checking service","action":"run_tool","tool":"curl","args":{"url":"http://10.0.0.5/","flags":["-si"]}}`
 	srv := mockOpenAIServer(t, openAIResponse(action))
 	defer srv.Close()
 

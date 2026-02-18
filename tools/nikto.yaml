@@ -3,7 +3,7 @@ binary: nikto
 description: "Webサーバ脆弱性スキャン"
 tags: [web, recon, vuln-scan]
 timeout: 300
-default_args: ["-h"]
+args_template: "-h {target!} {flags}"
 output:
   strategy: head_tail
   head_lines: 20

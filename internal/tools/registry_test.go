@@ -18,7 +18,7 @@ binary: echo
 description: "テスト用ツール"
 tags: [test]
 timeout: 10
-default_args: ["-n"]
+args_template: "{message}"
 output:
   strategy: head_tail
   head_lines: 10
@@ -43,8 +43,8 @@ output:
 	if def.TimeoutSec != 10 {
 		t.Errorf("TimeoutSec: got %d, want 10", def.TimeoutSec)
 	}
-	if len(def.DefaultArgs) != 1 || def.DefaultArgs[0] != "-n" {
-		t.Errorf("DefaultArgs: got %v, want [-n]", def.DefaultArgs)
+	if def.ArgsTemplate != "{message}" {
+		t.Errorf("ArgsTemplate: got %q, want {message}", def.ArgsTemplate)
 	}
 }
 

@@ -3,7 +3,7 @@ binary: nmap
 description: "ポートスキャン・サービス・OS検出"
 tags: [recon, port-scan]
 timeout: 600
-default_args: ["-sV"]
+args_template: "{flags} -p {ports} {target!}"
 output:
   strategy: head_tail
   head_lines: 50

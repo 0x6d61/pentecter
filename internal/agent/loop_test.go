@@ -29,38 +29,46 @@ func (m *mockBrain) Think(_ context.Context, _ brain.Input) (*schema.Action, err
 
 func (m *mockBrain) Provider() string { return "mock" }
 
+func newTestLoop(target *agent.Target, mb *mockBrain) (loop *agent.Loop, events chan agent.Event, approve chan bool, userMsg chan string) {
+	store := tools.NewLogStore()
+	registry := tools.NewRegistry()
+	events = make(chan agent.Event, 32)
+	approve = make(chan bool, 1)
+	userMsg = make(chan string, 1)
+	loop = agent.NewLoop(target, mb, store, registry, events, approve, userMsg)
+	return
+}
+
+func newTestLoopWithRegistry(target *agent.Target, mb *mockBrain, reg *tools.Registry) (loop *agent.Loop, events chan agent.Event, approve chan bool, userMsg chan string) {
+	store := tools.NewLogStore()
+	events = make(chan agent.Event, 32)
+	approve = make(chan bool, 1)
+	userMsg = make(chan string, 1)
+	loop = agent.NewLoop(target, mb, store, reg, events, approve, userMsg)
+	return
+}
+
 func TestLoop_Run_ThinkAndComplete(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{Thought: "analyzing", Action: schema.ActionThink},
 		},
 	}
 
-	store := tools.NewLogStore()
-	runner := tools.NewRunner(store)
-	registry := tools.NewRegistry()
-
-	events := make(chan agent.Event, 32)
-	approve := make(chan bool, 1)
-	userMsg := make(chan string, 1)
-
-	loop := agent.NewLoop(target, mb, runner, registry, events, approve, userMsg)
+	loop, events, _, _ := newTestLoop(target, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go loop.Run(ctx)
 
-	// EventComplete を待つ
-	var gotComplete bool
 	deadline := time.After(4 * time.Second)
-	for !gotComplete {
+	for {
 		select {
 		case e := <-events:
 			if e.Type == agent.EventComplete {
-				gotComplete = true
+				return
 			}
 		case <-deadline:
 			t.Fatal("timeout waiting for EventComplete")
@@ -70,41 +78,29 @@ func TestLoop_Run_ThinkAndComplete(t *testing.T) {
 
 func TestLoop_Run_ExecTool_ToolNotFound(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{Thought: "run nope", Action: schema.ActionRunTool, Tool: "notexist"},
 		},
 	}
 
-	store := tools.NewLogStore()
-	runner := tools.NewRunner(store)
-	registry := tools.NewRegistry() // 空のレジストリ
-
-	events := make(chan agent.Event, 32)
-	approve := make(chan bool, 1)
-	userMsg := make(chan string, 1)
-
-	loop := agent.NewLoop(target, mb, runner, registry, events, approve, userMsg)
+	loop, events, _, _ := newTestLoop(target, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go loop.Run(ctx)
 
-	// ツール未発見のエラーログ + Complete を待つ
 	var gotToolError bool
 	deadline := time.After(4 * time.Second)
 	for {
 		select {
 		case e := <-events:
-			if e.Type == agent.EventLog && e.Source == agent.SourceSystem {
-				if len(e.Message) > 0 {
-					gotToolError = true
-				}
+			if e.Type == agent.EventLog && e.Source == agent.SourceSystem && len(e.Message) > 0 {
+				gotToolError = true
 			}
 			if e.Type == agent.EventComplete && gotToolError {
-				return // 成功
+				return
 			}
 		case <-deadline:
 			if !gotToolError {
@@ -117,48 +113,40 @@ func TestLoop_Run_ExecTool_ToolNotFound(t *testing.T) {
 
 func TestLoop_Run_Proposal_Approve(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{
 				Thought: "exploit candidate",
 				Action:  schema.ActionPropose,
 				Tool:    "echo",
-				Args:    []string{"exploiting"},
+				Args:    map[string]any{"message": "exploiting"},
 			},
 		},
 	}
 
-	store := tools.NewLogStore()
-	runner := tools.NewRunner(store)
-	registry := tools.NewRegistry()
-	// echo を登録
-	registry.Register(&tools.ToolDef{
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ToolDef{
 		Name: "echo", Binary: "echo",
-		Output: tools.OutputConfig{Strategy: tools.StrategyHeadTail, HeadLines: 5, TailLines: 5},
+		ArgsTemplate: "{message}",
+		Output:       tools.OutputConfig{Strategy: tools.StrategyHeadTail, HeadLines: 5, TailLines: 5},
 	})
 
-	events := make(chan agent.Event, 32)
-	approve := make(chan bool, 1)
-	userMsg := make(chan string, 1)
-
-	loop := agent.NewLoop(target, mb, runner, registry, events, approve, userMsg)
+	loop, events, approve, _ := newTestLoopWithRegistry(target, mb, reg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go loop.Run(ctx)
 
-	// Proposal イベントを受け取ったら承認する
 	deadline := time.After(4 * time.Second)
 	for {
 		select {
 		case e := <-events:
 			if e.Type == agent.EventProposal {
-				approve <- true // 承認
+				approve <- true
 			}
 			if e.Type == agent.EventComplete {
-				return // 成功
+				return
 			}
 		case <-deadline:
 			t.Fatal("timeout waiting for proposal/complete")
@@ -168,22 +156,18 @@ func TestLoop_Run_Proposal_Approve(t *testing.T) {
 
 func TestLoop_Run_Proposal_Deny(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-
 	mb := &mockBrain{
 		actions: []*schema.Action{
-			{Thought: "risky exploit", Action: schema.ActionPropose, Tool: "metasploit", Args: []string{}},
+			{
+				Thought: "risky exploit",
+				Action:  schema.ActionPropose,
+				Tool:    "metasploit",
+				Args:    map[string]any{},
+			},
 		},
 	}
 
-	store := tools.NewLogStore()
-	runner := tools.NewRunner(store)
-	registry := tools.NewRegistry()
-
-	events := make(chan agent.Event, 32)
-	approve := make(chan bool, 1)
-	userMsg := make(chan string, 1)
-
-	loop := agent.NewLoop(target, mb, runner, registry, events, approve, userMsg)
+	loop, events, approve, _ := newTestLoop(target, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -195,7 +179,7 @@ func TestLoop_Run_Proposal_Deny(t *testing.T) {
 		select {
 		case e := <-events:
 			if e.Type == agent.EventProposal {
-				approve <- false // 拒否
+				approve <- false
 			}
 			if e.Type == agent.EventComplete {
 				return

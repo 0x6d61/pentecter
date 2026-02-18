@@ -1,0 +1,30 @@
+# MCP サーバー設定（オプション）
+# ここに設定したツールは MCP 経由で実行される。
+# 接続に失敗した場合は tools/*.yaml の YAML 定義にフォールバックする。
+#
+# 使い方:
+#   transport: http  → url の HTTP SSE エンドポイントに接続
+#   transport: stdio → command を subprocess として起動して stdin/stdout で通信
+
+servers: []
+
+# 設定例:
+#
+# servers:
+#   # ローカル stdio MCP サーバー
+#   - tool: filesystem
+#     transport: stdio
+#     command: npx
+#     args: ["@modelcontextprotocol/server-filesystem", "/workspace"]
+#
+#   # ローカル HTTP MCP サーバー
+#   - tool: shodan
+#     transport: http
+#     url: http://localhost:8001/sse
+#
+#   # 公開 MCP サーバー（認証あり）
+#   - tool: virustotal
+#     transport: http
+#     url: https://mcp.virustotal.com/sse
+#     headers:
+#       Authorization: "Bearer ${VIRUSTOTAL_API_KEY}"

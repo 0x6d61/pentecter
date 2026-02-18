@@ -19,21 +19,31 @@ RESPONSE FORMAT (strict JSON, no markdown):
 {
   "thought": "brief reasoning about current situation and next step",
   "action": "run_tool" | "propose" | "think" | "complete",
-  "tool": "tool name (only for run_tool)",
-  "args": ["arg1", "arg2"] (only for run_tool)
+  "tool": "tool name (only for run_tool or propose)",
+  "args": {"key": "value", ...}
 }
 
+ARGS FORMAT:
+- args is always a JSON object (map), never an array.
+- Common keys per tool:
+    nmap:   {"target": "10.0.0.5", "ports": "21,22,80", "flags": ["-sV", "-Pn"]}
+    nikto:  {"target": "10.0.0.5", "flags": ["-Tuning", "1"]}
+    curl:   {"url": "http://10.0.0.5/", "flags": ["-si"]}
+    wpscan: {"url": "http://10.0.0.5/", "flags": ["--enumerate", "u"]}
+- Array values (e.g., "flags") are expanded as separate CLI arguments.
+- Omit keys that are not needed — optional keys will be ignored gracefully.
+
 ACTION TYPES:
-- run_tool: Execute a security tool (nmap, nikto, curl, etc.)
+- run_tool: Execute a security tool
 - propose: Suggest a high-impact action requiring human approval (exploits, brute-force, etc.)
 - think: Analyze findings without taking action yet
 - complete: Mark the target assessment as done
 
 RULES:
-- Always respond with valid JSON only, no prose.
-- For destructive or high-impact actions (exploits, credential attacks), use "propose" not "run_tool".
-- Keep reasoning concise (1-2 sentences).
-- Use tool names exactly as registered (nmap, nikto, curl, wpscan, etc.).`
+- Always respond with valid JSON only, no prose outside the JSON.
+- For destructive or high-impact actions, use "propose" not "run_tool".
+- Keep "thought" concise (1-2 sentences).
+- Use tool names exactly as registered.`
 
 // buildPrompt はターゲット状態とツール出力からユーザープロンプトを組み立てる。
 func buildPrompt(input Input) string {
