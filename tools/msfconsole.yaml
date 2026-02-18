@@ -1,0 +1,10 @@
+name: msfconsole
+description: "Metasploit Framework — エクスプロイト実行"
+tags: [exploit, post-exploitation]
+timeout: 0          # タイムアウトなし（セッション維持のため）
+# Docker なし = ホスト直接実行 = 要承認（proposal_required のデフォルト: true）
+# Brain は propose アクションで呼び出すべき
+output:
+  strategy: head_tail
+  head_lines: 30
+  tail_lines: 50

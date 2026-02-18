@@ -18,7 +18,6 @@ binary: echo
 description: "テスト用ツール"
 tags: [test]
 timeout: 10
-default_args: ["-n"]
 output:
   strategy: head_tail
   head_lines: 10
@@ -37,14 +36,14 @@ output:
 	if !ok {
 		t.Fatal("testtool not found in registry")
 	}
-	if def.Binary != "echo" {
-		t.Errorf("Binary: got %q, want %q", def.Binary, "echo")
+	if def.Name != "testtool" {
+		t.Errorf("Name: got %q, want testtool", def.Name)
 	}
 	if def.TimeoutSec != 10 {
 		t.Errorf("TimeoutSec: got %d, want 10", def.TimeoutSec)
 	}
-	if len(def.DefaultArgs) != 1 || def.DefaultArgs[0] != "-n" {
-		t.Errorf("DefaultArgs: got %v, want [-n]", def.DefaultArgs)
+	if def.TimeoutSec != 10 {
+		t.Errorf("TimeoutSec: got %d, want 10", def.TimeoutSec)
 	}
 }
 
@@ -58,25 +57,22 @@ func TestRegistry_LoadDir_NonExistentDir(t *testing.T) {
 
 func TestRegistry_Register_And_Get(t *testing.T) {
 	r := tools.NewRegistry()
-	def := &tools.ToolDef{
-		Name:   "mytool",
-		Binary: "echo",
-	}
+	def := &tools.ToolDef{Name: "mytool"}
 	r.Register(def)
 
 	got, ok := r.Get("mytool")
 	if !ok {
 		t.Fatal("mytool not found after Register")
 	}
-	if got.Binary != "echo" {
-		t.Errorf("Binary: got %q, want %q", got.Binary, "echo")
+	if got.Name != "mytool" {
+		t.Errorf("Name: got %q, want mytool", got.Name)
 	}
 }
 
 func TestRegistry_All(t *testing.T) {
 	r := tools.NewRegistry()
-	r.Register(&tools.ToolDef{Name: "a", Binary: "echo"})
-	r.Register(&tools.ToolDef{Name: "b", Binary: "echo"})
+	r.Register(&tools.ToolDef{Name: "a"})
+	r.Register(&tools.ToolDef{Name: "b"})
 
 	all := r.All()
 	if len(all) != 2 {

@@ -1,21 +1,58 @@
 // Package schema defines the shared JSON types exchanged between the TUI and the Brain (LLM).
 package schema
 
-// ActionType represents the kind of action the Brain wants to perform.
+// ActionType defines the kind of action the Brain wants to perform.
 type ActionType string
 
 const (
-	ActionRunTool  ActionType = "run_tool"
-	ActionThink    ActionType = "think"
-	ActionComplete ActionType = "complete"
-	// ActionPropose は重要アクション（エクスプロイト等）を提案しユーザー承認を求める。
+	// ActionRun はコマンド文字列を直接実行する。
+	// Docker ツール or proposal_required: false のツールで使う。
+	ActionRun ActionType = "run"
+
+	// ActionPropose はホスト直接実行や高リスクコマンドをユーザーに提案する。
+	// Brain はホストツールには常にこれを使う。
 	ActionPropose ActionType = "propose"
+
+	// ActionThink は発見内容を分析するだけで何も実行しない。
+	ActionThink ActionType = "think"
+
+	// ActionComplete はターゲットのアセスメント完了を宣言する。
+	ActionComplete ActionType = "complete"
+
+	// ActionMemory は脆弱性・認証情報・アーティファクトを memory に記録する。
+	ActionMemory ActionType = "memory"
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).
+//
+// Brain は常に以下の形式で応答する:
+//
+//	{
+//	  "thought": "port 80 open, running nikto",
+//	  "action":  "run",
+//	  "command": "nikto -h http://10.0.0.5/"
+//	}
 type Action struct {
 	Thought string     `json:"thought"`
 	Action  ActionType `json:"action"`
-	Tool    string     `json:"tool,omitempty"`
-	Args    []string   `json:"args,omitempty"`
+	Command string     `json:"command,omitempty"` // ActionRun / ActionPropose
+	Memory  *Memory    `json:"memory,omitempty"`  // ActionMemory
 }
+
+// Memory は Brain がナレッジグラフに記録する発見物。
+type Memory struct {
+	Type        MemoryType `json:"type"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Severity    string     `json:"severity,omitempty"` // critical/high/medium/low/info
+}
+
+// MemoryType は記録する情報の種別。
+type MemoryType string
+
+const (
+	MemoryVulnerability MemoryType = "vulnerability" // 脆弱性
+	MemoryCredential    MemoryType = "credential"    // 認証情報
+	MemoryArtifact      MemoryType = "artifact"      // アーティファクト（取得ファイル等）
+	MemoryNote          MemoryType = "note"           // その他メモ
+)

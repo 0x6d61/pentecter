@@ -1,9 +1,11 @@
 name: nikto
-binary: nikto
-description: "Webサーバ脆弱性スキャン"
+description: "Web サーバ脆弱性スキャン"
 tags: [web, recon, vuln-scan]
 timeout: 300
-default_args: ["-h"]
+docker:
+  image: securecodebox/nikto
+  network: host
+  fallback: true
 output:
   strategy: head_tail
   head_lines: 20

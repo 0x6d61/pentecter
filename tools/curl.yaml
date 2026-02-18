@@ -1,9 +1,9 @@
 name: curl
-binary: curl
-description: "HTTPリクエスト送信・レスポンス取得"
+description: "HTTP リクエスト送信・レスポンス取得"
 tags: [http, recon]
 timeout: 30
-default_args: ["-si", "--max-time", "10"]
+# curl はほぼ全環境に存在する。Docker なしでも自動承認。
+proposal_required: false
 output:
   strategy: http_response
   body_bytes: 500

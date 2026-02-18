@@ -1,9 +1,11 @@
-name: nmap
-binary: nmap
-description: "ポートスキャン・サービス・OS検出"
+name: nmap          # コマンド先頭ワードと一致（"nmap -sV ..." で自動解決）
+description: "ポートスキャン・サービス・OS 検出"
 tags: [recon, port-scan]
-timeout: 600
-default_args: ["-sV"]
+timeout: 600        # Docker/ホスト問わず最大 600 秒
+docker:
+  image: instrumentisto/nmap
+  network: host     # ターゲットへの到達性を確保
+  fallback: true    # Docker 不可ならホスト実行にフォールバック
 output:
   strategy: head_tail
   head_lines: 50
