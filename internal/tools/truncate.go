@@ -67,7 +67,7 @@ func truncateHeadTail(lines []string, head, tail int) string {
 		sb.WriteString(l)
 		sb.WriteByte('\n')
 	}
-	sb.WriteString(fmt.Sprintf("\n--- %d lines omitted ---\n\n", omitted))
+	fmt.Fprintf(&sb, "\n--- %d lines omitted ---\n\n", omitted)
 	for _, l := range lines[total-tail:] {
 		sb.WriteString(l)
 		sb.WriteByte('\n')

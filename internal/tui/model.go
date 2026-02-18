@@ -205,7 +205,7 @@ func (m *Model) rebuildViewport() {
 			srcLabel = fmt.Sprintf("[%s]", entry.Source)
 		}
 
-		sb.WriteString(fmt.Sprintf("%s %s  %s\n", ts, srcLabel, entry.Message))
+		fmt.Fprintf(&sb, "%s %s  %s\n", ts, srcLabel, entry.Message)
 	}
 
 	// Render pending proposal at the bottom of the session log.

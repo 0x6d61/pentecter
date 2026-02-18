@@ -188,8 +188,8 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			return cfg, nil
 		}
 		return cfg, errors.New(
-			"brain: OpenAI credentials not found\n" +
-				"  export OPENAI_API_KEY=sk-...",
+			"brain: OpenAI credentials not found; " +
+				"export OPENAI_API_KEY=sk-...",
 		)
 
 	case ProviderOllama:
