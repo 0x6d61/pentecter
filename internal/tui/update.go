@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"net"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -177,6 +178,12 @@ func (m *Model) submitInput() {
 	}
 	m.input.SetValue("")
 
+	// ターゲット追加: IP アドレスまたは /target <host>
+	if host, ok := parseTargetInput(text); ok && m.team != nil {
+		m.addTarget(host)
+		return
+	}
+
 	if t := m.activeTarget(); t != nil {
 		t.AddLog(agent.SourceUser, text)
 		m.syncListItems()
@@ -192,6 +199,35 @@ func (m *Model) submitInput() {
 			}
 		}
 	}
+}
+
+// parseTargetInput は IP アドレスまたは /target <host> を検知する。
+func parseTargetInput(text string) (string, bool) {
+	// /target <host>
+	if strings.HasPrefix(text, "/target ") {
+		host := strings.TrimSpace(strings.TrimPrefix(text, "/target "))
+		if host != "" {
+			return host, true
+		}
+	}
+	// 素の IP アドレス（ターゲットが未選択のときのみ自然に追加）
+	if net.ParseIP(text) != nil {
+		return text, true
+	}
+	return "", false
+}
+
+// addTarget は Team にターゲットを追加し TUI を更新する。
+func (m *Model) addTarget(host string) {
+	target, approveCh, userMsgCh := m.team.AddTarget(host)
+	m.targets = append(m.targets, target)
+	m.agentApproveMap[target.ID] = approveCh
+	m.agentUserMsgMap[target.ID] = userMsgCh
+	// 新しいターゲットを選択状態にする
+	m.selected = len(m.targets) - 1
+	m.syncListItems()
+	m.list.Select(m.selected)
+	m.rebuildViewport()
 }
 
 // targetByID は ID でターゲットを検索する。
@@ -228,6 +264,11 @@ func (m *Model) handleAgentEvent(e agent.Event) {
 		t.AddLog(agent.SourceSystem, "✅ "+e.Message)
 	case agent.EventError:
 		t.AddLog(agent.SourceSystem, "❌ "+e.Message)
+	case agent.EventAddTarget:
+		// AI が横展開で新ターゲットを追加
+		if e.NewHost != "" && m.team != nil {
+			m.addTarget(e.NewHost)
+		}
 	}
 
 	m.syncListItems()

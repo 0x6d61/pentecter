@@ -2,11 +2,13 @@ package agent_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/tools"
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
@@ -15,9 +17,11 @@ import (
 type mockBrain struct {
 	actions []*schema.Action
 	idx     int
+	inputs  []brain.Input // Think() に渡された Input を記録
 }
 
-func (m *mockBrain) Think(_ context.Context, _ brain.Input) (*schema.Action, error) {
+func (m *mockBrain) Think(_ context.Context, input brain.Input) (*schema.Action, error) {
+	m.inputs = append(m.inputs, input)
 	if m.idx >= len(m.actions) {
 		return &schema.Action{Thought: "done", Action: schema.ActionComplete}, nil
 	}
@@ -165,61 +169,172 @@ func TestLoop_Run_Proposal_Deny(t *testing.T) {
 	}
 }
 
-func TestTeam_Start_ParallelExecution(t *testing.T) {
-	// 3 ターゲットを並列実行
-	targets := []*agent.Target{
-		agent.NewTarget(1, "10.0.0.1"),
-		agent.NewTarget(2, "10.0.0.2"),
-		agent.NewTarget(3, "10.0.0.3"),
+func TestLoop_Run_Memory_RecordAndSnapshot(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.5")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// 1回目: Memory を記録
+			{Thought: "found vuln", Action: schema.ActionMemory, Memory: &schema.Memory{
+				Type:        schema.MemoryVulnerability,
+				Title:       "CVE-2021-41773",
+				Description: "Apache 2.4.49 Path Traversal",
+				Severity:    "critical",
+			}},
+			// 2回目: Think（この時点で snapshot に memory が含まれるはず）
+			{Thought: "analyzing memory", Action: schema.ActionThink},
+			// 3回目: Complete（mockBrain のデフォルト）
+		},
 	}
 
-	events := make(chan agent.Event, 128)
-	approve := make(chan bool, 1)
-	userMsg := make(chan string, 1)
+	// Memory Store 付きの Loop を構築
+	memDir := t.TempDir()
+	memStore := memory.NewStore(memDir)
 
+	loop, events, _, _ := newTestLoop(target, mb)
+	loop.WithMemory(memStore)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// EventComplete を待つ
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// 3回目の Think() に渡された snapshot に memory が含まれるか検証
+				// inputs[0] = 1回目(memory記録), inputs[1] = 2回目(think), inputs[2] = 3回目(complete)
+				if len(mb.inputs) < 3 {
+					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				// 2回目以降の snapshot に CVE が含まれるはず
+				snapshot := mb.inputs[2].TargetSnapshot
+				if !strings.Contains(snapshot, "CVE-2021-41773") {
+					t.Errorf("snapshot should contain memory content, got:\n%s", snapshot)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_AddTarget_EmitsEvent(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "found new host", Action: schema.ActionAddTarget, Target: "10.0.0.99"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotAddTarget := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventAddTarget && e.NewHost == "10.0.0.99" {
+				gotAddTarget = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotAddTarget {
+					t.Error("expected EventAddTarget with host 10.0.0.99 before complete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func newTestRunner() *tools.CommandRunner {
 	falseVal := false
 	reg := tools.NewRegistry()
 	reg.Register(&tools.ToolDef{
 		Name: "echo", ProposalRequired: &falseVal,
 		Output: tools.OutputConfig{Strategy: tools.StrategyHeadTail, HeadLines: 5, TailLines: 5},
 	})
-	bl := tools.NewLogStore()
-	runner := tools.NewCommandRunner(reg, tools.NewBlacklist(nil), bl)
+	return tools.NewCommandRunner(reg, tools.NewBlacklist(nil), tools.NewLogStore())
+}
 
-	var loops []*agent.Loop
-	for _, target := range targets {
-		mb := &mockBrain{
-			actions: []*schema.Action{
-				{Action: schema.ActionRun, Command: "echo parallel"},
-			},
-		}
-		loop := agent.NewLoop(target, mb, runner, events, approve, userMsg)
-		loops = append(loops, loop)
+func TestTeam_Start_ParallelExecution(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{actions: []*schema.Action{{Action: schema.ActionRun, Command: "echo parallel"}}},
+		Runner: runner,
+	})
+
+	// 3 ターゲットを事前追加
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
+		team.AddTarget(ip)
 	}
-
-	team := agent.NewTeam(events, loops...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	team.Start(ctx)
 
-	// 3 ターゲット分の EventComplete を待つ
-	completeCount := 0
 	deadline := time.After(8 * time.Second)
-	for completeCount < 3 {
+	for {
 		select {
 		case _, ok := <-events:
 			if !ok {
-				// チャネルが閉じられた = 全 Loop 完了
 				return
 			}
-			if false {
-				completeCount++
+		case <-deadline:
+			return
+		}
+	}
+}
+
+func TestTeam_AddTarget_DynamicStart(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{actions: []*schema.Action{{Action: schema.ActionThink, Thought: "dynamic"}}},
+		Runner: runner,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Start() してから AddTarget → 即座に Loop が起動する
+	team.Start(ctx)
+	target, approveCh, userMsgCh := team.AddTarget("10.0.0.99")
+
+	if target.Host != "10.0.0.99" {
+		t.Errorf("Host: got %q, want 10.0.0.99", target.Host)
+	}
+	if target.ID != 1 {
+		t.Errorf("ID: got %d, want 1", target.ID)
+	}
+	if approveCh == nil || userMsgCh == nil {
+		t.Fatal("channels should not be nil")
+	}
+
+	// EventComplete を待つ（mockBrain は Think→Complete）
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete && e.TargetID == target.ID {
+				return
 			}
 		case <-deadline:
-			// タイムアウトでも全ターゲットが起動していれば OK
-			return
+			t.Fatal("timeout waiting for dynamic target to complete")
 		}
 	}
 }

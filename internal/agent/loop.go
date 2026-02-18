@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/memory"
+	"github.com/0x6d61/pentecter/internal/skills"
 	"github.com/0x6d61/pentecter/internal/tools"
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
@@ -21,9 +23,11 @@ import (
 //	action == think   → 思考をTUIログに表示してループ継続
 //	action == complete → ループ終了
 type Loop struct {
-	target  *Target
-	br      brain.Brain
-	runner  *tools.CommandRunner
+	target       *Target
+	br           brain.Brain
+	runner       *tools.CommandRunner
+	skillsReg    *skills.Registry  // スキルテンプレート（nil = 無効）
+	memoryStore  *memory.Store     // 発見物の永続化（nil = 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -52,10 +56,22 @@ func NewLoop(
 	}
 }
 
+// WithSkills は Skills レジストリをセットする（メソッドチェーン用）。
+func (l *Loop) WithSkills(reg *skills.Registry) *Loop {
+	l.skillsReg = reg
+	return l
+}
+
+// WithMemory は Memory Store をセットする（メソッドチェーン用）。
+func (l *Loop) WithMemory(store *memory.Store) *Loop {
+	l.memoryStore = store
+	return l
+}
+
 // Run はエージェントループを実行する。別 goroutine で呼び出すこと。
 func (l *Loop) Run(ctx context.Context) {
 	l.emit(Event{Type: EventLog, Source: SourceSystem,
-		Message: fmt.Sprintf("Agent 起動: %s", l.target.IP)})
+		Message: fmt.Sprintf("Agent 起動: %s", l.target.Host)})
 	l.target.Status = StatusScanning
 
 	for {
@@ -97,6 +113,14 @@ func (l *Loop) Run(ctx context.Context) {
 
 		case schema.ActionMemory:
 			l.recordMemory(action.Memory)
+
+		case schema.ActionAddTarget:
+			if action.Target != "" {
+				l.emit(Event{Type: EventAddTarget, NewHost: action.Target})
+				msg := fmt.Sprintf("横展開: 新ターゲット %s を追加", action.Target)
+				l.emit(Event{Type: EventLog, Source: SourceAI, Message: msg})
+				l.target.AddLog(SourceAI, msg)
+			}
 
 		case schema.ActionThink:
 			// 思考のみ
@@ -183,7 +207,14 @@ func (l *Loop) recordMemory(m *schema.Memory) {
 	msg := fmt.Sprintf("[%s] %s: %s", m.Type, m.Title, m.Description)
 	l.emit(Event{Type: EventLog, Source: SourceAI, Message: "📝 " + msg})
 	l.target.AddLog(SourceAI, "📝 "+msg)
-	// TODO: Phase 5 でファイルへの永続化を実装
+
+	// Memory Store に永続化
+	if l.memoryStore != nil {
+		if err := l.memoryStore.Record(l.target.Host, m); err != nil {
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("Memory 書き込みエラー: %v", err)})
+		}
+	}
 }
 
 // streamAndCollect は実行結果をストリームして TUI に表示する。
@@ -209,9 +240,18 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 	l.target.Status = StatusScanning
 }
 
+// drainUserMsg はユーザーメッセージを取得し、スキル呼び出し（/skill-name）なら展開する。
 func (l *Loop) drainUserMsg() string {
 	select {
 	case msg := <-l.userMsg:
+		if l.skillsReg != nil {
+			expanded := l.skillsReg.Expand(msg)
+			if expanded != msg {
+				l.emit(Event{Type: EventLog, Source: SourceSystem,
+					Message: fmt.Sprintf("スキル展開: %s", msg)})
+			}
+			return expanded
+		}
 		return msg
 	default:
 		return ""
@@ -225,13 +265,21 @@ func (l *Loop) buildSnapshot() string {
 		entityMap[t] = append(entityMap[t], e.Value)
 	}
 	snapshot := map[string]any{
-		"ip":       l.target.IP,
+		"host":     l.target.Host,
 		"status":   string(l.target.Status),
 		"entities": entityMap,
 	}
+
+	// Memory Store から過去の発見物を読み込み、Brain のコンテキストに含める
+	if l.memoryStore != nil {
+		if mem := l.memoryStore.Read(l.target.Host); mem != "" {
+			snapshot["memory"] = mem
+		}
+	}
+
 	b, err := json.Marshal(snapshot)
 	if err != nil {
-		return fmt.Sprintf(`{"ip":%q}`, l.target.IP)
+		return fmt.Sprintf(`{"host":%q}`, l.target.Host)
 	}
 	return string(b)
 }

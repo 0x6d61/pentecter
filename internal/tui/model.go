@@ -43,6 +43,7 @@ type Model struct {
 	input    textinput.Model
 
 	// Agent チームとの通信チャネル（nil = デモモード）
+	team           *agent.Team              // 動的ターゲット追加用（nil = デモモード）
 	agentEvents    <-chan agent.Event        // 全 Agent → TUI（TargetID で識別）
 	agentApproveMap map[int]chan<- bool      // targetID → approve チャネル
 	agentUserMsgMap map[int]chan<- string    // targetID → userMsg チャネル
@@ -77,7 +78,7 @@ func (i targetListItem) Title() string {
 	default:
 		coloredIcon = statusIdleStyle.Render(icon)
 	}
-	return fmt.Sprintf("%s %s", coloredIcon, i.t.IP)
+	return fmt.Sprintf("%s %s", coloredIcon, i.t.Host)
 }
 
 func (i targetListItem) Description() string {
@@ -88,7 +89,7 @@ func (i targetListItem) Description() string {
 	return fmt.Sprintf("[%s]%s", i.t.Status, extra)
 }
 
-func (i targetListItem) FilterValue() string { return i.t.IP }
+func (i targetListItem) FilterValue() string { return i.t.Host }
 
 // New はデモデータで Model を初期化する（開発・デモ用）。
 // 本番では NewWithTargets を使うこと。
@@ -140,15 +141,18 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-// ConnectTeam は Agent Team のチャネルを TUI に接続する。
+// ConnectTeam は Agent Team を TUI に接続する。
+// team: 動的ターゲット追加に使用
 // events: 全エージェントのイベント（TargetID で識別）
 // approveMap: targetID → approve チャネル
 // userMsgMap: targetID → userMsg チャネル
 func (m *Model) ConnectTeam(
+	team *agent.Team,
 	events <-chan agent.Event,
 	approveMap map[int]chan<- bool,
 	userMsgMap map[int]chan<- string,
 ) {
+	m.team = team
 	m.agentEvents = events
 	m.agentApproveMap = approveMap
 	m.agentUserMsgMap = userMsgMap
@@ -167,7 +171,7 @@ func (m *Model) activeTarget() *agent.Target {
 func (m *Model) rebuildViewport() {
 	t := m.activeTarget()
 	if t == nil {
-		m.viewport.SetContent("  ターゲットが選択されていません。\n  [Tab] でリストにフォーカスし、ターゲットを選択してください。")
+		m.viewport.SetContent("  ターゲットが選択されていません。\n\n  IP アドレスを入力してターゲットを追加:\n    例: 10.0.0.5 / /target example.com\n\n  スキル: /web-recon, /full-scan, /sqli-check")
 		return
 	}
 
@@ -176,7 +180,7 @@ func (m *Model) rebuildViewport() {
 	header := lipgloss.NewStyle().
 		Foreground(colorPrimary).
 		Bold(true).
-		Render(fmt.Sprintf("═══ セッション: %s [%s] ═══", t.IP, t.Status))
+		Render(fmt.Sprintf("═══ セッション: %s [%s] ═══", t.Host, t.Status))
 	sb.WriteString(header + "\n\n")
 
 	for _, entry := range t.Logs {

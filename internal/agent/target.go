@@ -64,10 +64,11 @@ type Proposal struct {
 }
 
 // Target represents a discovered host and the full state of its pentest session.
+// Host は IP アドレスまたはドメイン名（例: "10.0.0.5", "example.com"）。
 type Target struct {
-	ID       int
-	IP       string
-	Status   Status
+	ID     int
+	Host   string // IP アドレスまたはドメイン名
+	Status Status
 	Logs     []LogEntry
 	Proposal *Proposal
 	// Entities はツール出力から抽出された発見済みエンティティ（ナレッジグラフ）。
@@ -90,11 +91,12 @@ func (t *Target) AddEntities(entities []tools.Entity) {
 	}
 }
 
-// NewTarget creates a new Target with default idle state.
-func NewTarget(id int, ip string) *Target {
+// NewTarget は新しい Target をデフォルト状態で作成する。
+// host は IP アドレスまたはドメイン名（例: "10.0.0.5", "example.com"）。
+func NewTarget(id int, host string) *Target {
 	return &Target{
 		ID:     id,
-		IP:     ip,
+		Host:   host,
 		Status: StatusIdle,
 		Logs:   make([]LogEntry, 0),
 	}
