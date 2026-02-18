@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 
 	"github.com/0x6d61/pentecter/internal/agent"
@@ -20,9 +21,12 @@ import (
 )
 
 func main() {
+	// Load .env file if present (ignored if not found)
+	_ = godotenv.Load()
+
 	var (
-		provider = flag.String("provider", "anthropic", "LLM プロバイダー: anthropic, openai, ollama")
-		model    = flag.String("model", "", "モデル名（省略時はプロバイダーのデフォルト）")
+		provider = flag.String("provider", "anthropic", "LLM provider: anthropic, openai, ollama")
+		model    = flag.String("model", "", "Model name (default: provider's default)")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `⚡ Pentecter — Autonomous Penetration Testing Agent
@@ -35,21 +39,21 @@ Flags:
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Environment:
-  ANTHROPIC_API_KEY     Anthropic API キー
-  ANTHROPIC_AUTH_TOKEN  Claude Code OAuth トークン (claude auth token)
-  OPENAI_API_KEY        OpenAI API キー
-  OLLAMA_BASE_URL       Ollama サーバー URL (default: http://localhost:11434)
-  OLLAMA_MODEL          Ollama モデル名 (default: llama3.2)
+  ANTHROPIC_API_KEY          Anthropic API key
+  CLAUDE_CODE_OAUTH_TOKEN    Claude Code OAuth token (claude setup-token)
+  OPENAI_API_KEY        OpenAI API key
+  OLLAMA_BASE_URL       Ollama server URL (default: http://localhost:11434)
+  OLLAMA_MODEL          Ollama model name (default: llama3.2)
 
 Examples:
-  pentecter                                          # ターゲットなし起動（チャットで追加）
-  pentecter 10.0.0.5                                 # ターゲット指定で起動
-  pentecter -provider ollama 10.0.0.5 10.0.0.8       # 複数ターゲット
+  pentecter                                          # Start without targets (add via chat)
+  pentecter 10.0.0.5                                 # Start with a target
+  pentecter -provider ollama 10.0.0.5 10.0.0.8       # Multiple targets
 
 Chat commands:
-  10.0.0.5             IP アドレスを入力してターゲット追加
-  /target example.com  ドメインをターゲット追加
-  /web-recon           スキル実行（skills/ ディレクトリから自動ロード）
+  10.0.0.5             Enter an IP address to add a target
+  /target example.com  Add a domain as target
+  /web-recon           Run a skill (auto-loaded from skills/ directory)
 `)
 	}
 	flag.Parse()
@@ -60,20 +64,20 @@ Chat commands:
 		Model:    *model,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Brain 設定エラー:", err)
+		fmt.Fprintln(os.Stderr, "brain config error:", err)
 		os.Exit(1)
 	}
 
 	br, err := brain.New(brainCfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Brain 初期化エラー:", err)
+		fmt.Fprintln(os.Stderr, "brain init error:", err)
 		os.Exit(1)
 	}
 
 	// --- Tools ---
 	registry := tools.NewRegistry()
 	if err := registry.LoadDir("tools"); err != nil {
-		fmt.Fprintf(os.Stderr, "ツールロードエラー: %v\n", err)
+		fmt.Fprintf(os.Stderr, "tool load error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -127,7 +131,7 @@ Chat commands:
 	// TUI を起動（ブロッキング）
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "TUI エラー:", err)
+		fmt.Fprintln(os.Stderr, "TUI error:", err)
 		os.Exit(1)
 	}
 }
@@ -150,7 +154,7 @@ func loadBlacklist(path string) *tools.Blacklist {
 		Patterns []string `yaml:"patterns"`
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "ブラックリスト読み込みエラー: %v（デフォルトを使用）\n", err)
+		fmt.Fprintf(os.Stderr, "blacklist load error: %v (using defaults)\n", err)
 		return tools.NewBlacklist(nil)
 	}
 	return tools.NewBlacklist(cfg.Patterns)

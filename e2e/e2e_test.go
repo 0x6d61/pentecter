@@ -69,7 +69,7 @@ func TestE2E_NmapPortScan(t *testing.T) {
 	registry.Register(&tools.ToolDef{
 		Name:        "nmap",
 		Binary:      "nmap",
-		Description: "ポートスキャン",
+		Description: "Port scan",
 		TimeoutSec:  60,
 		Output: tools.OutputConfig{
 			Strategy:  tools.StrategyHeadTail,

@@ -1,5 +1,5 @@
 // Package brain は LLM クライアントを共通インターフェースで抽象化する。
-// Anthropic（claude auth token / API キー）、OpenAI、Ollama をサポートする。
+// Anthropic（API キー）、OpenAI、Ollama をサポートする。
 package brain
 
 import (
@@ -133,20 +133,26 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 
 	switch hint.Provider {
 	case ProviderAnthropic:
+		if cfg.Model == "" {
+			cfg.Model = "claude-sonnet-4-6"
+		}
 		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 			cfg.Token = key
 			cfg.AuthType = AuthAPIKey
 			return cfg, nil
 		}
-		if token := os.Getenv("ANTHROPIC_AUTH_TOKEN"); token != "" {
-			cfg.Token = token
-			cfg.AuthType = AuthOAuthToken
-			return cfg, nil
+		// Claude Code OAuth token: CLAUDE_CODE_OAUTH_TOKEN (公式) or ANTHROPIC_AUTH_TOKEN (互換)
+		for _, envKey := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"} {
+			if token := os.Getenv(envKey); token != "" {
+				cfg.Token = token
+				cfg.AuthType = AuthOAuthToken
+				return cfg, nil
+			}
 		}
 		return cfg, errors.New(
-			"brain: Anthropic 認証情報が見つかりません\n" +
-				"  - API キー:        export ANTHROPIC_API_KEY=sk-ant-api03-...\n" +
-				"  - Claude Code 認証: export ANTHROPIC_AUTH_TOKEN=$(claude auth token)",
+			"brain: Anthropic credentials not found\n" +
+				"  - API key:         export ANTHROPIC_API_KEY=sk-ant-api03-...\n" +
+				"  - Claude Code auth: export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)",
 		)
 
 	case ProviderOpenAI:
@@ -156,7 +162,7 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			return cfg, nil
 		}
 		return cfg, errors.New(
-			"brain: OpenAI 認証情報が見つかりません\n" +
+			"brain: OpenAI credentials not found\n" +
 				"  export OPENAI_API_KEY=sk-...",
 		)
 

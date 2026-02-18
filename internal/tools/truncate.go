@@ -67,7 +67,7 @@ func truncateHeadTail(lines []string, head, tail int) string {
 		sb.WriteString(l)
 		sb.WriteByte('\n')
 	}
-	sb.WriteString(fmt.Sprintf("\n--- %d行省略 ---\n\n", omitted))
+	sb.WriteString(fmt.Sprintf("\n--- %d lines omitted ---\n\n", omitted))
 	for _, l := range lines[total-tail:] {
 		sb.WriteString(l)
 		sb.WriteByte('\n')
@@ -108,7 +108,7 @@ func truncateHTTPResponse(lines []string, bodyBytes int) string {
 	if bodyBuf.Len() > 0 {
 		sb.WriteString(bodyBuf.String())
 		if bodyBuf.Len() >= bodyBytes {
-			sb.WriteString("\n--- ボディ省略 ---\n")
+			sb.WriteString("\n--- body truncated ---\n")
 		}
 	}
 

@@ -10,7 +10,7 @@ import (
 // View implements tea.Model and renders the full Commander Console layout.
 func (m Model) View() string {
 	if !m.ready {
-		return "\n  ⚡ Pentecter を起動中...\n"
+		return "\n  ⚡ Starting Pentecter...\n"
 	}
 
 	// ── Status bar (1 line) ──────────────────────────────────────────────────
@@ -58,15 +58,15 @@ func (m Model) renderStatusBar() string {
 	var targetInfo string
 	if t != nil {
 		targetInfo = fmt.Sprintf(
-			"フォーカス: %s [%s]",
+			"Focus: %s [%s]",
 			lipgloss.NewStyle().Foreground(colorWarning).Render(t.Host),
 			t.Status,
 		)
 	} else {
-		targetInfo = lipgloss.NewStyle().Foreground(colorMuted).Render("ターゲット未選択")
+		targetInfo = lipgloss.NewStyle().Foreground(colorMuted).Render("No target selected")
 	}
 
-	hint := lipgloss.NewStyle().Foreground(colorMuted).Render("[Tab] フォーカス切替  [y/n/e] Proposal承認")
+	hint := lipgloss.NewStyle().Foreground(colorMuted).Render("[Tab] Switch pane  [y/n/e] Proposal")
 	focusIndicator := m.renderFocusIndicator()
 
 	left := fmt.Sprintf("%s  %s  %s", appName, targetInfo, focusIndicator)
@@ -101,9 +101,9 @@ func (m Model) renderInputBar() string {
 	var prefix string
 	switch m.focus {
 	case FocusList:
-		prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("[List] ↑↓でターゲット選択")
+		prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("[List] ↑↓ Select target")
 	case FocusViewport:
-		prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("[Log]  ↑↓でスクロール")
+		prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("[Log]  ↑↓ Scroll")
 	case FocusInput:
 		prefix = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("> ")
 	}

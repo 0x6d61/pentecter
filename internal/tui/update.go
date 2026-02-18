@@ -48,7 +48,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t := m.activeTarget(); t != nil && t.Proposal != nil {
 			switch msg.String() {
 			case "y", "Y":
-				t.AddLog(agent.SourceUser, "✓ 承認: "+t.Proposal.Description)
+				t.AddLog(agent.SourceUser, "Approved: "+t.Proposal.Description)
 				t.Status = agent.StatusRunning
 				t.ClearProposal()
 				m.syncListItems()
@@ -62,7 +62,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "n", "N":
-				t.AddLog(agent.SourceUser, "✗ 拒否: "+t.Proposal.Description)
+				t.AddLog(agent.SourceUser, "Rejected: "+t.Proposal.Description)
 				t.Status = agent.StatusIdle
 				t.ClearProposal()
 				m.syncListItems()

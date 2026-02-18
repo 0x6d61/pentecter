@@ -71,20 +71,20 @@ func (l *Loop) WithMemory(store *memory.Store) *Loop {
 // Run はエージェントループを実行する。別 goroutine で呼び出すこと。
 func (l *Loop) Run(ctx context.Context) {
 	l.emit(Event{Type: EventLog, Source: SourceSystem,
-		Message: fmt.Sprintf("Agent 起動: %s", l.target.Host)})
+		Message: fmt.Sprintf("Agent started: %s", l.target.Host)})
 	l.target.Status = StatusScanning
 
 	for {
 		select {
 		case <-ctx.Done():
-			l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Agent 停止"})
+			l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Agent stopped"})
 			return
 		default:
 		}
 
 		userMsg := l.drainUserMsg()
 
-		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "思考中..."})
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Thinking..."})
 
 		action, err := l.br.Think(ctx, brain.Input{
 			TargetSnapshot: l.buildSnapshot(),
@@ -92,7 +92,7 @@ func (l *Loop) Run(ctx context.Context) {
 			UserMessage:    userMsg,
 		})
 		if err != nil {
-			l.emit(Event{Type: EventError, Message: fmt.Sprintf("Brain エラー: %v", err)})
+			l.emit(Event{Type: EventError, Message: fmt.Sprintf("Brain error: %v", err)})
 			l.target.Status = StatusFailed
 			return
 		}
@@ -117,7 +117,7 @@ func (l *Loop) Run(ctx context.Context) {
 		case schema.ActionAddTarget:
 			if action.Target != "" {
 				l.emit(Event{Type: EventAddTarget, NewHost: action.Target})
-				msg := fmt.Sprintf("横展開: 新ターゲット %s を追加", action.Target)
+				msg := fmt.Sprintf("Lateral movement: adding new target %s", action.Target)
 				l.emit(Event{Type: EventLog, Source: SourceAI, Message: msg})
 				l.target.AddLog(SourceAI, msg)
 			}
@@ -127,12 +127,12 @@ func (l *Loop) Run(ctx context.Context) {
 
 		case schema.ActionComplete:
 			l.target.Status = StatusPwned
-			l.emit(Event{Type: EventComplete, Message: "アセスメント完了"})
+			l.emit(Event{Type: EventComplete, Message: "Assessment complete"})
 			return
 
 		default:
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
-				Message: fmt.Sprintf("不明なアクション: %q", action.Action)})
+				Message: fmt.Sprintf("Unknown action: %q", action.Action)})
 		}
 	}
 }
@@ -141,7 +141,7 @@ func (l *Loop) Run(ctx context.Context) {
 // needsProposal が true のとき Brain が誤って run を使った場合の安全ネット。
 func (l *Loop) runCommand(ctx context.Context, command string) {
 	if command == "" {
-		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "run: command が空です"})
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "run: command is empty"})
 		return
 	}
 
@@ -151,7 +151,7 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 
 	needsProposal, linesCh, resultCh, err := l.runner.Run(ctx, command)
 	if err != nil {
-		errMsg := fmt.Sprintf("実行エラー: %v", err)
+		errMsg := fmt.Sprintf("Execution error: %v", err)
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: errMsg})
 		l.target.AddLog(SourceSystem, errMsg)
 		l.lastToolOutput = "Error: " + err.Error()
@@ -162,7 +162,7 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	if needsProposal {
 		// Brain が run を使ったが要承認ツール → 安全ネットとして propose に格上げ
 		l.target.Status = StatusScanning
-		l.handlePropose(ctx, command, "ホスト直接実行のため承認が必要です")
+		l.handlePropose(ctx, command, "Approval required: direct host execution")
 		return
 	}
 
@@ -183,13 +183,13 @@ func (l *Loop) handlePropose(ctx context.Context, command, description string) b
 	case approved := <-l.approve:
 		l.target.ClearProposal()
 		if approved {
-			l.target.AddLog(SourceUser, "✓ 承認: "+description)
+			l.target.AddLog(SourceUser, "Approved: "+description)
 			l.target.Status = StatusRunning
 			linesCh, resultCh := l.runner.ForceRun(ctx, command)
 			l.streamAndCollect(ctx, linesCh, resultCh)
 		} else {
-			l.target.AddLog(SourceUser, "✗ 拒否: "+description)
-			l.lastToolOutput = "ユーザーが拒否: " + description
+			l.target.AddLog(SourceUser, "Rejected: "+description)
+			l.lastToolOutput = "User rejected: " + description
 			l.target.Status = StatusScanning
 		}
 		return true
@@ -212,7 +212,7 @@ func (l *Loop) recordMemory(m *schema.Memory) {
 	if l.memoryStore != nil {
 		if err := l.memoryStore.Record(l.target.Host, m); err != nil {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
-				Message: fmt.Sprintf("Memory 書き込みエラー: %v", err)})
+				Message: fmt.Sprintf("Memory write error: %v", err)})
 		}
 	}
 }
@@ -248,7 +248,7 @@ func (l *Loop) drainUserMsg() string {
 			expanded := l.skillsReg.Expand(msg)
 			if expanded != msg {
 				l.emit(Event{Type: EventLog, Source: SourceSystem,
-					Message: fmt.Sprintf("スキル展開: %s", msg)})
+					Message: fmt.Sprintf("Skill expanded: %s", msg)})
 			}
 			return expanded
 		}

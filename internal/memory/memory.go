@@ -80,19 +80,19 @@ func formatEntry(m *schema.Memory) string {
 		if severity == "" {
 			severity = "INFO"
 		}
-		return fmt.Sprintf("## [%s] %s\n- **時刻**: %s\n- **説明**: %s\n\n",
+		return fmt.Sprintf("## [%s] %s\n- **Time**: %s\n- **Description**: %s\n\n",
 			severity, m.Title, ts, m.Description)
 
 	case schema.MemoryCredential:
-		return fmt.Sprintf("## 🔑 認証情報: %s\n- **時刻**: %s\n- **詳細**: %s\n\n",
+		return fmt.Sprintf("## Credential: %s\n- **Time**: %s\n- **Details**: %s\n\n",
 			m.Title, ts, m.Description)
 
 	case schema.MemoryArtifact:
-		return fmt.Sprintf("## 📄 アーティファクト: %s\n- **時刻**: %s\n- **詳細**: %s\n\n",
+		return fmt.Sprintf("## Artifact: %s\n- **Time**: %s\n- **Details**: %s\n\n",
 			m.Title, ts, m.Description)
 
 	default: // MemoryNote
-		return fmt.Sprintf("## 📝 ノート: %s\n- **時刻**: %s\n- **内容**: %s\n\n",
+		return fmt.Sprintf("## Note: %s\n- **Time**: %s\n- **Content**: %s\n\n",
 			m.Title, ts, m.Description)
 	}
 }
