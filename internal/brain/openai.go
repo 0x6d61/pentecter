@@ -54,7 +54,15 @@ func (b *openAIBrain) Think(ctx context.Context, input Input) (*schema.Action, e
 	if baseURL == "" {
 		baseURL = defaultOpenAIBaseURL
 	}
-	url := strings.TrimRight(baseURL, "/") + openAIChatCompletePath
+	// BaseURL が既に /v1 で終わっている場合は /chat/completions のみ付加
+	// Ollama: http://server:11434/v1 → http://server:11434/v1/chat/completions
+	base := strings.TrimRight(baseURL, "/")
+	var url string
+	if strings.HasSuffix(base, "/v1") {
+		url = base + "/chat/completions"
+	} else {
+		url = base + openAIChatCompletePath
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {

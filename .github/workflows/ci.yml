@@ -37,7 +37,8 @@ jobs:
 
       - name: ユニットテスト実行
         # -tags=e2e を付けないことで E2E テストを除外する
-        run: go test -v -coverprofile=coverage.out ./internal/... ./pkg/...
+        # -race は Linux では CGO 必須のため省略（セキュリティより CI 安定性を優先）
+        run: go test -coverprofile=coverage.out ./internal/... ./pkg/...
 
       - name: カバレッジレポート
         run: go tool cover -func=coverage.out
@@ -59,5 +60,6 @@ jobs:
       - name: golangci-lint を実行
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # v1.64.x を固定 (v2 は設定フォーマット変更があり非互換)
+          version: v1.64.8
           args: --timeout=5m

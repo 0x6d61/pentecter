@@ -230,3 +230,67 @@ func TestLoadConfig_OAuthEnv(t *testing.T) {
 		t.Errorf("AuthType: got %q, want %q", cfg.AuthType, brain.AuthOAuthToken)
 	}
 }
+
+func TestOllamaBrain_Think(t *testing.T) {
+	// Ollama は OpenAI 互換 API を使うので mockOpenAIServer で代用できる
+	action := `{"thought":"starting port scan","action":"run","command":"nmap -sV 10.0.0.5"}`
+	srv := mockOpenAIServer(t, openAIResponse(action))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOllama,
+		Model:    "llama3.2",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New (ollama): %v", err)
+	}
+	if b.Provider() != "ollama" {
+		t.Errorf("Provider(): got %q, want ollama", b.Provider())
+	}
+
+	result, err := b.Think(context.Background(), brain.Input{
+		TargetSnapshot: `{"ip":"10.0.0.5"}`,
+	})
+	if err != nil {
+		t.Fatalf("Think (ollama): %v", err)
+	}
+	if result.Action != schema.ActionRun {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionRun)
+	}
+}
+
+func TestLoadConfig_Ollama_DefaultURL(t *testing.T) {
+	t.Setenv("OLLAMA_BASE_URL", "")
+	t.Setenv("OLLAMA_MODEL", "")
+
+	cfg, err := brain.LoadConfig(brain.ConfigHint{Provider: brain.ProviderOllama})
+	if err != nil {
+		t.Fatalf("LoadConfig ollama: %v", err)
+	}
+	if cfg.BaseURL != "http://localhost:11434" {
+		t.Errorf("BaseURL: got %q, want http://localhost:11434", cfg.BaseURL)
+	}
+	if cfg.Model != "llama3.2" {
+		t.Errorf("Model: got %q, want llama3.2", cfg.Model)
+	}
+	if cfg.AuthType != brain.AuthNone {
+		t.Errorf("AuthType: got %q, want %q", cfg.AuthType, brain.AuthNone)
+	}
+}
+
+func TestLoadConfig_Ollama_CustomURL(t *testing.T) {
+	t.Setenv("OLLAMA_BASE_URL", "http://gpu-server:11434")
+	t.Setenv("OLLAMA_MODEL", "mistral")
+
+	cfg, err := brain.LoadConfig(brain.ConfigHint{Provider: brain.ProviderOllama})
+	if err != nil {
+		t.Fatalf("LoadConfig ollama: %v", err)
+	}
+	if cfg.BaseURL != "http://gpu-server:11434" {
+		t.Errorf("BaseURL: got %q", cfg.BaseURL)
+	}
+	if cfg.Model != "mistral" {
+		t.Errorf("Model: got %q, want mistral", cfg.Model)
+	}
+}

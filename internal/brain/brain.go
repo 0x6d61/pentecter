@@ -1,5 +1,5 @@
 // Package brain は LLM クライアントを共通インターフェースで抽象化する。
-// Anthropic（claude auth token / API キー）と OpenAI の両方をサポートする。
+// Anthropic（claude auth token / API キー）、OpenAI、Ollama をサポートする。
 package brain
 
 import (
@@ -17,19 +17,24 @@ type Provider string
 const (
 	ProviderAnthropic Provider = "anthropic"
 	ProviderOpenAI    Provider = "openai"
+	// ProviderOllama は OpenAI 互換 API 経由でローカル/リモートの Ollama サーバーに接続する。
+	// API キー不要。OLLAMA_BASE_URL でサーバーを指定する（デフォルト: http://localhost:11434）。
+	ProviderOllama Provider = "ollama"
 )
 
 // AuthType は認証方式を識別する。
 type AuthType string
 
 const (
-	// AuthAPIKey は通常の API キー認証（x-api-key ヘッダー）。
-	// console.anthropic.com で発行した sk-ant-api03-... 形式。
+	// AuthAPIKey は通常の API キー認証（Authorization: Bearer または x-api-key ヘッダー）。
 	AuthAPIKey AuthType = "api_key"
 
 	// AuthOAuthToken は Claude Code の OAuth トークン認証（Authorization: Bearer ヘッダー）。
 	// `claude auth token` で取得した sk-ant-ocp01-... 形式。
 	AuthOAuthToken AuthType = "oauth_token"
+
+	// AuthNone は認証不要（Ollama 等のローカルサーバー向け）。
+	AuthNone AuthType = "none"
 )
 
 // Config は Brain の設定を保持する。
@@ -43,7 +48,7 @@ type Config struct {
 
 // Input は Brain に渡す思考コンテキスト。
 type Input struct {
-	// TargetSnapshot はターゲットの現在状態（JSON）。Entity抽出済みの構造体。
+	// TargetSnapshot はターゲットの現在状態（JSON）。
 	TargetSnapshot string
 	// ToolOutput は直前のツール実行結果（切り捨て済み）。空でも可。
 	ToolOutput string
@@ -53,30 +58,54 @@ type Input struct {
 
 // Brain は LLM との対話インターフェース。
 type Brain interface {
-	// Think はコンテキストを LLM に渡し、次のアクションを返す。
 	Think(ctx context.Context, input Input) (*schema.Action, error)
-	// Provider はプロバイダー名を返す。
 	Provider() string
 }
 
 // New は Config に基づいて適切な Brain 実装を返す。
 func New(cfg Config) (Brain, error) {
-	if cfg.Token == "" {
-		return nil, errors.New("brain: token must not be empty (set ANTHROPIC_API_KEY or run `claude auth token`)")
-	}
-
 	switch cfg.Provider {
 	case ProviderAnthropic:
+		if cfg.Token == "" {
+			return nil, errors.New("brain: Anthropic token is required")
+		}
 		return newAnthropicBrain(cfg)
+
 	case ProviderOpenAI:
+		if cfg.Token == "" {
+			return nil, errors.New("brain: OpenAI API key is required")
+		}
 		return newOpenAIBrain(cfg)
+
+	case ProviderOllama:
+		// Ollama は認証不要。Token が空でも動く。
+		if cfg.Token == "" {
+			cfg.Token = "ollama" // ダミートークン（Ollama は無視する）
+		}
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = "http://localhost:11434"
+		}
+		cfg.BaseURL = ensureV1Path(cfg.BaseURL)
+		return newOllamaBrain(cfg) // 変更に強い薄いラッパー経由で実行
+
 	default:
-		return nil, fmt.Errorf("brain: unknown provider %q (supported: anthropic, openai)", cfg.Provider)
+		return nil, fmt.Errorf("brain: unknown provider %q (supported: anthropic, openai, ollama)", cfg.Provider)
 	}
 }
 
-// ConfigHint は LoadConfig へのヒント（プロバイダー・モデル）を保持する。
-// 認証情報は環境変数から自動解決する。
+// ensureV1Path は BaseURL に /v1 パスが含まれていない場合に追加する。
+func ensureV1Path(baseURL string) string {
+	if len(baseURL) > 3 && baseURL[len(baseURL)-3:] == "/v1" {
+		return baseURL
+	}
+	// 末尾のスラッシュを除去してから /v1 を追加
+	for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+		baseURL = baseURL[:len(baseURL)-1]
+	}
+	return baseURL + "/v1"
+}
+
+// ConfigHint は LoadConfig へのヒントを保持する。認証情報は環境変数から自動解決する。
 type ConfigHint struct {
 	Provider Provider
 	Model    string
@@ -85,12 +114,16 @@ type ConfigHint struct {
 
 // LoadConfig は環境変数から認証情報を解決して Config を返す。
 //
-// 解決優先順位（Anthropic）:
+// Anthropic 優先順位:
 //  1. ANTHROPIC_API_KEY       → AuthAPIKey
 //  2. ANTHROPIC_AUTH_TOKEN    → AuthOAuthToken（`claude auth token` の出力）
 //
-// 解決優先順位（OpenAI）:
+// OpenAI:
 //  1. OPENAI_API_KEY          → AuthAPIKey
+//
+// Ollama:
+//  1. OLLAMA_BASE_URL         → サーバー URL（デフォルト: http://localhost:11434）
+//  2. 認証不要
 func LoadConfig(hint ConfigHint) (Config, error) {
 	cfg := Config{
 		Provider: hint.Provider,
@@ -126,6 +159,25 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			"brain: OpenAI 認証情報が見つかりません\n" +
 				"  export OPENAI_API_KEY=sk-...",
 		)
+
+	case ProviderOllama:
+		// BaseURL が hint で指定されていなければ環境変数から読む
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = os.Getenv("OLLAMA_BASE_URL")
+		}
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = "http://localhost:11434"
+		}
+		// モデルが指定されていなければ環境変数から読む
+		if cfg.Model == "" {
+			cfg.Model = os.Getenv("OLLAMA_MODEL")
+		}
+		if cfg.Model == "" {
+			cfg.Model = "llama3.2"
+		}
+		cfg.Token = "ollama"
+		cfg.AuthType = AuthNone
+		return cfg, nil
 
 	default:
 		return cfg, fmt.Errorf("brain: unknown provider %q", hint.Provider)
