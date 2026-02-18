@@ -27,6 +27,9 @@ const (
 // leftPaneOuterWidth is the total rendered width of the left pane (borders included).
 const leftPaneOuterWidth = 32
 
+// AgentEventMsg は Agent ループから届く Bubble Tea メッセージ。
+type AgentEventMsg agent.Event
+
 // Model is the root Bubble Tea model for the Pentecter Commander Console.
 type Model struct {
 	width    int
@@ -38,6 +41,18 @@ type Model struct {
 	list     list.Model
 	viewport viewport.Model
 	input    textinput.Model
+
+	// Agent ループとの通信チャネル（nil = デモモード）
+	agentEvents <-chan agent.Event   // Agent → TUI
+	agentApprove chan<- bool         // TUI → Agent（Proposal 承認/拒否）
+	agentUserMsg chan<- string       // TUI → Agent（チャット入力）
+}
+
+// AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。
+func AgentEventCmd(ch <-chan agent.Event) tea.Cmd {
+	return func() tea.Msg {
+		return AgentEventMsg(<-ch)
+	}
 }
 
 // targetListItem wraps *agent.Target to satisfy the list.Item interface.
@@ -111,9 +126,24 @@ func New() Model {
 	}
 }
 
-// Init implements tea.Model. No initial commands needed.
+// Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
+	if m.agentEvents != nil {
+		return AgentEventCmd(m.agentEvents)
+	}
 	return nil
+}
+
+// ConnectAgent はエージェントループのチャネルを TUI に接続する。
+// この関数を呼んだ後に tea.NewProgram(m).Run() すること。
+func (m *Model) ConnectAgent(
+	events <-chan agent.Event,
+	approve chan<- bool,
+	userMsg chan<- string,
+) {
+	m.agentEvents = events
+	m.agentApprove = approve
+	m.agentUserMsg = userMsg
 }
 
 // activeTarget returns the currently selected target, or nil if none.

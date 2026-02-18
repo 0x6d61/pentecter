@@ -21,6 +21,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildViewport()
 		return m, nil
 
+	// Agent ループからのイベントを処理する。
+	case AgentEventMsg:
+		m.handleAgentEvent(agent.Event(msg))
+		// 次のイベントを待つコマンドを再登録（Bubble Tea の非同期ループパターン）
+		if m.agentEvents != nil {
+			return m, AgentEventCmd(m.agentEvents)
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Global: always handle quit.
 		if msg.String() == "ctrl+c" {
@@ -43,6 +52,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t.ClearProposal()
 				m.syncListItems()
 				m.rebuildViewport()
+				// Agent ループに承認を通知
+				if m.agentApprove != nil {
+					select {
+					case m.agentApprove <- true:
+					default:
+					}
+				}
 				return m, nil
 			case "n", "N":
 				t.AddLog(agent.SourceUser, "✗ 拒否: "+t.Proposal.Description)
@@ -50,6 +66,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t.ClearProposal()
 				m.syncListItems()
 				m.rebuildViewport()
+				// Agent ループに拒否を通知
+				if m.agentApprove != nil {
+					select {
+					case m.agentApprove <- false:
+					default:
+					}
+				}
 				return m, nil
 			case "e", "E":
 				// Populate the input box with the proposal command for editing.
@@ -146,7 +169,7 @@ func (m *Model) cycleFocus() {
 	}
 }
 
-// submitInput sends the current input as a USER log entry on the active target.
+// submitInput sends the current input as a USER log entry and to the Agent.
 func (m *Model) submitInput() {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -156,6 +179,46 @@ func (m *Model) submitInput() {
 
 	if t := m.activeTarget(); t != nil {
 		t.AddLog(agent.SourceUser, text)
+		m.syncListItems()
+		m.rebuildViewport()
+	}
+
+	// Agent が接続されていればユーザーメッセージを送る（非ブロッキング）
+	if m.agentUserMsg != nil {
+		select {
+		case m.agentUserMsg <- text:
+		default:
+		}
+	}
+}
+
+// handleAgentEvent は Agent ループから届くイベントを処理する。
+func (m *Model) handleAgentEvent(e agent.Event) {
+	t := m.activeTarget()
+	if t == nil {
+		return
+	}
+
+	switch e.Type {
+	case agent.EventLog:
+		t.AddLog(e.Source, e.Message)
+		m.syncListItems()
+		m.rebuildViewport()
+
+	case agent.EventProposal:
+		if e.Proposal != nil {
+			t.SetProposal(e.Proposal)
+		}
+		m.syncListItems()
+		m.rebuildViewport()
+
+	case agent.EventComplete:
+		t.AddLog(agent.SourceSystem, "✅ "+e.Message)
+		m.syncListItems()
+		m.rebuildViewport()
+
+	case agent.EventError:
+		t.AddLog(agent.SourceSystem, "❌ "+e.Message)
 		m.syncListItems()
 		m.rebuildViewport()
 	}

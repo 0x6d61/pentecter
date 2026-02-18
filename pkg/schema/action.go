@@ -8,6 +8,8 @@ const (
 	ActionRunTool  ActionType = "run_tool"
 	ActionThink    ActionType = "think"
 	ActionComplete ActionType = "complete"
+	// ActionPropose は重要アクション（エクスプロイト等）を提案しユーザー承認を求める。
+	ActionPropose ActionType = "propose"
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).

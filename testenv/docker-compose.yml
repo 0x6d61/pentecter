@@ -1,0 +1,44 @@
+version: "3.9"
+
+# Pentecter E2E テスト環境
+# Metasploitable2 を Docker で起動し、エージェントの動作テストを行う。
+#
+# 使い方:
+#   docker compose -f testenv/docker-compose.yml up -d
+#   go test -v -tags=e2e -timeout 300s ./e2e/...
+#   docker compose -f testenv/docker-compose.yml down
+#
+# セキュリティ警告の抑制根拠:
+#   no-new-privileges: Metasploitable は setuid/setgid を使う脆弱サービス (vsftpd backdoor 等) を
+#                      意図的に含むテスト標的コンテナ。制限するとテスト目的の脆弱性が再現できない。
+#   writable-filesystem: 各サービスがファイルシステムへの書き込みを必要とするため read_only 不可。
+#   隔離: internal: true で外部インターネットへのルーティングを遮断済み。
+
+services:
+  metasploitable3: # nosemgrep: yaml.docker-compose.security.no-new-privileges.no-new-privileges, yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
+    image: tleemcjr/metasploitable2:latest
+    container_name: pentecter-target
+    hostname: metasploitable
+    ports:
+      - "21221:21"    # FTP  (vsftpd 2.3.4 — バックドア CVE-2011-2523)
+      - "22221:22"    # SSH  (OpenSSH 4.7p1)
+      - "80221:80"    # HTTP (Apache + PHP/CGI 脆弱性)
+      - "33221:3306"  # MySQL (認証なし)
+    networks:
+      - pentecter-testnet
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+networks:
+  pentecter-testnet:
+    driver: bridge
+    internal: true  # 外部インターネットへのルーティングを遮断
