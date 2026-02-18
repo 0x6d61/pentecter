@@ -1,0 +1,11 @@
+# 改行コードを LF に統一（Windows 環境での CRLF 変換を防ぐ）
+* text=auto eol=lf
+*.go text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# バイナリファイルは変換しない
+*.exe binary
+*.png binary
+*.jpg binary

@@ -1,0 +1,25 @@
+# バイナリ
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+pentecter
+
+# テストキャッシュ・カバレッジ
+*.test
+*.out
+coverage.out
+
+# Go ビルドキャッシュ
+/vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
