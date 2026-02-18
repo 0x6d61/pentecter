@@ -50,12 +50,17 @@ func (r *Runner) Run(
 
 // resolveBinary は def.Binary を絶対パスに解決して返す。
 //
-// セキュリティ上の考慮:
-//   - Binary 名にパス区切り文字（/ \）が含まれる場合はエラー。
-//     YAML 定義で相対パスやパストラバーサルを防ぐ。
-//   - exec.LookPath で PATH 内の実在バイナリのみを許可。
-//     これにより "nmap" が正しく /usr/bin/nmap に解決され、
-//     任意のスクリプトが実行されることを防ぐ。
+// resolveBinary の目的:
+//   1. ツールが PATH に存在するか確認する（UX: 実行前に明確なエラーを出す）
+//   2. 相対パス（../../bin/sh など）によるパストラバーサルを防ぐ
+//   3. 絶対パスに解決することで、実行中の PATH 差し替えに対して安定させる
+//
+// スレットモデルの注記:
+//   YAML ファイルは開発者が管理する信頼済み設定であり、ユーザー入力ではない。
+//   そのため「binary: bash」のような正規バイナリ名の悪用は対象外。
+//   exec.CommandContext はシェルを経由しないため args のシェルインジェクションは不可。
+//   Semgrep の警告は「変数が静的でない」という構文検出によるもので、
+//   このツールでは外部コマンド呼び出しが設計上必須のため nosemgrep で抑制する。
 func resolveBinary(name string) (string, error) {
 	// パス区切り文字を含む名前は拒否（../../bin/evil など）
 	if strings.ContainsAny(name, `/\`) {
