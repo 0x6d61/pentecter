@@ -59,7 +59,7 @@ func (m Model) renderStatusBar() string {
 	if t != nil {
 		targetInfo = fmt.Sprintf(
 			"フォーカス: %s [%s]",
-			lipgloss.NewStyle().Foreground(colorWarning).Render(t.IP),
+			lipgloss.NewStyle().Foreground(colorWarning).Render(t.Host),
 			t.Status,
 		)
 	} else {

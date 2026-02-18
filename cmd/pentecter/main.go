@@ -13,6 +13,8 @@ import (
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/memory"
+	"github.com/0x6d61/pentecter/internal/skills"
 	"github.com/0x6d61/pentecter/internal/tools"
 	"github.com/0x6d61/pentecter/internal/tui"
 )
@@ -21,14 +23,12 @@ func main() {
 	var (
 		provider = flag.String("provider", "anthropic", "LLM プロバイダー: anthropic, openai, ollama")
 		model    = flag.String("model", "", "モデル名（省略時はプロバイダーのデフォルト）")
-		toolDir  = flag.String("tools", "tools", "ツール定義 YAML ディレクトリ")
-		noDemo   = flag.Bool("no-demo", false, "デモデータなしで起動する")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `⚡ Pentecter — Autonomous Penetration Testing Agent
 
 Usage:
-  pentecter [flags] <target-ip> [target-ip...]
+  pentecter [flags] [target-ip...]
 
 Flags:
 `)
@@ -42,26 +42,17 @@ Environment:
   OLLAMA_MODEL          Ollama モデル名 (default: llama3.2)
 
 Examples:
-  pentecter 10.0.0.5
-  pentecter -provider ollama 10.0.0.5 10.0.0.8
-  pentecter -provider anthropic -model claude-sonnet-4-6 192.168.1.1
+  pentecter                                          # ターゲットなし起動（チャットで追加）
+  pentecter 10.0.0.5                                 # ターゲット指定で起動
+  pentecter -provider ollama 10.0.0.5 10.0.0.8       # 複数ターゲット
+
+Chat commands:
+  10.0.0.5             IP アドレスを入力してターゲット追加
+  /target example.com  ドメインをターゲット追加
+  /web-recon           スキル実行（skills/ ディレクトリから自動ロード）
 `)
 	}
 	flag.Parse()
-
-	targetIPs := flag.Args()
-
-	// ターゲットなし → デモモード
-	if len(targetIPs) == 0 && !*noDemo {
-		runDemo()
-		return
-	}
-
-	if len(targetIPs) == 0 {
-		fmt.Fprintln(os.Stderr, "エラー: ターゲット IP を指定してください")
-		flag.Usage()
-		os.Exit(1)
-	}
 
 	// --- Brain ---
 	brainCfg, err := brain.LoadConfig(brain.ConfigHint{
@@ -81,46 +72,50 @@ Examples:
 
 	// --- Tools ---
 	registry := tools.NewRegistry()
-	if err := registry.LoadDir(*toolDir); err != nil {
-		fmt.Fprintf(os.Stderr, "ツールロードエラー (%s): %v\n", *toolDir, err)
+	if err := registry.LoadDir("tools"); err != nil {
+		fmt.Fprintf(os.Stderr, "ツールロードエラー: %v\n", err)
 		os.Exit(1)
 	}
-	// MCP サーバー設定は将来実装（現在は YAML ベースのみ）
 
 	// --- Blacklist ---
 	blacklist := loadBlacklist("config/blacklist.yaml")
 
+	// --- Skills ---
+	skillsReg := skills.NewRegistry()
+	_ = skillsReg.LoadDir("skills")
+
+	// --- Memory ---
+	memoryStore := memory.NewStore("memory")
+
 	// --- CommandRunner ---
-	store := tools.NewLogStore()
-	runner := tools.NewCommandRunner(registry, blacklist, store)
+	logStore := tools.NewLogStore()
+	runner := tools.NewCommandRunner(registry, blacklist, logStore)
 
 	// --- Agent Team ---
 	events := make(chan agent.Event, 512)
 	approveMap := make(map[int]chan<- bool)
 	userMsgMap := make(map[int]chan<- string)
 
+	team := agent.NewTeam(agent.TeamConfig{
+		Events:      events,
+		Brain:       br,
+		Runner:      runner,
+		SkillsReg:   skillsReg,
+		MemoryStore: memoryStore,
+	})
+
+	// CLI ターゲットを事前追加
 	var targets []*agent.Target
-	var loops []*agent.Loop
-
-	for i, ip := range targetIPs {
-		id := i + 1
-		target := agent.NewTarget(id, ip)
+	for _, ip := range flag.Args() {
+		target, approveCh, userMsgCh := team.AddTarget(ip)
 		targets = append(targets, target)
-
-		approveCh := make(chan bool, 1)
-		userMsgCh := make(chan string, 4)
-		approveMap[id] = approveCh
-		userMsgMap[id] = userMsgCh
-
-		loop := agent.NewLoop(target, br, runner, events, approveCh, userMsgCh)
-		loops = append(loops, loop)
+		approveMap[target.ID] = approveCh
+		userMsgMap[target.ID] = userMsgCh
 	}
-
-	team := agent.NewTeam(events, loops...)
 
 	// --- TUI ---
 	m := tui.NewWithTargets(targets)
-	m.ConnectTeam(events, approveMap, userMsgMap)
+	m.ConnectTeam(team, events, approveMap, userMsgMap)
 
 	// グレースフルシャットダウン
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -137,22 +132,11 @@ Examples:
 	}
 }
 
-// runDemo はターゲット未指定時にデモモードで TUI を起動する。
-func runDemo() {
-	m := tui.New()
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Pentecter エラー:", err)
-		os.Exit(1)
-	}
-}
-
 // loadBlacklist は YAML ファイルからブラックリストパターンを読み込む。
 // ファイルが存在しない場合はデフォルトの安全パターンを返す。
 func loadBlacklist(path string) *tools.Blacklist {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// config/blacklist.yaml がなくても最低限のパターンを適用
 		return tools.NewBlacklist([]string{
 			`rm\s+-rf\s+/`,
 			`dd\s+if=`,

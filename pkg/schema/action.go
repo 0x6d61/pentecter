@@ -21,6 +21,10 @@ const (
 
 	// ActionMemory は脆弱性・認証情報・アーティファクトを memory に記録する。
 	ActionMemory ActionType = "memory"
+
+	// ActionAddTarget は横展開時に新ターゲットを追加する。
+	// Brain がネットワーク内の別ホストを発見した際に使用する。
+	ActionAddTarget ActionType = "add_target"
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).
@@ -37,6 +41,7 @@ type Action struct {
 	Action  ActionType `json:"action"`
 	Command string     `json:"command,omitempty"` // ActionRun / ActionPropose
 	Memory  *Memory    `json:"memory,omitempty"`  // ActionMemory
+	Target  string     `json:"target,omitempty"`  // ActionAddTarget: 追加するホスト
 }
 
 // Memory は Brain がナレッジグラフに記録する発見物。

@@ -12,8 +12,8 @@ func TestNewTarget_InitialState(t *testing.T) {
 	if tgt.ID != 1 {
 		t.Errorf("ID: got %d, want 1", tgt.ID)
 	}
-	if tgt.IP != "10.0.0.1" {
-		t.Errorf("IP: got %s, want 10.0.0.1", tgt.IP)
+	if tgt.Host != "10.0.0.1" {
+		t.Errorf("Host: got %s, want 10.0.0.1", tgt.Host)
 	}
 	if tgt.Status != agent.StatusIdle {
 		t.Errorf("Status: got %s, want %s", tgt.Status, agent.StatusIdle)

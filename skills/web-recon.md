@@ -1,0 +1,15 @@
+---
+name: web-recon
+description: Webアプリケーション初期偵察
+---
+
+Perform comprehensive web application reconnaissance on the target.
+
+Follow this sequence:
+1. Port scan: nmap -sV -p 80,443,8080,8443
+2. Web vulnerability scan: nikto -h http://<target>/
+3. If WordPress detected: wpscan --url http://<target>/
+4. Check for common paths: curl -si http://<target>/admin/
+
+Record all discovered vulnerabilities and interesting findings with memory action.
+Focus: web vulnerabilities, exposed admin panels, outdated software versions.

@@ -3,46 +3,91 @@ package agent
 import (
 	"context"
 	"sync"
+
+	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/memory"
+	"github.com/0x6d61/pentecter/internal/skills"
+	"github.com/0x6d61/pentecter/internal/tools"
 )
+
+// TeamConfig は Team の構築パラメーター。
+type TeamConfig struct {
+	Events      chan Event
+	Brain       brain.Brain
+	Runner      *tools.CommandRunner
+	SkillsReg   *skills.Registry  // nil = スキル無効
+	MemoryStore *memory.Store     // nil = メモリ無効
+}
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
 // 各 Loop は独立した goroutine で動き、events チャネルを通じて TUI に通知する。
+// AddTarget で実行中に新ターゲットを動的に追加できる（横展開対応）。
 type Team struct {
-	loops  []*Loop
-	events chan Event // 全 Loop のイベントを集約する共有チャネル
+	loops       []*Loop
+	events      chan Event
+	br          brain.Brain
+	runner      *tools.CommandRunner
+	skillsReg   *skills.Registry
+	memoryStore *memory.Store
+	nextID      int
+	ctx         context.Context // Start() で保存
+	mu          sync.Mutex
 }
 
-// NewTeam は loops を持つ Team を返す。
-// events チャネルは TUI が読み取る。
-func NewTeam(events chan Event, loops ...*Loop) *Team {
+// NewTeam は TeamConfig から Team を構築する。
+func NewTeam(cfg TeamConfig) *Team {
 	return &Team{
-		loops:  loops,
-		events: events,
+		events:      cfg.Events,
+		br:          cfg.Brain,
+		runner:      cfg.Runner,
+		skillsReg:   cfg.SkillsReg,
+		memoryStore: cfg.MemoryStore,
 	}
 }
 
-// Start は全 Loop を並列起動する。
-// ctx のキャンセルで全 Loop が停止するまで待機し、待機は非ブロッキング（goroutine）。
-func (t *Team) Start(ctx context.Context) {
-	var wg sync.WaitGroup
-	for _, loop := range t.loops {
-		wg.Add(1)
-		go func(l *Loop) {
-			defer wg.Done()
-			l.Run(ctx)
-		}(loop)
+// AddTarget は新ターゲットを追加し、Start() 済みなら即座に Loop を起動する。
+// TUI またはイベントハンドラーから呼び出す。
+func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.nextID++
+	target := NewTarget(t.nextID, host)
+
+	approveCh := make(chan bool, 1)
+	userMsgCh := make(chan string, 4)
+
+	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
+		WithSkills(t.skillsReg).
+		WithMemory(t.memoryStore)
+
+	t.loops = append(t.loops, loop)
+
+	// Start() 済みなら即座に起動
+	if t.ctx != nil {
+		go loop.Run(t.ctx)
 	}
-	// 全 Loop 完了後に events を閉じる
-	go func() {
-		wg.Wait()
-		// チャネルを閉じると TUI 側で終了を検知できる
-		// ただし TUI が先に閉じる可能性もあるため、recover で対処
-		defer func() { recover() }() //nolint:errcheck
-		close(t.events)
-	}()
+
+	return target, approveCh, userMsgCh
+}
+
+// Start は ctx を保存し、既存の全 Loop を並列起動する。
+// ctx のキャンセルで全 Loop が停止する。
+func (t *Team) Start(ctx context.Context) {
+	t.mu.Lock()
+	t.ctx = ctx
+	pending := make([]*Loop, len(t.loops))
+	copy(pending, t.loops)
+	t.mu.Unlock()
+
+	for _, loop := range pending {
+		go loop.Run(ctx)
+	}
 }
 
 // Loops は管理している全 Loop を返す（TUI のターゲットリスト表示用）。
 func (t *Team) Loops() []*Loop {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.loops
 }

@@ -12,6 +12,8 @@ const (
 	EventComplete EventType = "complete"
 	// EventError はループ内でリカバリー不能なエラーが発生したとき。
 	EventError EventType = "error"
+	// EventAddTarget は横展開で新ターゲットを追加するとき。
+	EventAddTarget EventType = "add_target"
 )
 
 // Event は Agent ループから TUI へ送るメッセージ。
@@ -21,4 +23,5 @@ type Event struct {
 	Source   LogSource // EventLog 時に使用
 	Message  string
 	Proposal *Proposal // EventProposal 時に使用
+	NewHost  string    // EventAddTarget 時に使用
 }
