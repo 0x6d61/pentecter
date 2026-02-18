@@ -1,0 +1,10 @@
+name: nmap
+binary: nmap
+description: "ポートスキャン・サービス・OS検出"
+tags: [recon, port-scan]
+timeout: 600
+default_args: ["-sV"]
+output:
+  strategy: head_tail
+  head_lines: 50
+  tail_lines: 30

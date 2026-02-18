@@ -1,0 +1,9 @@
+name: curl
+binary: curl
+description: "HTTPリクエスト送信・レスポンス取得"
+tags: [http, recon]
+timeout: 30
+default_args: ["-si", "--max-time", "10"]
+output:
+  strategy: http_response
+  body_bytes: 500
