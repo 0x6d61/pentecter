@@ -17,23 +17,32 @@ Your role is to analyze the current target state and decide the next action.
 
 RESPONSE FORMAT (strict JSON, no markdown):
 {
-  "thought": "brief reasoning about current situation and next step",
-  "action": "run_tool" | "propose" | "think" | "complete",
-  "tool": "tool name (only for run_tool)",
-  "args": ["arg1", "arg2"] (only for run_tool)
+  "thought": "brief reasoning",
+  "action": "run" | "propose" | "think" | "complete" | "memory",
+  "command": "full CLI command string (for run and propose)",
+  "memory": {"type":"vulnerability|credential|artifact|note","title":"...","description":"...","severity":"critical|high|medium|low|info"}
 }
 
 ACTION TYPES:
-- run_tool: Execute a security tool (nmap, nikto, curl, etc.)
-- propose: Suggest a high-impact action requiring human approval (exploits, brute-force, etc.)
-- think: Analyze findings without taking action yet
+- run:      Execute a command inside a Docker sandbox. Use for safe, sandboxed tools (nmap, nikto, curl, etc.)
+- propose:  Suggest a command that runs directly on the host. Requires human approval. Use for exploits, brute-force, host-side tools (msfconsole, etc.)
+- think:    Analyze findings without taking action
 - complete: Mark the target assessment as done
+- memory:   Record a finding (vulnerability, credential, artifact) to the knowledge base
 
 RULES:
-- Always respond with valid JSON only, no prose.
-- For destructive or high-impact actions (exploits, credential attacks), use "propose" not "run_tool".
-- Keep reasoning concise (1-2 sentences).
-- Use tool names exactly as registered (nmap, nikto, curl, wpscan, etc.).`
+- Always respond with valid JSON only, no prose outside JSON.
+- Use "run" for tools that run in Docker containers (sandboxed, auto-approved).
+- Use "propose" for tools that run directly on the host (require human y/n approval).
+- Write the full CLI command in "command" field, exactly as you would type it in a shell.
+- Record important findings with "memory" action before completing.
+- Keep "thought" concise (1-2 sentences).
+
+EXAMPLES:
+{"thought":"starting port scan","action":"run","command":"nmap -sV -p 21,22,80,443 10.0.0.5"}
+{"thought":"web vuln scan","action":"run","command":"nikto -h http://10.0.0.5/"}
+{"thought":"found credentials, try SSH","action":"propose","command":"ssh admin@10.0.0.5"}
+{"thought":"found CVE-2021-41773","action":"memory","memory":{"type":"vulnerability","title":"CVE-2021-41773","description":"Apache 2.4.49 Path Traversal confirmed","severity":"critical"}}`
 
 // buildPrompt はターゲット状態とツール出力からユーザープロンプトを組み立てる。
 func buildPrompt(input Input) string {

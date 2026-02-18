@@ -78,7 +78,7 @@ func jsonEscape(s string) string {
 // --- テストケース ---
 
 func TestAnthropicBrain_Think_APIKey(t *testing.T) {
-	action := `{"thought":"port 80 found","action":"run_tool","tool":"nikto","args":["-h","10.0.0.5"]}`
+	action := `{"thought":"port 80 found","action":"run","command":"nikto -h http://10.0.0.5/"}`
 	srv := mockAnthropicServer(t, anthropicResponse(action))
 	defer srv.Close()
 
@@ -87,7 +87,7 @@ func TestAnthropicBrain_Think_APIKey(t *testing.T) {
 		Model:    "claude-sonnet-4-6",
 		AuthType: brain.AuthAPIKey,
 		Token:    "sk-ant-test-key",
-		BaseURL:  srv.URL, // テスト用にモックサーバーを向ける
+		BaseURL:  srv.URL,
 	})
 	if err != nil {
 		t.Fatalf("brain.New: %v", err)
@@ -101,11 +101,11 @@ func TestAnthropicBrain_Think_APIKey(t *testing.T) {
 		t.Fatalf("Think: %v", err)
 	}
 
-	if result.Action != schema.ActionRunTool {
-		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionRunTool)
+	if result.Action != schema.ActionRun {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionRun)
 	}
-	if result.Tool != "nikto" {
-		t.Errorf("Tool: got %q, want %q", result.Tool, "nikto")
+	if result.Command == "" {
+		t.Error("Command should not be empty")
 	}
 	if result.Thought == "" {
 		t.Error("Thought should not be empty")
@@ -140,7 +140,7 @@ func TestAnthropicBrain_Think_OAuthToken(t *testing.T) {
 }
 
 func TestOpenAIBrain_Think(t *testing.T) {
-	action := `{"thought":"checking service","action":"run_tool","tool":"curl","args":["-si","http://10.0.0.5/"]}`
+	action := `{"thought":"checking service","action":"run","command":"curl -si http://10.0.0.5/"}`
 	srv := mockOpenAIServer(t, openAIResponse(action))
 	defer srv.Close()
 
@@ -162,8 +162,11 @@ func TestOpenAIBrain_Think(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Think: %v", err)
 	}
-	if result.Tool != "curl" {
-		t.Errorf("Tool: got %q, want %q", result.Tool, "curl")
+	if result.Action != schema.ActionRun {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionRun)
+	}
+	if result.Command == "" {
+		t.Error("Command should not be empty")
 	}
 }
 

@@ -1,0 +1,31 @@
+# ブラックリスト — ホスト実行コマンドの危険パターン
+# Docker 実行にはこのチェックを省略する（コンテナ内で隔離済み）
+#
+# 正規表現形式（Go regexp 準拠）
+
+patterns:
+  # ファイルシステムの破壊的操作
+  - 'rm\s+-rf\s+/'
+  - 'rm\s+--no-preserve-root'
+  - 'dd\s+if='
+  - 'mkfs'
+  - 'fdisk'
+  - 'parted'
+
+  # デバイスへの直接書き込み
+  - '>\s*/dev/sd'
+  - '>\s*/dev/nvme'
+  - '>\s*/dev/hd'
+
+  # システム停止
+  - '\bshutdown\b'
+  - '\breboot\b'
+  - '\binit\s+0\b'
+  - '\bpoweroff\b'
+
+  # Windows 固有
+  - 'format\s+[a-z]:'
+  - 'del\s+/[sq]'
+
+  # フォークボム
+  - ':\(\)\{.*\|.*:.*\}'
