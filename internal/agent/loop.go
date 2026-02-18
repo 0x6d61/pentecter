@@ -237,6 +237,7 @@ func (l *Loop) buildSnapshot() string {
 }
 
 func (l *Loop) emit(e Event) {
+	e.TargetID = l.target.ID
 	select {
 	case l.events <- e:
 	default:

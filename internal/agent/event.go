@@ -16,6 +16,7 @@ const (
 
 // Event は Agent ループから TUI へ送るメッセージ。
 type Event struct {
+	TargetID int       // どのターゲットのイベントか（TUI のルーティング用）
 	Type     EventType
 	Source   LogSource // EventLog 時に使用
 	Message  string
