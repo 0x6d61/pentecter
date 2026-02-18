@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-and-test:
-    name: Build & Test
+    name: Build & Unit Test
     runs-on: ubuntu-latest
 
     steps:
@@ -35,8 +35,9 @@ jobs:
       - name: 静的解析 (go vet)
         run: go vet ./...
 
-      - name: テスト実行
-        run: go test -v -race -coverprofile=coverage.out ./...
+      - name: ユニットテスト実行
+        # -tags=e2e を付けないことで E2E テストを除外する
+        run: go test -v -coverprofile=coverage.out ./internal/... ./pkg/...
 
       - name: カバレッジレポート
         run: go tool cover -func=coverage.out

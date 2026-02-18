@@ -1,0 +1,80 @@
+name: E2E Test (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ip:
+        description: "テスト対象 IP（デフォルト: Metasploitable コンテナの IP）"
+        required: false
+        default: "172.20.0.2"
+      ollama_model:
+        description: "使用する Ollama モデル"
+        required: false
+        default: "llama3.2:3b"
+
+jobs:
+  e2e:
+    name: E2E Test (Ollama + Metasploitable)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # workflow_dispatch の inputs を env: 経由で渡すことで
+    # run: ステップへの直接埋め込みによるシェルインジェクションを防ぐ。
+    # 参考: https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
+    env:
+      OLLAMA_MODEL: ${{ github.event.inputs.ollama_model }}
+      E2E_TARGET_IP: ${{ github.event.inputs.target_ip }}
+
+    steps:
+      - name: コードをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Go をセットアップ
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: nmap をインストール
+        run: sudo apt-get update && sudo apt-get install -y nmap
+
+      - name: Ollama をインストール・起動
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+              echo "Ollama ready"
+              break
+            fi
+            echo "Waiting for Ollama... ($i)"
+            sleep 2
+          done
+
+      - name: Ollama モデルをプル
+        # env: で受け取った変数を使うことでシェルインジェクションを防ぐ
+        run: ollama pull "$OLLAMA_MODEL"
+
+      - name: Metasploitable を起動
+        run: |
+          docker compose -f testenv/docker-compose.yml up -d
+          for i in $(seq 1 12); do
+            if docker inspect --format='{{.State.Health.Status}}' pentecter-target 2>/dev/null | grep -q healthy; then
+              echo "Metasploitable is healthy"
+              break
+            fi
+            echo "Waiting for Metasploitable... ($i/12)"
+            sleep 5
+          done
+
+      - name: E2E テスト実行
+        run: go test -v -tags=e2e -timeout 20m ./e2e/...
+        env:
+          # Ollama をローカル LLM として使用（API キー不要）
+          PENTECTER_PROVIDER: ollama
+          PENTECTER_BASE_URL: http://localhost:11434
+          PENTECTER_MODEL: ${{ github.event.inputs.ollama_model }}
+
+      - name: Metasploitable を停止
+        if: always()
+        run: docker compose -f testenv/docker-compose.yml down
