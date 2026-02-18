@@ -15,7 +15,7 @@ func TestRegistry_LoadDir(t *testing.T) {
 	yaml1 := `
 name: testtool
 binary: echo
-description: "テスト用ツール"
+description: "Test tool"
 tags: [test]
 timeout: 10
 output:

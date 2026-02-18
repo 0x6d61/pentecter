@@ -214,6 +214,7 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 
 func TestLoadConfig_OAuthEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-ocp01-oauth")
 
 	cfg, err := brain.LoadConfig(brain.ConfigHint{

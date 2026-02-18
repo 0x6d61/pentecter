@@ -19,7 +19,7 @@ func TestHeadTail_ShortOutput(t *testing.T) {
 			t.Errorf("line %d %q not found in output", i, line)
 		}
 	}
-	if strings.Contains(got, "省略") {
+	if strings.Contains(got, "omitted") {
 		t.Error("short output should not contain omission marker")
 	}
 }
@@ -43,7 +43,7 @@ func TestHeadTail_LongOutput(t *testing.T) {
 		}
 	}
 	// 省略マーカーが含まれる
-	if !strings.Contains(got, "省略") {
+	if !strings.Contains(got, "omitted") {
 		t.Error("long output should contain omission marker")
 	}
 	// 中間行は含まれない

@@ -13,7 +13,7 @@ func TestRegistry_Load(t *testing.T) {
 
 	md := `---
 name: web-recon
-description: "Webアプリ初期偵察"
+description: "Web app initial recon"
 ---
 
 Perform web application reconnaissance.
@@ -43,7 +43,7 @@ Steps: nmap → nikto → wpscan
 func TestRegistry_Invoke_AddsPromptToContext(t *testing.T) {
 	dir := t.TempDir()
 
-	md := "---\nname: sqli\ndescription: \"SQLi チェック\"\n---\n\nTest for SQL injection vulnerabilities on the target."
+	md := "---\nname: sqli\ndescription: \"SQLi check\"\n---\n\nTest for SQL injection vulnerabilities on the target."
 	if err := os.WriteFile(filepath.Join(dir, "sqli.md"), []byte(md), 0o600); err != nil {
 		t.Fatal(err)
 	}

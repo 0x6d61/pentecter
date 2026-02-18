@@ -1,0 +1,37 @@
+services:
+  pentecter:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile.pentecter
+    container_name: pentecter
+    stdin_open: true
+    tty: true
+    env_file:
+      - path: .env
+        required: false
+    networks:
+      pentecter-demo:
+        ipv4_address: 172.30.0.10
+    depends_on:
+      target:
+        condition: service_started
+
+  target:
+    image: tleemcjr/metasploitable2:latest
+    container_name: pentecter-demo-target
+    hostname: metasploitable
+    networks:
+      pentecter-demo:
+        ipv4_address: 172.30.0.20
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+networks:
+  pentecter-demo:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

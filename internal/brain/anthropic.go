@@ -66,10 +66,12 @@ func (b *anthropicBrain) Think(ctx context.Context, input Input) (*schema.Action
 
 	// 認証方式に応じてヘッダーを設定する。
 	// AuthAPIKey    → x-api-key ヘッダー（標準 API キー）
-	// AuthOAuthToken → Authorization: Bearer ヘッダー（claude auth token の出力）
+	// AuthOAuthToken → Authorization: Bearer + OAuth 必須ヘッダー（claude setup-token の出力）
 	switch b.cfg.AuthType {
 	case AuthOAuthToken:
 		req.Header.Set("Authorization", "Bearer "+b.cfg.Token)
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	default:
 		req.Header.Set("x-api-key", b.cfg.Token)
 	}

@@ -28,7 +28,7 @@ func TestNewTarget_InitialState(t *testing.T) {
 
 func TestTarget_AddLog(t *testing.T) {
 	tgt := agent.NewTarget(1, "10.0.0.1")
-	tgt.AddLog(agent.SourceAI, "偵察を開始します")
+	tgt.AddLog(agent.SourceAI, "Starting recon")
 	tgt.AddLog(agent.SourceTool, "nmap -sV 10.0.0.1")
 
 	if len(tgt.Logs) != 2 {
@@ -37,8 +37,8 @@ func TestTarget_AddLog(t *testing.T) {
 	if tgt.Logs[0].Source != agent.SourceAI {
 		t.Errorf("Log[0].Source: got %s, want %s", tgt.Logs[0].Source, agent.SourceAI)
 	}
-	if tgt.Logs[0].Message != "偵察を開始します" {
-		t.Errorf("Log[0].Message: got %s, want 偵察を開始します", tgt.Logs[0].Message)
+	if tgt.Logs[0].Message != "Starting recon" {
+		t.Errorf("Log[0].Message: got %s, want Starting recon", tgt.Logs[0].Message)
 	}
 	if tgt.Logs[0].Time.IsZero() {
 		t.Errorf("Log[0].Time: should not be zero")
@@ -50,7 +50,7 @@ func TestTarget_SetProposal_PausesTarget(t *testing.T) {
 	tgt.Status = agent.StatusScanning
 
 	p := &agent.Proposal{
-		Description: "エクスプロイトを実行",
+		Description: "Run exploit",
 		Tool:        "metasploit",
 		Args:        []string{"exploit/multi/handler"},
 	}
@@ -66,7 +66,7 @@ func TestTarget_SetProposal_PausesTarget(t *testing.T) {
 
 func TestTarget_ClearProposal(t *testing.T) {
 	tgt := agent.NewTarget(1, "10.0.0.1")
-	tgt.SetProposal(&agent.Proposal{Description: "テスト提案"})
+	tgt.SetProposal(&agent.Proposal{Description: "test proposal"})
 	tgt.ClearProposal()
 
 	if tgt.Proposal != nil {

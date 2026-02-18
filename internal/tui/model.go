@@ -171,7 +171,7 @@ func (m *Model) activeTarget() *agent.Target {
 func (m *Model) rebuildViewport() {
 	t := m.activeTarget()
 	if t == nil {
-		m.viewport.SetContent("  ターゲットが選択されていません。\n\n  IP アドレスを入力してターゲットを追加:\n    例: 10.0.0.5 / /target example.com\n\n  スキル: /web-recon, /full-scan, /sqli-check")
+		m.viewport.SetContent("  No target selected.\n\n  Add a target by entering an IP address:\n    e.g. 10.0.0.5 / /target example.com\n\n  Skills: /web-recon, /full-scan, /sqli-check")
 		return
 	}
 
@@ -180,7 +180,7 @@ func (m *Model) rebuildViewport() {
 	header := lipgloss.NewStyle().
 		Foreground(colorPrimary).
 		Bold(true).
-		Render(fmt.Sprintf("═══ セッション: %s [%s] ═══", t.Host, t.Status))
+		Render(fmt.Sprintf("═══ Session: %s [%s] ═══", t.Host, t.Status))
 	sb.WriteString(header + "\n\n")
 
 	for _, entry := range t.Logs {
@@ -210,10 +210,10 @@ func (m *Model) rebuildViewport() {
 		proposalTitle := lipgloss.NewStyle().
 			Foreground(colorWarning).
 			Bold(true).
-			Render("⚠  PROPOSAL — 承認待ち")
+			Render("⚠  PROPOSAL — Awaiting approval")
 
 		proposalBody := fmt.Sprintf(
-			"%s\n  ツール: %s %s",
+			"%s\n  Tool: %s %s",
 			p.Description,
 			p.Tool,
 			strings.Join(p.Args, " "),
@@ -221,7 +221,7 @@ func (m *Model) rebuildViewport() {
 
 		proposalControls := lipgloss.NewStyle().
 			Foreground(colorMuted).
-			Render("  [y] 承認して実行   [n] 拒否   [e] 編集")
+			Render("  [y] Approve  [n] Reject  [e] Edit")
 
 		boxWidth := m.viewport.Width - 2
 		if boxWidth < 10 {
@@ -251,31 +251,31 @@ func (m *Model) syncListItems() {
 func buildDemoTargets() []*agent.Target {
 	t1 := agent.NewTarget(1, "10.0.0.5")
 	t1.Status = agent.StatusScanning
-	t1.AddLog(agent.SourceSystem, "セッション開始")
-	t1.AddLog(agent.SourceAI, "10.0.0.5 の偵察を開始します")
+	t1.AddLog(agent.SourceSystem, "Session started")
+	t1.AddLog(agent.SourceAI, "Starting recon on 10.0.0.5")
 	t1.AddLog(agent.SourceTool, "nmap -sV -p- 10.0.0.5")
 	t1.AddLog(agent.SourceTool, "PORT     STATE  SERVICE  VERSION")
 	t1.AddLog(agent.SourceTool, "22/tcp   open   ssh      OpenSSH 8.0")
 	t1.AddLog(agent.SourceTool, "80/tcp   open   http     Apache httpd 2.4.49")
-	t1.AddLog(agent.SourceAI, "Apache 2.4.49 を検出 — CVE-2021-41773 (Path Traversal) の可能性あり")
+	t1.AddLog(agent.SourceAI, "Detected Apache 2.4.49 — possible CVE-2021-41773 (Path Traversal)")
 
 	t2 := agent.NewTarget(2, "10.0.0.8")
-	t2.AddLog(agent.SourceSystem, "セッション開始")
-	t2.AddLog(agent.SourceAI, "10.0.0.8 の偵察を開始します")
+	t2.AddLog(agent.SourceSystem, "Session started")
+	t2.AddLog(agent.SourceAI, "Starting recon on 10.0.0.8")
 	t2.AddLog(agent.SourceTool, "nmap -sV 10.0.0.8")
 	t2.AddLog(agent.SourceTool, "80/tcp open http Apache httpd 2.4.49")
-	t2.AddLog(agent.SourceAI, "Port 80 (Apache 2.4.49) — CVE-2021-41773 に脆弱")
-	t2.AddLog(agent.SourceAI, "Metasploit モジュールでエクスプロイトを計画中...")
+	t2.AddLog(agent.SourceAI, "Port 80 (Apache 2.4.49) — vulnerable to CVE-2021-41773")
+	t2.AddLog(agent.SourceAI, "Planning exploit with Metasploit module...")
 	// Simulate AI proposing an exploit
 	t2.Logs[len(t2.Logs)-1].Time = time.Now()
 	t2.SetProposal(&agent.Proposal{
-		Description: "Apache 2.4.49 Path Traversal をエクスプロイト (CVE-2021-41773)",
+		Description: "Exploit Apache 2.4.49 Path Traversal (CVE-2021-41773)",
 		Tool:        "metasploit",
 		Args:        []string{"exploit/multi/http/apache_normalize_path_rce", "--target", "10.0.0.8", "--lhost", "10.0.0.2"},
 	})
 
 	t3 := agent.NewTarget(3, "10.0.0.12")
-	t3.AddLog(agent.SourceSystem, "セッション開始")
+	t3.AddLog(agent.SourceSystem, "Session started")
 
 	return []*agent.Target{t1, t2, t3}
 }
