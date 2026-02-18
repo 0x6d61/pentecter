@@ -4,12 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
 	"github.com/0x6d61/pentecter/internal/tools"
 	"github.com/0x6d61/pentecter/pkg/schema"
+)
+
+const (
+	maxBrainRetries = 3
+	// maxConsecutiveFailures は連続失敗でユーザーに方針を聞く閾値。
+	maxConsecutiveFailures = 3
 )
 
 // Loop は Brain・CommandRunner・TUI を接続するオーケストレーター。
@@ -34,7 +41,8 @@ type Loop struct {
 	approve <-chan bool   // TUI → Agent（Proposal 承認/拒否）
 	userMsg <-chan string // TUI → Agent（チャット入力）
 
-	lastToolOutput string
+	lastToolOutput      string
+	consecutiveFailures int
 }
 
 // NewLoop は Loop を構築する。
@@ -84,27 +92,58 @@ func (l *Loop) Run(ctx context.Context) {
 
 		userMsg := l.drainUserMsg()
 
+		// Check if stalled: consecutive failures reached threshold → pause and ask user
+		if l.consecutiveFailures >= maxConsecutiveFailures {
+			l.emit(Event{Type: EventStalled,
+				Message: fmt.Sprintf("Stalled after %d consecutive failures. Waiting for direction.", l.consecutiveFailures)})
+			l.target.Status = StatusPaused
+
+			// Wait for user input before continuing
+			userMsg = l.waitForUserMsg(ctx)
+			if userMsg == "" {
+				return // context cancelled
+			}
+			l.consecutiveFailures = 0
+			l.target.Status = StatusScanning
+		}
+
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Thinking..."})
 
-		action, err := l.br.Think(ctx, brain.Input{
-			TargetSnapshot: l.buildSnapshot(),
-			ToolOutput:     l.lastToolOutput,
-			UserMessage:    userMsg,
-		})
-		if err != nil {
-			l.emit(Event{Type: EventError, Message: fmt.Sprintf("Brain error: %v", err)})
+		var action *schema.Action
+		var brainErr error
+		for attempt := 1; attempt <= maxBrainRetries; attempt++ {
+			action, brainErr = l.br.Think(ctx, brain.Input{
+				TargetSnapshot: l.buildSnapshot(),
+				ToolOutput:     l.lastToolOutput,
+				UserMessage:    userMsg,
+			})
+			if brainErr == nil {
+				break
+			}
+			if attempt < maxBrainRetries {
+				l.emit(Event{Type: EventLog, Source: SourceSystem,
+					Message: fmt.Sprintf("Brain error: %v — retrying (%d/%d)", brainErr, attempt, maxBrainRetries)})
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(attempt) * time.Second):
+				}
+			}
+		}
+		if brainErr != nil {
+			l.emit(Event{Type: EventError, Message: fmt.Sprintf("Brain error after %d retries: %v", maxBrainRetries, brainErr)})
 			l.target.Status = StatusFailed
 			return
 		}
 
 		if action.Thought != "" {
 			l.emit(Event{Type: EventLog, Source: SourceAI, Message: action.Thought})
-			l.target.AddLog(SourceAI, action.Thought)
 		}
 
 		switch action.Action {
 		case schema.ActionRun:
 			l.runCommand(ctx, action.Command)
+			l.evaluateResult()
 
 		case schema.ActionPropose:
 			if !l.handlePropose(ctx, action.Command, action.Thought) {
@@ -119,7 +158,6 @@ func (l *Loop) Run(ctx context.Context) {
 				l.emit(Event{Type: EventAddTarget, NewHost: action.Target})
 				msg := fmt.Sprintf("Lateral movement: adding new target %s", action.Target)
 				l.emit(Event{Type: EventLog, Source: SourceAI, Message: msg})
-				l.target.AddLog(SourceAI, msg)
 			}
 
 		case schema.ActionThink:
@@ -146,14 +184,12 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	}
 
 	l.emit(Event{Type: EventLog, Source: SourceTool, Message: command})
-	l.target.AddLog(SourceTool, command)
 	l.target.Status = StatusRunning
 
 	needsProposal, linesCh, resultCh, err := l.runner.Run(ctx, command)
 	if err != nil {
 		errMsg := fmt.Sprintf("Execution error: %v", err)
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: errMsg})
-		l.target.AddLog(SourceSystem, errMsg)
 		l.lastToolOutput = "Error: " + err.Error()
 		l.target.Status = StatusScanning
 		return
@@ -206,7 +242,6 @@ func (l *Loop) recordMemory(m *schema.Memory) {
 	}
 	msg := fmt.Sprintf("[%s] %s: %s", m.Type, m.Title, m.Description)
 	l.emit(Event{Type: EventLog, Source: SourceAI, Message: "📝 " + msg})
-	l.target.AddLog(SourceAI, "📝 "+msg)
 
 	// Memory Store に永続化
 	if l.memoryStore != nil {
@@ -217,6 +252,101 @@ func (l *Loop) recordMemory(m *schema.Memory) {
 	}
 }
 
+// waitForUserMsg はユーザーからのメッセージをブロッキングで待つ。
+// コンテキストがキャンセルされた場合は空文字を返す。
+func (l *Loop) waitForUserMsg(ctx context.Context) string {
+	select {
+	case msg := <-l.userMsg:
+		if l.skillsReg != nil {
+			return l.skillsReg.Expand(msg)
+		}
+		return msg
+	case <-ctx.Done():
+		return ""
+	}
+}
+
+// evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
+// 失敗の場合 consecutiveFailures をインクリメント、成功でリセット。
+func (l *Loop) evaluateResult() {
+	if isFailedOutput(l.lastToolOutput) {
+		l.consecutiveFailures++
+	} else {
+		l.consecutiveFailures = 0
+	}
+}
+
+// isFailedOutput はツール出力が実質的に失敗かどうかを判定する。
+func isFailedOutput(output string) bool {
+	if output == "" {
+		return true
+	}
+	failurePatterns := []string{
+		"0 hosts up",
+		"Host seems down",
+		"host is down",
+		"No route to host",
+		"Connection refused",
+		"Connection timed out",
+		"Network is unreachable",
+		"Name or service not known",
+		"couldn't connect to host",
+	}
+	for _, pattern := range failurePatterns {
+		if containsCI(output, pattern) {
+			return true
+		}
+	}
+	// Error prefix from our own error handling
+	if len(output) > 6 && output[:6] == "Error:" {
+		return true
+	}
+	return false
+}
+
+// containsCI は大文字小文字を区別せずに部分一致を判定する。
+func containsCI(s, substr string) bool {
+	sLower := make([]byte, len(s))
+	for i := range s {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 32
+		}
+		sLower[i] = c
+	}
+	subLower := make([]byte, len(substr))
+	for i := range substr {
+		c := substr[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 32
+		}
+		subLower[i] = c
+	}
+	return bytesContains(sLower, subLower)
+}
+
+func bytesContains(s, sub []byte) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	if len(sub) > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(sub); i++ {
+		match := true
+		for j := range sub {
+			if s[i+j] != sub[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // streamAndCollect は実行結果をストリームして TUI に表示する。
 func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.OutputLine, resultCh <-chan *tools.ToolResult) {
 	for line := range linesCh {
@@ -224,14 +354,12 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 			continue
 		}
 		l.emit(Event{Type: EventLog, Source: SourceTool, Message: line.Content})
-		l.target.AddLog(SourceTool, line.Content)
 	}
 
 	result := <-resultCh
 	if result.Err != nil {
-		errMsg := fmt.Sprintf("実行エラー: %v", result.Err)
+		errMsg := fmt.Sprintf("Execution error: %v", result.Err)
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: errMsg})
-		l.target.AddLog(SourceSystem, errMsg)
 		l.lastToolOutput = "Error: " + result.Err.Error()
 	} else {
 		l.target.AddEntities(result.Entities)

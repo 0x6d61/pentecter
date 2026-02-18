@@ -295,3 +295,102 @@ func TestLoadConfig_Ollama_CustomURL(t *testing.T) {
 		t.Errorf("Model: got %q, want mistral", cfg.Model)
 	}
 }
+
+// --- DetectAvailableProviders ---
+
+func TestDetectAvailableProviders_AnthropicAPIKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) == 0 {
+		t.Fatal("expected at least one provider")
+	}
+	if providers[0] != brain.ProviderAnthropic {
+		t.Errorf("first provider: got %q, want anthropic", providers[0])
+	}
+}
+
+func TestDetectAvailableProviders_OAuthToken(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-ocp01-test")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) == 0 {
+		t.Fatal("expected at least one provider")
+	}
+	if providers[0] != brain.ProviderAnthropic {
+		t.Errorf("first provider: got %q, want anthropic", providers[0])
+	}
+}
+
+func TestDetectAvailableProviders_OpenAI(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) == 0 {
+		t.Fatal("expected at least one provider")
+	}
+	if providers[0] != brain.ProviderOpenAI {
+		t.Errorf("first provider: got %q, want openai", providers[0])
+	}
+}
+
+func TestDetectAvailableProviders_Multiple(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) < 2 {
+		t.Fatalf("expected at least 2 providers, got %d", len(providers))
+	}
+	// Anthropic should be first (priority)
+	if providers[0] != brain.ProviderAnthropic {
+		t.Errorf("first provider: got %q, want anthropic", providers[0])
+	}
+	if providers[1] != brain.ProviderOpenAI {
+		t.Errorf("second provider: got %q, want openai", providers[1])
+	}
+}
+
+func TestDetectAvailableProviders_None(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) != 0 {
+		t.Errorf("expected no providers, got %v", providers)
+	}
+}
+
+func TestDetectAvailableProviders_OllamaExplicitURL(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "http://gpu-server:11434")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) == 0 {
+		t.Fatal("expected at least one provider")
+	}
+	if providers[0] != brain.ProviderOllama {
+		t.Errorf("first provider: got %q, want ollama", providers[0])
+	}
+}

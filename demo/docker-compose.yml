@@ -14,12 +14,20 @@ services:
         ipv4_address: 172.30.0.10
     depends_on:
       target:
-        condition: service_started
+        condition: service_healthy
 
   target:
     image: tleemcjr/metasploitable2:latest
     container_name: pentecter-demo-target
     hostname: metasploitable
+    init: true
+    command: ["sh", "-c", "/bin/services.sh && tail -f /dev/null"]
+    healthcheck:
+      test: ["CMD-SHELL", "netstat -tlnp | grep :80 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       pentecter-demo:
         ipv4_address: 172.30.0.20

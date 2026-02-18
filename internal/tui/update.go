@@ -1,14 +1,45 @@
 package tui
 
 import (
+	"fmt"
 	"net"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/0x6d61/pentecter/internal/agent"
+	"github.com/0x6d61/pentecter/internal/brain"
 )
+
+// ipv4Re matches an IPv4 address in text.
+var ipv4Re = regexp.MustCompile(`\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b`)
+
+// extractIPFromText extracts an IPv4 address from natural language text.
+// Returns (ip, remainingMessage, found).
+// Does not match /target commands (handled separately by parseTargetInput).
+func extractIPFromText(text string) (string, string, bool) {
+	if text == "" || strings.HasPrefix(text, "/") {
+		return "", "", false
+	}
+
+	match := ipv4Re.FindStringSubmatchIndex(text)
+	if match == nil {
+		return "", "", false
+	}
+
+	ip := text[match[2]:match[3]]
+	// Validate it's a real IP
+	if net.ParseIP(ip) == nil {
+		return "", "", false
+	}
+
+	// Build remaining message by removing the IP and collapsing whitespace
+	raw := text[:match[2]] + text[match[3]:]
+	remaining := strings.TrimSpace(strings.Join(strings.Fields(raw), " "))
+	return ip, remaining, true
+}
 
 // Update implements tea.Model and routes all incoming messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -178,10 +209,38 @@ func (m *Model) submitInput() {
 	}
 	m.input.SetValue("")
 
+	// /model command — switch LLM provider/model
+	if strings.HasPrefix(text, "/model") {
+		m.handleModelCommand(text)
+		return
+	}
+
 	// ターゲット追加: IP アドレスまたは /target <host>
 	if host, ok := parseTargetInput(text); ok && m.team != nil {
 		m.addTarget(host)
 		return
+	}
+
+	// Natural language IP extraction: "192.168.81.1をスキャンして" → add target + send message
+	if m.team != nil && len(m.targets) == 0 {
+		if ip, msg, ok := extractIPFromText(text); ok {
+			m.addTarget(ip)
+			// Send remaining message to agent if non-empty
+			if msg != "" {
+				if t := m.activeTarget(); t != nil {
+					t.AddLog(agent.SourceUser, msg)
+					if ch, ok := m.agentUserMsgMap[t.ID]; ok {
+						select {
+						case ch <- msg:
+						default:
+						}
+					}
+				}
+			}
+			m.syncListItems()
+			m.rebuildViewport()
+			return
+		}
 	}
 
 	if t := m.activeTarget(); t != nil {
@@ -230,6 +289,72 @@ func (m *Model) addTarget(host string) {
 	m.rebuildViewport()
 }
 
+// handleModelCommand processes /model commands.
+// /model          → list available providers
+// /model <p>      → switch to provider with default model
+// /model <p>/<m>  → switch to provider with specific model
+func (m *Model) handleModelCommand(text string) {
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/model"))
+
+	// /model (no args) → show available providers
+	if arg == "" {
+		detected := brain.DetectAvailableProviders()
+		if len(detected) == 0 {
+			m.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
+			return
+		}
+		var lines []string
+		for _, p := range detected {
+			lines = append(lines, "  "+string(p))
+		}
+		m.logSystem("Available providers:\n" + strings.Join(lines, "\n"))
+		m.logSystem("Usage: /model <provider> or /model <provider>/<model>")
+		return
+	}
+
+	// Parse provider/model
+	var provider brain.Provider
+	var model string
+	if parts := strings.SplitN(arg, "/", 2); len(parts) == 2 {
+		provider = brain.Provider(parts[0])
+		model = parts[1]
+	} else {
+		provider = brain.Provider(arg)
+	}
+
+	if m.BrainFactory == nil {
+		m.logSystem("Model switching not available (no brain factory)")
+		return
+	}
+
+	newBrain, err := m.BrainFactory(brain.ConfigHint{
+		Provider: provider,
+		Model:    model,
+	})
+	if err != nil {
+		m.logSystem(fmt.Sprintf("Failed to switch model: %v", err))
+		return
+	}
+
+	if m.team != nil {
+		m.team.SetBrain(newBrain)
+	}
+	msg := fmt.Sprintf("Switched to %s", provider)
+	if model != "" {
+		msg += "/" + model
+	}
+	m.logSystem(msg)
+}
+
+// logSystem adds a system log to the active target or viewport.
+func (m *Model) logSystem(msg string) {
+	if t := m.activeTarget(); t != nil {
+		t.AddLog(agent.SourceSystem, msg)
+	}
+	m.syncListItems()
+	m.rebuildViewport()
+}
+
 // targetByID は ID でターゲットを検索する。
 func (m *Model) targetByID(id int) *agent.Target {
 	for _, t := range m.targets {
@@ -269,6 +394,9 @@ func (m *Model) handleAgentEvent(e agent.Event) {
 		if e.NewHost != "" && m.team != nil {
 			m.addTarget(e.NewHost)
 		}
+	case agent.EventStalled:
+		t.AddLog(agent.SourceSystem, "⚠ "+e.Message)
+		t.AddLog(agent.SourceSystem, "Type a message to give the agent new direction.")
 	}
 
 	m.syncListItems()

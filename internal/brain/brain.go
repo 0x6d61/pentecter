@@ -105,6 +105,32 @@ func ensureV1Path(baseURL string) string {
 	return baseURL + "/v1"
 }
 
+// DetectAvailableProviders は環境変数を調べ、利用可能なプロバイダーを優先順に返す。
+// 優先順位: Anthropic > OpenAI > Ollama
+// Ollama は OLLAMA_BASE_URL が明示的に設定されている場合のみ検出する（localhost への疎通チェックは行わない）。
+func DetectAvailableProviders() []Provider {
+	var providers []Provider
+
+	// Anthropic: API key or OAuth token
+	if os.Getenv("ANTHROPIC_API_KEY") != "" ||
+		os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" ||
+		os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" {
+		providers = append(providers, ProviderAnthropic)
+	}
+
+	// OpenAI
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		providers = append(providers, ProviderOpenAI)
+	}
+
+	// Ollama: only if OLLAMA_BASE_URL is explicitly set
+	if os.Getenv("OLLAMA_BASE_URL") != "" {
+		providers = append(providers, ProviderOllama)
+	}
+
+	return providers
+}
+
 // ConfigHint は LoadConfig へのヒントを保持する。認証情報は環境変数から自動解決する。
 type ConfigHint struct {
 	Provider Provider

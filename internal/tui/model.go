@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/0x6d61/pentecter/internal/agent"
+	"github.com/0x6d61/pentecter/internal/brain"
 )
 
 // FocusState tracks which pane has keyboard focus.
@@ -47,6 +48,9 @@ type Model struct {
 	agentEvents    <-chan agent.Event        // 全 Agent → TUI（TargetID で識別）
 	agentApproveMap map[int]chan<- bool      // targetID → approve チャネル
 	agentUserMsgMap map[int]chan<- string    // targetID → userMsg チャネル
+
+	// BrainFactory creates a new Brain from a ConfigHint (for /model command).
+	BrainFactory func(brain.ConfigHint) (brain.Brain, error)
 }
 
 // AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。
@@ -121,13 +125,14 @@ func NewWithTargets(targets []*agent.Target) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Chat with AI or enter command..."
 	ti.CharLimit = 500
+	ti.Focus() // Start with input focused
 
 	return Model{
 		targets:         targets,
 		selected:        0,
 		list:            l,
 		input:           ti,
-		focus:           FocusList,
+		focus:           FocusInput,
 		agentApproveMap: make(map[int]chan<- bool),
 		agentUserMsgMap: make(map[int]chan<- string),
 	}
