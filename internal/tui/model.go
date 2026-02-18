@@ -42,10 +42,10 @@ type Model struct {
 	viewport viewport.Model
 	input    textinput.Model
 
-	// Agent ループとの通信チャネル（nil = デモモード）
-	agentEvents <-chan agent.Event   // Agent → TUI
-	agentApprove chan<- bool         // TUI → Agent（Proposal 承認/拒否）
-	agentUserMsg chan<- string       // TUI → Agent（チャット入力）
+	// Agent チームとの通信チャネル（nil = デモモード）
+	agentEvents    <-chan agent.Event        // 全 Agent → TUI（TargetID で識別）
+	agentApproveMap map[int]chan<- bool      // targetID → approve チャネル
+	agentUserMsgMap map[int]chan<- string    // targetID → userMsg チャネル
 }
 
 // AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。
@@ -90,10 +90,14 @@ func (i targetListItem) Description() string {
 
 func (i targetListItem) FilterValue() string { return i.t.IP }
 
-// New creates the initial Pentecter Model with demo targets for Phase 1.
+// New はデモデータで Model を初期化する（開発・デモ用）。
+// 本番では NewWithTargets を使うこと。
 func New() Model {
-	targets := buildDemoTargets()
+	return NewWithTargets(buildDemoTargets())
+}
 
+// NewWithTargets は指定されたターゲットリストで Model を初期化する。
+func NewWithTargets(targets []*agent.Target) Model {
 	items := make([]list.Item, len(targets))
 	for i, t := range targets {
 		items[i] = targetListItem{t: t}
@@ -118,11 +122,13 @@ func New() Model {
 	ti.CharLimit = 500
 
 	return Model{
-		targets:  targets,
-		selected: 0,
-		list:     l,
-		input:    ti,
-		focus:    FocusList,
+		targets:         targets,
+		selected:        0,
+		list:            l,
+		input:           ti,
+		focus:           FocusList,
+		agentApproveMap: make(map[int]chan<- bool),
+		agentUserMsgMap: make(map[int]chan<- string),
 	}
 }
 
@@ -134,16 +140,18 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-// ConnectAgent はエージェントループのチャネルを TUI に接続する。
-// この関数を呼んだ後に tea.NewProgram(m).Run() すること。
-func (m *Model) ConnectAgent(
+// ConnectTeam は Agent Team のチャネルを TUI に接続する。
+// events: 全エージェントのイベント（TargetID で識別）
+// approveMap: targetID → approve チャネル
+// userMsgMap: targetID → userMsg チャネル
+func (m *Model) ConnectTeam(
 	events <-chan agent.Event,
-	approve chan<- bool,
-	userMsg chan<- string,
+	approveMap map[int]chan<- bool,
+	userMsgMap map[int]chan<- string,
 ) {
 	m.agentEvents = events
-	m.agentApprove = approve
-	m.agentUserMsg = userMsg
+	m.agentApproveMap = approveMap
+	m.agentUserMsgMap = userMsgMap
 }
 
 // activeTarget returns the currently selected target, or nil if none.

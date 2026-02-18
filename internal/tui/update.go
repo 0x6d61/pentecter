@@ -52,10 +52,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t.ClearProposal()
 				m.syncListItems()
 				m.rebuildViewport()
-				// Agent ループに承認を通知
-				if m.agentApprove != nil {
+				// 対象ターゲットの Agent ループに承認を通知
+				if ch, ok := m.agentApproveMap[t.ID]; ok {
 					select {
-					case m.agentApprove <- true:
+					case ch <- true:
 					default:
 					}
 				}
@@ -66,10 +66,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t.ClearProposal()
 				m.syncListItems()
 				m.rebuildViewport()
-				// Agent ループに拒否を通知
-				if m.agentApprove != nil {
+				// 対象ターゲットの Agent ループに拒否を通知
+				if ch, ok := m.agentApproveMap[t.ID]; ok {
 					select {
-					case m.agentApprove <- false:
+					case ch <- false:
 					default:
 					}
 				}
@@ -183,43 +183,55 @@ func (m *Model) submitInput() {
 		m.rebuildViewport()
 	}
 
-	// Agent が接続されていればユーザーメッセージを送る（非ブロッキング）
-	if m.agentUserMsg != nil {
-		select {
-		case m.agentUserMsg <- text:
-		default:
+	// 現在選択中のターゲットの Agent にメッセージを送る（非ブロッキング）
+	if t := m.activeTarget(); t != nil {
+		if ch, ok := m.agentUserMsgMap[t.ID]; ok {
+			select {
+			case ch <- text:
+			default:
+			}
 		}
 	}
 }
 
+// targetByID は ID でターゲットを検索する。
+func (m *Model) targetByID(id int) *agent.Target {
+	for _, t := range m.targets {
+		if t.ID == id {
+			return t
+		}
+	}
+	return nil
+}
+
 // handleAgentEvent は Agent ループから届くイベントを処理する。
+// TargetID を使って正しいターゲットのログを更新する。
 func (m *Model) handleAgentEvent(e agent.Event) {
-	t := m.activeTarget()
+	t := m.targetByID(e.TargetID)
+	if t == nil {
+		t = m.activeTarget() // フォールバック
+	}
 	if t == nil {
 		return
 	}
 
+	needsViewportUpdate := t.ID == m.activeTarget().ID // 表示中のターゲットか
+
 	switch e.Type {
 	case agent.EventLog:
 		t.AddLog(e.Source, e.Message)
-		m.syncListItems()
-		m.rebuildViewport()
-
 	case agent.EventProposal:
 		if e.Proposal != nil {
 			t.SetProposal(e.Proposal)
 		}
-		m.syncListItems()
-		m.rebuildViewport()
-
 	case agent.EventComplete:
 		t.AddLog(agent.SourceSystem, "✅ "+e.Message)
-		m.syncListItems()
-		m.rebuildViewport()
-
 	case agent.EventError:
 		t.AddLog(agent.SourceSystem, "❌ "+e.Message)
-		m.syncListItems()
+	}
+
+	m.syncListItems()
+	if needsViewportUpdate {
 		m.rebuildViewport()
 	}
 }
