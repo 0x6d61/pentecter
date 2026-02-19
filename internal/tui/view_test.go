@@ -582,6 +582,41 @@ func TestTargetListItem_Title_UnknownStatus(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// renderConfirmQuit overlay
+// ---------------------------------------------------------------------------
+
+func TestView_ConfirmQuit_ShowsOverlay(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputConfirmQuit
+
+	output := m.View()
+
+	if !strings.Contains(output, "Quit Pentecter?") {
+		t.Error("expected 'Quit Pentecter?' in confirm dialog overlay")
+	}
+	if !strings.Contains(output, "[Y]") {
+		t.Error("expected '[Y]' hint in confirm dialog")
+	}
+	if !strings.Contains(output, "[N]") {
+		t.Error("expected '[N]' hint in confirm dialog")
+	}
+}
+
+func TestRenderConfirmQuit_Content(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(80, 30)
+	m.ready = true
+
+	output := m.renderConfirmQuit()
+
+	if !strings.Contains(output, "Quit Pentecter?") {
+		t.Errorf("expected title in confirm dialog, got %q", output)
+	}
+}
+
 func TestTargetListItem_Description_AllStatuses(t *testing.T) {
 	statuses := []agent.Status{
 		agent.StatusIdle,

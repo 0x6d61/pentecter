@@ -45,7 +45,15 @@ func (m Model) View() string {
 	// ── Input bar (3 lines) ──────────────────────────────────────────────────
 	inputBar := m.renderInputBar()
 
-	return lipgloss.JoinVertical(lipgloss.Left, statusBar, panesRow, inputBar)
+	base := lipgloss.JoinVertical(lipgloss.Left, statusBar, panesRow, inputBar)
+
+	// Overlay quit confirmation dialog in the center of the screen.
+	if m.inputMode == InputConfirmQuit {
+		overlay := m.renderConfirmQuit()
+		base = m.overlayCenter(base, overlay)
+	}
+
+	return base
 }
 
 // renderStatusBar renders the single-line header with app name and focus hints.
@@ -145,6 +153,104 @@ func (m Model) renderSelectBar() string {
 
 	w := m.width - 2
 	return inputBarActiveStyle.Width(w).Render(sb.String())
+}
+
+// renderConfirmQuit renders the centered quit confirmation dialog.
+func (m Model) renderConfirmQuit() string {
+	title := lipgloss.NewStyle().
+		Foreground(colorWarning).
+		Bold(true).
+		Render("Quit Pentecter?")
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render("[Y] Yes  [N] No  [Esc] Cancel")
+
+	content := fmt.Sprintf("\n  %s\n\n  %s\n", title, hint)
+
+	return confirmQuitBoxStyle.Render(content)
+}
+
+// overlayCenter places the overlay string in the center of the base string.
+func (m Model) overlayCenter(base, overlay string) string {
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+
+	// Calculate center position
+	overlayH := len(overlayLines)
+	overlayW := 0
+	for _, line := range overlayLines {
+		if w := lipgloss.Width(line); w > overlayW {
+			overlayW = w
+		}
+	}
+
+	startRow := (m.height - overlayH) / 2
+	startCol := (m.width - overlayW) / 2
+	if startRow < 0 {
+		startRow = 0
+	}
+	if startCol < 0 {
+		startCol = 0
+	}
+
+	// Pad base to have enough lines
+	for len(baseLines) < startRow+overlayH {
+		baseLines = append(baseLines, strings.Repeat(" ", m.width))
+	}
+
+	// Overlay each line
+	for i, oLine := range overlayLines {
+		row := startRow + i
+		if row >= len(baseLines) {
+			break
+		}
+
+		baseLine := baseLines[row]
+		// Pad base line to at least startCol width
+		for lipgloss.Width(baseLine) < startCol {
+			baseLine += " "
+		}
+
+		// Build new line: left part + overlay + right part
+		// Use rune-safe slicing based on visual width
+		left := truncateVisual(baseLine, startCol)
+		rightStart := startCol + lipgloss.Width(oLine)
+		right := ""
+		if lipgloss.Width(baseLine) > rightStart {
+			right = skipVisual(baseLine, rightStart)
+		}
+
+		baseLines[row] = left + oLine + right
+	}
+
+	return strings.Join(baseLines, "\n")
+}
+
+// truncateVisual returns the first n visual columns of a string.
+func truncateVisual(s string, n int) string {
+	w := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > n {
+			return s[:i] + strings.Repeat(" ", n-w)
+		}
+		w += rw
+	}
+	// String is shorter than n — pad with spaces
+	return s + strings.Repeat(" ", n-w)
+}
+
+// skipVisual returns everything after the first n visual columns.
+func skipVisual(s string, n int) string {
+	w := 0
+	for i, r := range s {
+		if w >= n {
+			return s[i:]
+		}
+		w += runewidth.RuneWidth(r)
+	}
+	return ""
 }
 
 // softWrap wraps plain text at word boundaries to fit within maxWidth (display columns).
