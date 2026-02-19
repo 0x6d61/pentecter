@@ -37,6 +37,15 @@ const (
 	AuthNone AuthType = "none"
 )
 
+// MCPToolInfo は Brain のシステムプロンプトに注入する MCP ツール情報。
+// internal/mcp パッケージに依存しないよう、Brain パッケージ独自の型として定義。
+type MCPToolInfo struct {
+	Server      string
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
 // Config は Brain の設定を保持する。
 type Config struct {
 	Provider  Provider
@@ -45,6 +54,8 @@ type Config struct {
 	Token     string
 	BaseURL   string   // テスト時にモックサーバーを指定するために使う（空なら公式エンドポイント）
 	ToolNames []string // Registry から読み込んだ登録済みツール名（システムプロンプトに注入）
+	// MCPTools は MCP サーバーから取得したツールスキーマ（システムプロンプトに注入）。
+	MCPTools []MCPToolInfo
 }
 
 // Input は Brain に渡す思考コンテキスト。

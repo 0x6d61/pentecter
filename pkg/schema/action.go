@@ -25,6 +25,10 @@ const (
 	// ActionAddTarget は横展開時に新ターゲットを追加する。
 	// Brain がネットワーク内の別ホストを発見した際に使用する。
 	ActionAddTarget ActionType = "add_target"
+
+	// ActionCallMCP は MCP サーバーのツールを呼び出す。
+	// Brain が MCP ツール（Playwright ブラウザ操作等）を使用する際に使用する。
+	ActionCallMCP ActionType = "call_mcp"
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).
@@ -42,6 +46,13 @@ type Action struct {
 	Command string     `json:"command,omitempty"` // ActionRun / ActionPropose
 	Memory  *Memory    `json:"memory,omitempty"`  // ActionMemory
 	Target  string     `json:"target,omitempty"`  // ActionAddTarget: 追加するホスト
+
+	// MCPServer は呼び出す MCP サーバーの名前（ActionCallMCP 時に使用）。
+	MCPServer string         `json:"mcp_server,omitempty"`
+	// MCPTool は呼び出す MCP ツールの名前（ActionCallMCP 時に使用）。
+	MCPTool   string         `json:"mcp_tool,omitempty"`
+	// MCPArgs は MCP ツールに渡す引数（ActionCallMCP 時に使用）。
+	MCPArgs   map[string]any `json:"mcp_args,omitempty"`
 }
 
 // Memory は Brain がナレッジグラフに記録する発見物。

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
 	"github.com/0x6d61/pentecter/internal/tools"
@@ -15,8 +16,9 @@ type TeamConfig struct {
 	Events      chan Event
 	Brain       brain.Brain
 	Runner      *tools.CommandRunner
-	SkillsReg   *skills.Registry  // nil = スキル無効
-	MemoryStore *memory.Store     // nil = メモリ無効
+	SkillsReg   *skills.Registry   // nil = スキル無効
+	MemoryStore *memory.Store      // nil = メモリ無効
+	MCPManager  *mcp.MCPManager    // nil = MCP 無効
 }
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
@@ -29,6 +31,7 @@ type Team struct {
 	runner      *tools.CommandRunner
 	skillsReg   *skills.Registry
 	memoryStore *memory.Store
+	mcpMgr      *mcp.MCPManager
 	nextID      int
 	ctx         context.Context // Start() で保存
 	mu          sync.Mutex
@@ -42,6 +45,7 @@ func NewTeam(cfg TeamConfig) *Team {
 		runner:      cfg.Runner,
 		skillsReg:   cfg.SkillsReg,
 		memoryStore: cfg.MemoryStore,
+		mcpMgr:      cfg.MCPManager,
 	}
 }
 
@@ -59,7 +63,8 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 
 	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
 		WithSkills(t.skillsReg).
-		WithMemory(t.memoryStore)
+		WithMemory(t.memoryStore).
+		WithMCP(t.mcpMgr)
 
 	t.loops = append(t.loops, loop)
 

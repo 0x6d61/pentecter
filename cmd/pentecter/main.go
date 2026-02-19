@@ -14,6 +14,7 @@ import (
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
 	"github.com/0x6d61/pentecter/internal/tools"
@@ -86,6 +87,12 @@ Chat commands:
 		toolNames = append(toolNames, def.Name)
 	}
 
+	// --- MCP ---
+	mcpMgr, mcpErr := mcp.NewManager("config/mcp.yaml")
+	if mcpErr != nil {
+		fmt.Fprintf(os.Stderr, "MCP config warning: %v\n", mcpErr)
+	}
+
 	brainCfg, err := brain.LoadConfig(brain.ConfigHint{
 		Provider: selectedProvider,
 		Model:    *model,
@@ -95,6 +102,22 @@ Chat commands:
 		os.Exit(1)
 	}
 	brainCfg.ToolNames = toolNames
+
+	// MCP ツールスキーマを Brain に注入
+	if mcpMgr != nil {
+		if err := mcpMgr.StartAll(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP start warning: %v\n", err)
+		}
+		defer func() { _ = mcpMgr.Close() }()
+		for _, t := range mcpMgr.ListAllTools() {
+			brainCfg.MCPTools = append(brainCfg.MCPTools, brain.MCPToolInfo{
+				Server:      t.Server,
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			})
+		}
+	}
 
 	br, err := brain.New(brainCfg)
 	if err != nil {
@@ -130,6 +153,7 @@ Chat commands:
 		Runner:      runner,
 		SkillsReg:   skillsReg,
 		MemoryStore: memoryStore,
+		MCPManager:  mcpMgr,
 	})
 
 	// CLI ターゲットを事前追加

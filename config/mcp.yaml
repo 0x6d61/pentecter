@@ -1,0 +1,18 @@
+# MCP Server Configuration
+# Each server is started as a subprocess using stdio transport.
+# Add servers here to extend pentecter's capabilities.
+#
+# Fields:
+#   name:              Server identifier (referenced by Brain)
+#   command:           Executable to start the server
+#   args:              Command line arguments
+#   env:               Environment variables (${VAR} expanded from host env)
+#   proposal_required: Whether Brain needs user approval to call tools (default: false)
+
+servers: []
+# Example:
+#  - name: playwright
+#    command: npx
+#    args: ["@playwright/mcp@latest"]
+#    env: {}
+#    proposal_required: false
