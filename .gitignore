@@ -5,6 +5,7 @@
 *.so
 *.dylib
 pentecter
+pentecter-*
 
 # テストキャッシュ・カバレッジ
 *.test
@@ -26,3 +27,10 @@ coverage.out
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime data — memory store contents (directory kept, contents ignored)
+memory/*
+!memory/.gitkeep
+
+# GitHub Wiki clone (managed as separate repo: pentecter.wiki.git)
+wiki/
