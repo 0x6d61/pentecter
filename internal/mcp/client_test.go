@@ -436,6 +436,67 @@ func TestClient_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestClient_SkipNonJSONBanner(t *testing.T) {
+	// MCP サーバーが stdout にバナー行を出力しても正常に動作することを確認
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	var tools []ToolSchema
+	go func() {
+		var err error
+		tools, err = client.ListTools(ctx)
+		errCh <- err
+	}()
+
+	// リクエストを読み取る
+	req := mock.readRequest(t)
+	if req.Method != "tools/list" {
+		t.Fatalf("expected method 'tools/list', got '%s'", req.Method)
+	}
+
+	// バナー行を先に書き込む（MCP サーバーのバナー出力をシミュレート）
+	bannerLines := []string{
+		"HackTricks MCP Server v1.3.0 running on stdio\n",
+		"Loading knowledge base...\n",
+		"\n", // 空行
+	}
+	for _, line := range bannerLines {
+		if _, err := mock.clientStdoutWriter.Write([]byte(line)); err != nil {
+			t.Fatalf("failed to write banner: %v", err)
+		}
+	}
+
+	// その後に正規の JSON-RPC レスポンスを返す
+	mock.writeResponse(t, req.ID, map[string]any{
+		"tools": []map[string]any{
+			{
+				"name":        "search_hacktricks",
+				"description": "Search HackTricks knowledge base",
+				"inputSchema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		},
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	if tools[0].Name != "search_hacktricks" {
+		t.Errorf("expected tool name 'search_hacktricks', got '%s'", tools[0].Name)
+	}
+}
+
 func TestClient_IncrementingIDs(t *testing.T) {
 	// 連続したリクエストで ID がインクリメントされることを確認
 	mock, client := newMockMCPServer(t)

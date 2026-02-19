@@ -58,9 +58,18 @@ func NewTeam(cfg TeamConfig) *Team {
 
 // AddTarget は新ターゲットを追加し、Start() 済みなら即座に Loop を起動する。
 // TUI またはイベントハンドラーから呼び出す。
+// 同じホストが既に存在する場合は既存の Target を返し、チャネルは nil を返す。
+// 呼び出し側は nil チャネルで重複を検知できる。
 func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// 重複チェック: 同じホストが既に存在する場合は既存の Target を返す
+	for _, loop := range t.loops {
+		if loop.target.Host == host {
+			return loop.target, nil, nil
+		}
+	}
 
 	t.nextID++
 	target := NewTarget(t.nextID, host)

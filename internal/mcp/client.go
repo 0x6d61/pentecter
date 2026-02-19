@@ -225,20 +225,28 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params any) 
 	}
 	ch := make(chan scanResult, 1)
 	go func() {
-		if !c.scanner.Scan() {
-			err := c.scanner.Err()
-			if err == nil {
-				err = fmt.Errorf("unexpected EOF")
+		for {
+			if !c.scanner.Scan() {
+				err := c.scanner.Err()
+				if err == nil {
+					err = fmt.Errorf("unexpected EOF")
+				}
+				ch <- scanResult{err: err}
+				return
 			}
-			ch <- scanResult{err: err}
+			line := c.scanner.Bytes()
+			// 非 JSON 行（MCP サーバーのバナー出力等）をスキップ
+			if len(line) == 0 || line[0] != '{' {
+				continue
+			}
+			var resp jsonRPCResponse
+			if err := json.Unmarshal(line, &resp); err != nil {
+				ch <- scanResult{err: fmt.Errorf("failed to parse response: %w", err)}
+				return
+			}
+			ch <- scanResult{resp: resp}
 			return
 		}
-		var resp jsonRPCResponse
-		if err := json.Unmarshal(c.scanner.Bytes(), &resp); err != nil {
-			ch <- scanResult{err: fmt.Errorf("failed to parse response: %w", err)}
-			return
-		}
-		ch <- scanResult{resp: resp}
 	}()
 
 	select {

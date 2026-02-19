@@ -339,8 +339,15 @@ func parseTargetInput(text string) (string, bool) {
 }
 
 // addTarget は Team にターゲットを追加し TUI を更新する。
+// Team が nil チャネルを返した場合は既存ターゲット（重複）なので追加しない。
 func (m *Model) addTarget(host string) {
 	target, approveCh, userMsgCh := m.team.AddTarget(host)
+
+	// Team が nil チャネルを返した場合は既存ターゲット（重複）
+	if approveCh == nil {
+		return
+	}
+
 	m.targets = append(m.targets, target)
 	m.agentApproveMap[target.ID] = approveCh
 	m.agentUserMsgMap[target.ID] = userMsgCh

@@ -9,7 +9,17 @@
 #   env:               Environment variables (${VAR} expanded from host env)
 #   proposal_required: Whether Brain needs user approval to call tools (default: false)
 
-servers: []
+servers:
+  # HackTricks — 1000+ pentesting techniques, exploits, payloads
+  # Setup:
+  #   git clone https://github.com/Xplo8E/hacktricks-mcp-server.git ~/hacktricks-mcp-server
+  #   cd ~/hacktricks-mcp-server && npm install && npm run build
+  - name: hacktricks
+    command: node
+    args: ["${HOME}/hacktricks-mcp-server/dist/index.js"]
+    env: {}
+    proposal_required: false
+
 # Example:
 #  - name: playwright
 #    command: npx

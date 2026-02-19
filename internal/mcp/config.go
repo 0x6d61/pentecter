@@ -29,21 +29,29 @@ func LoadConfig(path string) (*MCPConfig, error) {
 		return nil, fmt.Errorf("mcp: failed to parse config %s: %w", path, err)
 	}
 
-	// 環境変数を展開
+	// 環境変数を展開（env, args, command の ${VAR} を展開）
 	for i := range cfg.Servers {
 		expandEnvVars(cfg.Servers[i].Env)
+		cfg.Servers[i].Command = expandEnvString(cfg.Servers[i].Command)
+		for j := range cfg.Servers[i].Args {
+			cfg.Servers[i].Args[j] = expandEnvString(cfg.Servers[i].Args[j])
+		}
 	}
 
 	return &cfg, nil
 }
 
+// expandEnvString は文字列内の ${VAR} をホスト環境変数で展開する
+func expandEnvString(s string) string {
+	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		varName := match[2 : len(match)-1]
+		return os.Getenv(varName)
+	})
+}
+
 // expandEnvVars は map 内の値に含まれる ${VAR} をホスト環境変数で展開する
 func expandEnvVars(env map[string]string) {
 	for k, v := range env {
-		env[k] = envVarPattern.ReplaceAllStringFunc(v, func(match string) string {
-			// ${VAR_NAME} から VAR_NAME を抽出
-			varName := match[2 : len(match)-1]
-			return os.Getenv(varName)
-		})
+		env[k] = expandEnvString(v)
 	}
 }

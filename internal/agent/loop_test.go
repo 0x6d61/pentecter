@@ -1389,3 +1389,122 @@ func TestLoop_Emit_SubTaskStart(t *testing.T) {
 		t.Errorf("EventSubTaskStart Message: got %q, want %q", e.Message, "test subtask start")
 	}
 }
+
+// --- AddTarget 重複チェックテスト ---
+
+func TestTeam_AddTarget_Duplicate_ReturnsSameTarget(t *testing.T) {
+	// 同じホストを2回追加した場合、2回目は既存の Target を返し、
+	// Loop が新たに作成されないことを検証する。
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{},
+		Runner: runner,
+	})
+
+	// 1回目: 新規追加
+	target1, approveCh1, userMsgCh1 := team.AddTarget("10.0.0.1")
+	if target1 == nil {
+		t.Fatal("first AddTarget should return non-nil target")
+	}
+	if approveCh1 == nil || userMsgCh1 == nil {
+		t.Fatal("first AddTarget should return non-nil channels")
+	}
+
+	// 2回目: 同じホストを追加（重複）
+	target2, approveCh2, userMsgCh2 := team.AddTarget("10.0.0.1")
+
+	// 同じ Target が返ること
+	if target2 == nil {
+		t.Fatal("duplicate AddTarget should return non-nil target")
+	}
+	if target2.ID != target1.ID {
+		t.Errorf("duplicate AddTarget: target ID mismatch: got %d, want %d", target2.ID, target1.ID)
+	}
+	if target2.Host != target1.Host {
+		t.Errorf("duplicate AddTarget: host mismatch: got %q, want %q", target2.Host, target1.Host)
+	}
+
+	// 重複時はチャネルが nil であること（既存の Loop が使われるため）
+	if approveCh2 != nil {
+		t.Error("duplicate AddTarget: approveCh should be nil")
+	}
+	if userMsgCh2 != nil {
+		t.Error("duplicate AddTarget: userMsgCh should be nil")
+	}
+
+	// Loop は1つだけであること
+	loops := team.Loops()
+	if len(loops) != 1 {
+		t.Errorf("Loops() count: got %d, want 1", len(loops))
+	}
+}
+
+func TestTeam_AddTarget_DifferentHosts_CreatesMultiple(t *testing.T) {
+	// 異なるホストを追加した場合はそれぞれ独立した Target/Loop が作成されることを検証。
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{},
+		Runner: runner,
+	})
+
+	target1, ch1a, ch1u := team.AddTarget("10.0.0.1")
+	target2, ch2a, ch2u := team.AddTarget("10.0.0.2")
+	target3, ch3a, ch3u := team.AddTarget("10.0.0.3")
+
+	// それぞれ異なる Target であること
+	if target1.ID == target2.ID || target2.ID == target3.ID {
+		t.Errorf("different hosts should have different IDs: %d, %d, %d", target1.ID, target2.ID, target3.ID)
+	}
+
+	// 全てのチャネルが非 nil であること（新規作成なので）
+	if ch1a == nil || ch1u == nil || ch2a == nil || ch2u == nil || ch3a == nil || ch3u == nil {
+		t.Error("all channels for different hosts should be non-nil")
+	}
+
+	// Loop は3つであること
+	loops := team.Loops()
+	if len(loops) != 3 {
+		t.Errorf("Loops() count: got %d, want 3", len(loops))
+	}
+}
+
+func TestTeam_AddTarget_Duplicate_AfterStart(t *testing.T) {
+	// Start() 済みの状態でも重複チェックが機能することを検証。
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{actions: []*schema.Action{{Action: schema.ActionThink, Thought: "test"}}},
+		Runner: runner,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	team.Start(ctx)
+
+	// Start 後に同じホストを2回追加
+	target1, _, _ := team.AddTarget("192.168.1.1")
+	target2, approveCh2, userMsgCh2 := team.AddTarget("192.168.1.1")
+
+	// 同じ Target が返ること
+	if target2.ID != target1.ID {
+		t.Errorf("duplicate AddTarget after Start: target ID mismatch: got %d, want %d", target2.ID, target1.ID)
+	}
+
+	// 重複時はチャネルが nil
+	if approveCh2 != nil || userMsgCh2 != nil {
+		t.Error("duplicate AddTarget after Start: channels should be nil")
+	}
+
+	// Loop は1つだけ
+	if len(team.Loops()) != 1 {
+		t.Errorf("Loops() count after duplicate: got %d, want 1", len(team.Loops()))
+	}
+}

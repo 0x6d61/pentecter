@@ -1498,3 +1498,98 @@ func TestHandleAgentEvent_CmdDone_ChecksSpinnerState(t *testing.T) {
 		t.Error("expected spinning=true because thinking block is still active after CmdDone")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// addTarget — 重複ターゲットガード
+// ---------------------------------------------------------------------------
+
+func TestAddTarget_Duplicate(t *testing.T) {
+	// Team を作成して TUI に接続
+	cfg := agent.TeamConfig{
+		Events: make(chan agent.Event, 10),
+		Brain:  nil,
+		Runner: nil,
+	}
+	team := agent.NewTeam(cfg)
+
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.team = team
+
+	// 1 回目: 新規ターゲット追加 — 成功するはず
+	m.addTarget("10.0.0.1")
+	if len(m.targets) != 1 {
+		t.Fatalf("expected 1 target after first addTarget, got %d", len(m.targets))
+	}
+	if m.targets[0].Host != "10.0.0.1" {
+		t.Errorf("expected host '10.0.0.1', got %q", m.targets[0].Host)
+	}
+
+	// 2 回目: 同じホストで addTarget — 重複なので追加されないはず
+	m.addTarget("10.0.0.1")
+	if len(m.targets) != 1 {
+		t.Errorf("expected 1 target after duplicate addTarget, got %d", len(m.targets))
+	}
+}
+
+func TestAddTarget_DifferentHosts(t *testing.T) {
+	// 異なるホストの場合は両方追加されることを確認
+	cfg := agent.TeamConfig{
+		Events: make(chan agent.Event, 10),
+		Brain:  nil,
+		Runner: nil,
+	}
+	team := agent.NewTeam(cfg)
+
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.team = team
+
+	m.addTarget("10.0.0.1")
+	m.addTarget("10.0.0.2")
+
+	if len(m.targets) != 2 {
+		t.Fatalf("expected 2 targets for different hosts, got %d", len(m.targets))
+	}
+	if m.targets[0].Host != "10.0.0.1" {
+		t.Errorf("expected first host '10.0.0.1', got %q", m.targets[0].Host)
+	}
+	if m.targets[1].Host != "10.0.0.2" {
+		t.Errorf("expected second host '10.0.0.2', got %q", m.targets[1].Host)
+	}
+}
+
+func TestHandleAgentEvent_EventAddTarget_Duplicate(t *testing.T) {
+	// EventAddTarget 経由で重複ターゲットが追加されないことを確認
+	cfg := agent.TeamConfig{
+		Events: make(chan agent.Event, 10),
+		Brain:  nil,
+		Runner: nil,
+	}
+	team := agent.NewTeam(cfg)
+
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.team = team
+
+	// 最初のターゲットを追加
+	m.addTarget("10.0.0.1")
+	if len(m.targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(m.targets))
+	}
+
+	// AI が横展開で同じホストを追加しようとする
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: m.targets[0].ID,
+		Type:     agent.EventAddTarget,
+		NewHost:  "10.0.0.1",
+	})
+
+	// 重複なので追加されないはず
+	if len(m.targets) != 1 {
+		t.Errorf("expected 1 target after duplicate EventAddTarget, got %d", len(m.targets))
+	}
+}
