@@ -146,6 +146,48 @@ func (m Model) renderSelectBar() string {
 	return inputBarActiveStyle.Width(w).Render(sb.String())
 }
 
+// softWrap wraps plain text at word boundaries to fit within maxWidth.
+// If a single word exceeds maxWidth, it is force-broken at maxWidth.
+func softWrap(text string, maxWidth int) string {
+	if maxWidth <= 0 || len(text) <= maxWidth {
+		return text
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return text
+	}
+
+	var lines []string
+	currentLine := ""
+
+	for _, word := range words {
+		if currentLine == "" {
+			// Force-break long words that exceed maxWidth
+			for len(word) > maxWidth {
+				lines = append(lines, word[:maxWidth])
+				word = word[maxWidth:]
+			}
+			currentLine = word
+		} else if len(currentLine)+1+len(word) <= maxWidth {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			// Force-break long words
+			for len(word) > maxWidth {
+				lines = append(lines, word[:maxWidth])
+				word = word[maxWidth:]
+			}
+			currentLine = word
+		}
+	}
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 // max returns the larger of two integers.
 func max(a, b int) int {
 	if a > b {

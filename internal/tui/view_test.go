@@ -280,6 +280,97 @@ func TestRebuildViewport_CommandResult_Failure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// softWrap
+// ---------------------------------------------------------------------------
+
+func TestSoftWrap_ShortText(t *testing.T) {
+	result := softWrap("hello world", 40)
+	if result != "hello world" {
+		t.Errorf("short text should not wrap, got %q", result)
+	}
+}
+
+func TestSoftWrap_LongText(t *testing.T) {
+	result := softWrap("aaa bbb ccc ddd eee", 11)
+	lines := strings.Split(result, "\n")
+	if len(lines) < 2 {
+		t.Errorf("expected wrapping, got single line: %q", result)
+	}
+	for _, line := range lines {
+		if len(line) > 11 {
+			t.Errorf("line exceeds maxWidth: %q (len=%d)", line, len(line))
+		}
+	}
+}
+
+func TestSoftWrap_ZeroWidth(t *testing.T) {
+	result := softWrap("hello", 0)
+	if result != "hello" {
+		t.Errorf("zero width should return original, got %q", result)
+	}
+}
+
+func TestSoftWrap_SingleLongWord(t *testing.T) {
+	result := softWrap("abcdefghijklmnop", 5)
+	// Single long word with no spaces — force-break at width
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		if len(line) > 5 {
+			t.Errorf("line exceeds maxWidth after force-break: %q (len=%d)", line, len(line))
+		}
+	}
+}
+
+func TestSoftWrap_EmptyString(t *testing.T) {
+	result := softWrap("", 40)
+	if result != "" {
+		t.Errorf("empty string should return empty, got %q", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rebuildViewport — Long line wrapping
+// ---------------------------------------------------------------------------
+
+func TestRebuildViewport_LongLineWraps(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	// Create a message that's longer than a narrow viewport
+	longMsg := strings.Repeat("word ", 30) // ~150 chars
+	t1.AddLog(agent.SourceTool, longMsg)
+
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(60, 40) // narrow viewport
+	m.ready = true
+	m.rebuildViewport()
+
+	content := m.viewport.View()
+	lines := strings.Split(content, "\n")
+
+	// The long message should be split across multiple lines
+	// (the original was ~150 chars, viewport is ~24 chars for content after prefix)
+	foundWordLine := false
+	for _, line := range lines {
+		if strings.Contains(line, "word") {
+			foundWordLine = true
+		}
+	}
+	if !foundWordLine {
+		t.Error("expected 'word' to appear in wrapped viewport content")
+	}
+
+	// Count lines with "word" — should be more than 1 due to wrapping
+	wordLineCount := 0
+	for _, line := range lines {
+		if strings.Contains(line, "word") {
+			wordLineCount++
+		}
+	}
+	if wordLineCount < 2 {
+		t.Errorf("expected long message to wrap across multiple lines, got %d lines with 'word'", wordLineCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // max
 // ---------------------------------------------------------------------------
 

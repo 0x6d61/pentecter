@@ -278,6 +278,104 @@ func TestCommandRunner_ParseCommand_WhitespaceOnly(t *testing.T) {
 	}
 }
 
+func TestCommandRunner_Run_ShellPipe(t *testing.T) {
+	// sh -c 実行により、パイプがシェルとして正しく処理されること
+	falseVal := false
+	runner := newTestRunner(&tools.ToolDef{
+		Name:             "echo",
+		ProposalRequired: &falseVal,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	needsProposal, lines, resultCh, err := runner.Run(ctx, "echo hello-pipe | tr a-z A-Z")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if needsProposal {
+		t.Error("expected no proposal")
+	}
+
+	var output []string
+	for l := range lines {
+		output = append(output, l.Content)
+	}
+	res := <-resultCh
+
+	if res.Err != nil {
+		t.Fatalf("execution error: %v", res.Err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", res.ExitCode)
+	}
+	if !containsSubstring(output, "HELLO-PIPE") {
+		t.Errorf("expected 'HELLO-PIPE' in output (pipe should work), got: %v", output)
+	}
+}
+
+func TestCommandRunner_Run_ShellVariableExpansion(t *testing.T) {
+	// sh -c 実行により、シェル変数展開が動作すること
+	falseVal := false
+	runner := newTestRunner(&tools.ToolDef{
+		Name:             "echo",
+		ProposalRequired: &falseVal,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	needsProposal, lines, resultCh, err := runner.Run(ctx, "echo $((2+3))")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if needsProposal {
+		t.Error("expected no proposal")
+	}
+
+	var output []string
+	for l := range lines {
+		output = append(output, l.Content)
+	}
+	res := <-resultCh
+
+	if res.Err != nil {
+		t.Fatalf("execution error: %v", res.Err)
+	}
+	if !containsSubstring(output, "5") {
+		t.Errorf("expected '5' in output (arithmetic expansion), got: %v", output)
+	}
+}
+
+func TestCommandRunner_Run_ShellCommandNotFound(t *testing.T) {
+	// sh -c で存在しないコマンドを実行 → exit code != 0
+	falseVal := false
+	runner := newTestRunner(&tools.ToolDef{
+		Name:             "nonexistent_binary_xyz",
+		ProposalRequired: &falseVal,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	needsProposal, lines, resultCh, err := runner.Run(ctx, "nonexistent_binary_xyz --flag")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if needsProposal {
+		t.Error("expected no proposal")
+	}
+
+	// drain lines
+	for range lines {
+	}
+	res := <-resultCh
+
+	if res.ExitCode == 0 {
+		t.Error("expected non-zero exit code for command not found")
+	}
+}
+
 func containsSubstring(ss []string, sub string) bool {
 	for _, s := range ss {
 		if strings.Contains(s, sub) {

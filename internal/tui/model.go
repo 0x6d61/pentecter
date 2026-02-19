@@ -211,6 +211,11 @@ func (m *Model) rebuildViewport() {
 
 	var sb strings.Builder
 
+	vpWidth := m.viewport.Width
+	if vpWidth <= 0 {
+		vpWidth = 80 // fallback
+	}
+
 	header := lipgloss.NewStyle().
 		Foreground(colorPrimary).
 		Bold(true).
@@ -227,18 +232,34 @@ func (m *Model) rebuildViewport() {
 
 		// コマンド結果サマリー
 		if entry.Type == agent.EventCommandResult {
-			var resultLine string
-			if entry.ExitCode == 0 {
-				resultLine = commandSuccessStyle.Render("  → " + entry.Message)
-			} else {
-				resultLine = commandFailStyle.Render("  → " + entry.Message)
+			const resultPrefix = "  → "
+			resultPrefixW := len(resultPrefix) // ASCII only, len is fine
+			msgMaxW := vpWidth - resultPrefixW
+			if msgMaxW < 20 {
+				msgMaxW = 20
 			}
-			sb.WriteString(resultLine + "\n")
+
+			wrapped := softWrap(entry.Message, msgMaxW)
+			wrapLines := strings.Split(wrapped, "\n")
+			indent := strings.Repeat(" ", resultPrefixW)
+
+			for i, line := range wrapLines {
+				text := indent + line
+				if i == 0 {
+					text = resultPrefix + line
+				}
+				if entry.ExitCode == 0 {
+					sb.WriteString(commandSuccessStyle.Render(text) + "\n")
+				} else {
+					sb.WriteString(commandFailStyle.Render(text) + "\n")
+				}
+			}
 			continue
 		}
 
 		// 通常のログエントリ
-		ts := lipgloss.NewStyle().Foreground(colorMuted).Render(entry.Time.Format("15:04:05"))
+		ts := entry.Time.Format("15:04:05")
+		styledTs := lipgloss.NewStyle().Foreground(colorMuted).Render(ts)
 
 		var srcLabel string
 		switch entry.Source {
@@ -254,7 +275,27 @@ func (m *Model) rebuildViewport() {
 			srcLabel = fmt.Sprintf("[%s]", entry.Source)
 		}
 
-		fmt.Fprintf(&sb, "%s %s  %s\n", ts, srcLabel, entry.Message)
+		// Prefix visual width: "15:04:05 [TOOL]  " = 8 + 1 + 6 + 2 = 17
+		const logPrefixW = 17
+		msgMaxW := vpWidth - logPrefixW
+		if msgMaxW < 20 {
+			msgMaxW = 20
+		}
+
+		if len(entry.Message) <= msgMaxW {
+			fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, entry.Message)
+		} else {
+			wrapped := softWrap(entry.Message, msgMaxW)
+			wrapLines := strings.Split(wrapped, "\n")
+			indent := strings.Repeat(" ", logPrefixW)
+			for i, line := range wrapLines {
+				if i == 0 {
+					fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, line)
+				} else {
+					sb.WriteString(indent + line + "\n")
+				}
+			}
+		}
 	}
 
 	// Render pending proposal at the bottom of the session log.
