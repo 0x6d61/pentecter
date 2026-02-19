@@ -100,6 +100,36 @@ func TestLoadConfig_EnvVarExpansion(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_EnvVarExpansion_ArgsAndCommand(t *testing.T) {
+	// args と command 内の ${VAR} も展開されること
+	t.Setenv("TEST_MCP_HOME", "/home/testuser")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.yaml")
+	content := `servers:
+  - name: hacktricks
+    command: "${TEST_MCP_HOME}/bin/node"
+    args: ["${TEST_MCP_HOME}/hacktricks-mcp-server/dist/index.js"]
+    env: {}
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	s := cfg.Servers[0]
+	if s.Command != "/home/testuser/bin/node" {
+		t.Errorf("expected command '/home/testuser/bin/node', got '%s'", s.Command)
+	}
+	if len(s.Args) != 1 || s.Args[0] != "/home/testuser/hacktricks-mcp-server/dist/index.js" {
+		t.Errorf("expected expanded args, got %v", s.Args)
+	}
+}
+
 func TestLoadConfig_EnvVarExpansion_Undefined(t *testing.T) {
 	// 未定義の環境変数は空文字列に展開される
 	t.Setenv("TEST_MCP_UNDEFINED_CHECK", "") // 明示的にクリア
