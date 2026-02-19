@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -125,6 +126,31 @@ Chat commands:
 		os.Exit(1)
 	}
 
+	// --- SubBrain for SmartSubAgent ---
+	// Defaults to same config as main brain; override with SUBAGENT_MODEL / SUBAGENT_PROVIDER.
+	subBrainCfg := brainCfg // copy main config
+	if model := os.Getenv("SUBAGENT_MODEL"); model != "" {
+		subBrainCfg.Model = model
+	}
+	if provider := os.Getenv("SUBAGENT_PROVIDER"); provider != "" {
+		subBrainCfg.Provider = brain.Provider(provider)
+		// Reload config for the new provider
+		reloaded, err := brain.LoadConfig(brain.ConfigHint{
+			Provider: brain.Provider(provider),
+			Model:    subBrainCfg.Model,
+		})
+		if err == nil {
+			subBrainCfg = reloaded
+			subBrainCfg.ToolNames = toolNames
+		}
+	}
+	subBrain, err := brain.New(subBrainCfg)
+	if err != nil {
+		// SubBrain creation failed — continue without SmartSubAgent
+		log.Printf("SubBrain creation failed (SmartSubAgent disabled): %v", err)
+		subBrain = nil
+	}
+
 	// --- Blacklist ---
 	blacklist := loadBlacklist("config/blacklist.yaml")
 
@@ -150,6 +176,7 @@ Chat commands:
 	team := agent.NewTeam(agent.TeamConfig{
 		Events:      events,
 		Brain:       br,
+		SubBrain:    subBrain,
 		Runner:      runner,
 		SkillsReg:   skillsReg,
 		MemoryStore: memoryStore,

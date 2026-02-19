@@ -19,6 +19,7 @@ type TeamConfig struct {
 	SkillsReg   *skills.Registry   // nil = スキル無効
 	MemoryStore *memory.Store      // nil = メモリ無効
 	MCPManager  *mcp.MCPManager    // nil = MCP 無効
+	SubBrain    brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
 }
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
@@ -32,6 +33,8 @@ type Team struct {
 	skillsReg   *skills.Registry
 	memoryStore *memory.Store
 	mcpMgr      *mcp.MCPManager
+	taskMgr     *TaskManager // 全 Loop で共有
+	subBrain    brain.Brain
 	nextID      int
 	ctx         context.Context // Start() で保存
 	mu          sync.Mutex
@@ -39,14 +42,18 @@ type Team struct {
 
 // NewTeam は TeamConfig から Team を構築する。
 func NewTeam(cfg TeamConfig) *Team {
-	return &Team{
+	t := &Team{
 		events:      cfg.Events,
 		br:          cfg.Brain,
 		runner:      cfg.Runner,
 		skillsReg:   cfg.SkillsReg,
 		memoryStore: cfg.MemoryStore,
 		mcpMgr:      cfg.MCPManager,
+		subBrain:    cfg.SubBrain,
 	}
+	// TaskManager を作成（全 Loop で共有）
+	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain)
+	return t
 }
 
 // AddTarget は新ターゲットを追加し、Start() 済みなら即座に Loop を起動する。
@@ -64,7 +71,8 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
 		WithSkills(t.skillsReg).
 		WithMemory(t.memoryStore).
-		WithMCP(t.mcpMgr)
+		WithMCP(t.mcpMgr).
+		WithTaskManager(t.taskMgr)
 
 	t.loops = append(t.loops, loop)
 
@@ -103,4 +111,9 @@ func (t *Team) Loops() []*Loop {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.loops
+}
+
+// TaskManager は TaskManager を返す（TUI からアクセス用）。
+func (t *Team) TaskManager() *TaskManager {
+	return t.taskMgr
 }

@@ -29,6 +29,18 @@ const (
 	// ActionCallMCP は MCP サーバーのツールを呼び出す。
 	// Brain が MCP ツール（Playwright ブラウザ操作等）を使用する際に使用する。
 	ActionCallMCP ActionType = "call_mcp"
+
+	// ActionSpawnTask はバックグラウンドタスクを生成する。
+	ActionSpawnTask ActionType = "spawn_task"
+
+	// ActionWait は実行中の SubTask の完了を待つ。
+	ActionWait ActionType = "wait"
+
+	// ActionCheckTask は実行中の SubTask の部分出力を取得する。
+	ActionCheckTask ActionType = "check_task"
+
+	// ActionKillTask は実行中の SubTask をキャンセルする。
+	ActionKillTask ActionType = "kill_task"
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).
@@ -53,6 +65,15 @@ type Action struct {
 	MCPTool   string         `json:"mcp_tool,omitempty"`
 	// MCPArgs は MCP ツールに渡す引数（ActionCallMCP 時に使用）。
 	MCPArgs   map[string]any `json:"mcp_args,omitempty"`
+
+	// SubTask 関連フィールド
+	TaskID       string `json:"task_id,omitempty"`        // wait/check_task/kill_task: 対象タスクID
+	TaskKind     string `json:"task_kind,omitempty"`      // spawn_task: "runner" or "smart"
+	TaskGoal     string `json:"task_goal,omitempty"`      // spawn_task: タスクの目的
+	TaskMaxTurns int    `json:"task_max_turns,omitempty"` // spawn_task (smart): 最大ターン数
+	TaskPort     int    `json:"task_port,omitempty"`      // spawn_task: メタデータ - ポート
+	TaskService  string `json:"task_service,omitempty"`   // spawn_task: メタデータ - サービス名
+	TaskPhase    string `json:"task_phase,omitempty"`     // spawn_task: メタデータ - フェーズ
 }
 
 // Memory は Brain がナレッジグラフに記録する発見物。

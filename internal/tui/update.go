@@ -527,6 +527,10 @@ func (m *Model) handleAgentEvent(e agent.Event) {
 			Type:     agent.EventCommandResult,
 			ExitCode: e.ExitCode,
 		})
+	case agent.EventSubTaskLog:
+		t.AddLog(e.Source, e.Message)
+	case agent.EventSubTaskComplete:
+		t.AddLog(agent.SourceSystem, "Task completed: "+e.Message)
 	}
 
 	m.syncListItems()

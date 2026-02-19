@@ -743,3 +743,207 @@ func TestLoop_Run_CallMCP_NoManager(t *testing.T) {
 		}
 	}
 }
+
+// --- SubTask integration tests ---
+
+// newTestLoopWithTaskManager はテスト用の Loop + TaskManager を構築する。
+func newTestLoopWithTaskManager(target *agent.Target, mb *mockBrain) (*agent.Loop, *agent.TaskManager, chan agent.Event, chan bool, chan string) {
+	falseVal := false
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ToolDef{
+		Name: "echo", ProposalRequired: &falseVal,
+		Output: tools.OutputConfig{Strategy: tools.StrategyHeadTail, HeadLines: 5, TailLines: 5},
+	})
+	reg.Register(&tools.ToolDef{
+		Name: "sleep", ProposalRequired: &falseVal,
+		Output: tools.OutputConfig{Strategy: tools.StrategyHeadTail, HeadLines: 5, TailLines: 5},
+	})
+	bl := tools.NewBlacklist(nil)
+	store := tools.NewLogStore()
+	runner := tools.NewCommandRunner(reg, bl, store)
+
+	events := make(chan agent.Event, 64)
+	approve := make(chan bool, 1)
+	userMsg := make(chan string, 1)
+
+	taskMgr := agent.NewTaskManager(runner, nil, events, nil)
+
+	loop := agent.NewLoop(target, mb, runner, events, approve, userMsg).
+		WithTaskManager(taskMgr)
+	return loop, taskMgr, events, approve, userMsg
+}
+
+func TestLoop_Run_SpawnTask_Wait(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// 1st: spawn_task
+			{Thought: "spawning bg task", Action: schema.ActionSpawnTask,
+				TaskKind: "runner", Command: "echo spawn-test", TaskGoal: "test spawn"},
+			// 2nd: wait (no task_id = wait any)
+			{Thought: "waiting for task", Action: schema.ActionWait},
+			// 3rd: complete (default from mockBrain)
+		},
+	}
+
+	loop, _, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotSubTaskComplete := false
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventSubTaskComplete {
+				gotSubTaskComplete = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotSubTaskComplete {
+					t.Error("expected EventSubTaskComplete before EventComplete")
+				}
+				// Verify 3rd Think() call receives task output in ToolOutput
+				if len(mb.inputs) < 3 {
+					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				toolOutput := mb.inputs[2].ToolOutput
+				if !strings.Contains(toolOutput, "task-1") {
+					t.Errorf("3rd Think() ToolOutput should reference task-1, got: %s", toolOutput)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_CheckTask(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// 1st: spawn_task
+			{Thought: "spawning bg task", Action: schema.ActionSpawnTask,
+				TaskKind: "runner", Command: "echo check-output", TaskGoal: "test check"},
+			// 2nd: check_task (task-1)
+			{Thought: "checking task", Action: schema.ActionCheckTask, TaskID: "task-1"},
+			// 3rd: complete (default from mockBrain)
+		},
+	}
+
+	loop, _, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// Verify 3rd Think() call receives partial output info in ToolOutput
+				if len(mb.inputs) < 3 {
+					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				toolOutput := mb.inputs[2].ToolOutput
+				if !strings.Contains(toolOutput, "task-1") {
+					t.Errorf("3rd Think() ToolOutput should reference task-1, got: %s", toolOutput)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_KillTask(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// 1st: spawn_task with a long-running command
+			{Thought: "spawning long task", Action: schema.ActionSpawnTask,
+				TaskKind: "runner", Command: "sleep 30", TaskGoal: "long task"},
+			// 2nd: kill_task (task-1)
+			{Thought: "killing task", Action: schema.ActionKillTask, TaskID: "task-1"},
+			// 3rd: complete (default from mockBrain)
+		},
+	}
+
+	loop, _, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// Verify Brain received cancellation confirmation
+				if len(mb.inputs) < 3 {
+					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				toolOutput := mb.inputs[2].ToolOutput
+				if !strings.Contains(toolOutput, "task-1") {
+					t.Errorf("3rd Think() ToolOutput should reference task-1, got: %s", toolOutput)
+				}
+				if !strings.Contains(toolOutput, "cancelled") && !strings.Contains(toolOutput, "Cancel") {
+					t.Errorf("3rd Think() ToolOutput should mention cancellation, got: %s", toolOutput)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_SpawnTask_NoManager(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// spawn_task action without TaskManager configured
+			{Thought: "try spawning", Action: schema.ActionSpawnTask,
+				TaskKind: "runner", Command: "echo test", TaskGoal: "test no manager"},
+			// complete (default from mockBrain)
+		},
+	}
+
+	// Use newTestLoop (no TaskManager)
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotError := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "TaskManager not configured") {
+				gotError = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotError {
+					t.Error("expected 'TaskManager not configured' error log before complete")
+				}
+				// Verify Brain received the error in ToolOutput
+				if len(mb.inputs) >= 2 {
+					toolOutput := mb.inputs[1].ToolOutput
+					if !strings.Contains(toolOutput, "TaskManager not configured") {
+						t.Errorf("2nd Think() ToolOutput should contain error, got: %s", toolOutput)
+					}
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}

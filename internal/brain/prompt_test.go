@@ -3,6 +3,8 @@ package brain
 import (
 	"strings"
 	"testing"
+
+	"github.com/0x6d61/pentecter/pkg/schema"
 )
 
 func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
@@ -504,5 +506,49 @@ func TestParseActionJSON_CallMCP(t *testing.T) {
 	url, ok := action.MCPArgs["url"].(string)
 	if !ok || url != "http://10.0.0.5/login" {
 		t.Errorf("MCPArgs.url: got %v, want http://10.0.0.5/login", action.MCPArgs["url"])
+	}
+}
+
+func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil)
+
+	// 新しいアクションタイプがプロンプトに含まれることを確認
+	for _, keyword := range []string{"spawn_task", "wait", "check_task", "kill_task"} {
+		if !strings.Contains(prompt, keyword) {
+			t.Errorf("expected system prompt to contain %q", keyword)
+		}
+	}
+
+	// PARALLEL EXECUTION セクションが含まれることを確認
+	if !strings.Contains(prompt, "PARALLEL EXECUTION") {
+		t.Error("expected system prompt to contain PARALLEL EXECUTION section")
+	}
+
+	// task_kind が含まれることを確認
+	if !strings.Contains(prompt, "task_kind") {
+		t.Error("expected system prompt to contain task_kind")
+	}
+}
+
+func TestParseActionJSON_SpawnTask(t *testing.T) {
+	raw := `{"thought":"spawn scan","action":"spawn_task","task_kind":"runner","task_goal":"full scan","command":"nmap -sV -p- 10.0.0.5","task_port":0,"task_phase":"recon"}`
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (spawn_task): %v", err)
+	}
+	if action.Action != schema.ActionSpawnTask {
+		t.Errorf("Action: got %q, want %q", action.Action, schema.ActionSpawnTask)
+	}
+	if action.TaskKind != "runner" {
+		t.Errorf("TaskKind: got %q, want %q", action.TaskKind, "runner")
+	}
+	if action.TaskGoal != "full scan" {
+		t.Errorf("TaskGoal: got %q, want %q", action.TaskGoal, "full scan")
+	}
+	if action.Command != "nmap -sV -p- 10.0.0.5" {
+		t.Errorf("Command: got %q, want %q", action.Command, "nmap -sV -p- 10.0.0.5")
+	}
+	if action.TaskPhase != "recon" {
+		t.Errorf("TaskPhase: got %q, want %q", action.TaskPhase, "recon")
 	}
 }

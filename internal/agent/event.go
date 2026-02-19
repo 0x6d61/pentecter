@@ -20,6 +20,10 @@ const (
 	EventTurnStart EventType = "turn_start"
 	// EventCommandResult はコマンド実行結果のサマリー。
 	EventCommandResult EventType = "command_result"
+	// EventSubTaskLog はサブタスクの出力ログ。
+	EventSubTaskLog EventType = "subtask_log"
+	// EventSubTaskComplete はサブタスクの完了通知。
+	EventSubTaskComplete EventType = "subtask_complete"
 )
 
 // Event は Agent ループから TUI へ送るメッセージ。
@@ -32,4 +36,5 @@ type Event struct {
 	NewHost    string    // EventAddTarget 時に使用
 	TurnNumber int       // EventTurnStart 時のターン番号
 	ExitCode   int       // EventCommandResult 時の exit code
+	TaskID     string    // SubTask 関連イベント時の taskID
 }
