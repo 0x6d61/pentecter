@@ -39,11 +39,12 @@ const (
 
 // Config は Brain の設定を保持する。
 type Config struct {
-	Provider Provider
-	Model    string
-	AuthType AuthType
-	Token    string
-	BaseURL  string // テスト時にモックサーバーを指定するために使う（空なら公式エンドポイント）
+	Provider  Provider
+	Model     string
+	AuthType  AuthType
+	Token     string
+	BaseURL   string   // テスト時にモックサーバーを指定するために使う（空なら公式エンドポイント）
+	ToolNames []string // Registry から読み込んだ登録済みツール名（システムプロンプトに注入）
 }
 
 // Input は Brain に渡す思考コンテキスト。

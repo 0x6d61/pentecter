@@ -73,6 +73,19 @@ Chat commands:
 		fmt.Fprintf(os.Stderr, "Auto-detected provider: %s\n", selectedProvider)
 	}
 
+	// --- Tools ---（Brain より先にロードし、ツール名をシステムプロンプトに注入する）
+	registry := tools.NewRegistry()
+	if err := registry.LoadDir("tools"); err != nil {
+		fmt.Fprintf(os.Stderr, "tool load error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Registry からツール名を収集
+	var toolNames []string
+	for _, def := range registry.All() {
+		toolNames = append(toolNames, def.Name)
+	}
+
 	brainCfg, err := brain.LoadConfig(brain.ConfigHint{
 		Provider: selectedProvider,
 		Model:    *model,
@@ -81,17 +94,11 @@ Chat commands:
 		fmt.Fprintln(os.Stderr, "brain config error:", err)
 		os.Exit(1)
 	}
+	brainCfg.ToolNames = toolNames
 
 	br, err := brain.New(brainCfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "brain init error:", err)
-		os.Exit(1)
-	}
-
-	// --- Tools ---
-	registry := tools.NewRegistry()
-	if err := registry.LoadDir("tools"); err != nil {
-		fmt.Fprintf(os.Stderr, "tool load error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -147,6 +154,7 @@ Chat commands:
 		if err != nil {
 			return nil, err
 		}
+		cfg.ToolNames = toolNames
 		return brain.New(cfg)
 	}
 
