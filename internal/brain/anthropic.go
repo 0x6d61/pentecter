@@ -39,7 +39,7 @@ func (b *anthropicBrain) Think(ctx context.Context, input Input) (*schema.Action
 	body := map[string]any{
 		"model":      b.cfg.Model,
 		"max_tokens": 1024,
-		"system":     buildSystemPrompt(b.cfg.ToolNames),
+		"system":     buildSystemPrompt(b.cfg.ToolNames, b.cfg.MCPTools),
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},

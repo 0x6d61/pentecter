@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
 	"github.com/0x6d61/pentecter/internal/tools"
@@ -44,6 +45,7 @@ type Loop struct {
 	runner       *tools.CommandRunner
 	skillsReg    *skills.Registry  // スキルテンプレート（nil = 無効）
 	memoryStore  *memory.Store     // 発見物の永続化（nil = 無効）
+	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -91,6 +93,12 @@ func (l *Loop) WithSkills(reg *skills.Registry) *Loop {
 // WithMemory は Memory Store をセットする（メソッドチェーン用）。
 func (l *Loop) WithMemory(store *memory.Store) *Loop {
 	l.memoryStore = store
+	return l
+}
+
+// WithMCP は MCP マネージャーをセットする（メソッドチェーン用）。
+func (l *Loop) WithMCP(mgr *mcp.MCPManager) *Loop {
+	l.mcpMgr = mgr
 	return l
 }
 
@@ -188,6 +196,10 @@ func (l *Loop) Run(ctx context.Context) {
 
 		case schema.ActionMemory:
 			l.recordMemory(action.Memory)
+
+		case schema.ActionCallMCP:
+			l.callMCP(ctx, action)
+			l.evaluateResult()
 
 		case schema.ActionAddTarget:
 			if action.Target != "" {
@@ -290,6 +302,85 @@ func (l *Loop) recordMemory(m *schema.Memory) {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
 				Message: fmt.Sprintf("Memory write error: %v", err)})
 		}
+	}
+}
+
+// callMCP は MCP サーバーのツールを呼び出す。
+func (l *Loop) callMCP(ctx context.Context, action *schema.Action) {
+	if l.mcpMgr == nil {
+		l.emit(Event{Type: EventLog, Source: SourceSystem,
+			Message: "MCP not configured — cannot call MCP tools"})
+		l.lastToolOutput = "Error: MCP not configured"
+		return
+	}
+	if action.MCPServer == "" || action.MCPTool == "" {
+		l.emit(Event{Type: EventLog, Source: SourceSystem,
+			Message: "call_mcp: missing mcp_server or mcp_tool"})
+		l.lastToolOutput = "Error: missing mcp_server or mcp_tool"
+		return
+	}
+
+	// 承認ゲートチェック
+	if l.mcpMgr.IsProposalRequired(action.MCPServer) {
+		desc := fmt.Sprintf("MCP call: %s.%s", action.MCPServer, action.MCPTool)
+		l.lastCommand = desc
+		if !l.handlePropose(ctx, desc, action.Thought) {
+			return
+		}
+	}
+
+	toolLabel := fmt.Sprintf("[MCP] %s.%s", action.MCPServer, action.MCPTool)
+	l.lastCommand = toolLabel
+	l.emit(Event{Type: EventLog, Source: SourceTool, Message: toolLabel})
+	l.target.Status = StatusRunning
+
+	result, err := l.mcpMgr.CallTool(ctx, action.MCPServer, action.MCPTool, action.MCPArgs)
+	if err != nil {
+		errMsg := fmt.Sprintf("MCP error: %v", err)
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: errMsg})
+		l.lastToolOutput = "Error: " + err.Error()
+		l.lastExitCode = 1
+		l.target.Status = StatusScanning
+		return
+	}
+
+	// MCP 結果をテキストに変換
+	var sb strings.Builder
+	for _, block := range result.Content {
+		if block.Text != "" {
+			sb.WriteString(block.Text)
+			sb.WriteString("\n")
+		}
+	}
+	output := strings.TrimSpace(sb.String())
+
+	if result.IsError {
+		l.lastExitCode = 1
+		l.emit(Event{Type: EventLog, Source: SourceSystem,
+			Message: fmt.Sprintf("MCP tool returned error: %s", output)})
+	} else {
+		l.lastExitCode = 0
+	}
+
+	l.lastToolOutput = output
+	l.target.Status = StatusScanning
+
+	// TUI にツール出力を表示
+	if output != "" {
+		l.emit(Event{Type: EventLog, Source: SourceTool, Message: output})
+	}
+
+	// コマンド結果サマリー
+	l.emit(Event{
+		Type:     EventCommandResult,
+		Source:   SourceTool,
+		Message:  buildCommandSummary(l.lastExitCode, output),
+		ExitCode: l.lastExitCode,
+	})
+
+	// Post-exec drain
+	if msg := l.drainUserMsg(); msg != "" {
+		l.pendingUserMsg = msg
 	}
 }
 

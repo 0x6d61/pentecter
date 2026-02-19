@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
-	prompt := buildSystemPrompt([]string{"nmap", "nikto", "curl"})
+	prompt := buildSystemPrompt([]string{"nmap", "nikto", "curl"}, nil)
 
 	if !strings.Contains(prompt, "Registered tools: nmap, nikto, curl") {
 		t.Error("expected registered tool names in prompt")
@@ -17,7 +17,7 @@ func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_Empty(t *testing.T) {
-	prompt := buildSystemPrompt(nil)
+	prompt := buildSystemPrompt(nil, nil)
 
 	if strings.Contains(prompt, "Registered tools:") {
 		t.Error("expected no 'Registered tools:' line when tool list is empty")
@@ -55,7 +55,7 @@ func TestBuildPrompt_NoUserMessage_DefaultInstruction(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsUserInteraction(t *testing.T) {
-	prompt := buildSystemPrompt(nil)
+	prompt := buildSystemPrompt(nil, nil)
 
 	if !strings.Contains(prompt, "USER INTERACTION") {
 		t.Error("system prompt should contain USER INTERACTION section")
@@ -370,7 +370,7 @@ func TestBuildPrompt_MemoryBeforeLastCommand(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
-	prompt := buildSystemPrompt(nil)
+	prompt := buildSystemPrompt(nil, nil)
 
 	if !strings.Contains(prompt, "ALWAYS use \"memory\" action to record key findings") {
 		t.Error("system prompt should contain memory recording enforcement")
@@ -384,7 +384,7 @@ func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsLanguageAdaptation(t *testing.T) {
-	prompt := buildSystemPrompt(nil)
+	prompt := buildSystemPrompt(nil, nil)
 
 	if !strings.Contains(prompt, "LANGUAGE:") {
 		t.Error("system prompt should contain LANGUAGE section")
@@ -436,5 +436,73 @@ func TestHasNonASCII(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("hasNonASCII(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestBuildSystemPrompt_WithMCPTools(t *testing.T) {
+	mcpTools := []MCPToolInfo{
+		{
+			Server:      "playwright",
+			Name:        "browser_navigate",
+			Description: "Navigate to URL",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "URL to navigate to",
+					},
+				},
+			},
+		},
+		{
+			Server:      "playwright",
+			Name:        "browser_click",
+			Description: "Click an element",
+		},
+	}
+	prompt := buildSystemPrompt(nil, mcpTools)
+
+	if !strings.Contains(prompt, "MCP TOOLS:") {
+		t.Error("expected MCP TOOLS section in prompt")
+	}
+	if !strings.Contains(prompt, "Server: playwright") {
+		t.Error("expected server name in MCP section")
+	}
+	if !strings.Contains(prompt, "browser_navigate") {
+		t.Error("expected tool name browser_navigate")
+	}
+	if !strings.Contains(prompt, "browser_click") {
+		t.Error("expected tool name browser_click")
+	}
+	if !strings.Contains(prompt, "call_mcp") {
+		t.Error("expected call_mcp action in MCP usage instructions")
+	}
+}
+
+func TestBuildSystemPrompt_NoMCPTools(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil)
+	if strings.Contains(prompt, "MCP TOOLS:") {
+		t.Error("should not contain MCP TOOLS section when no MCP tools")
+	}
+}
+
+func TestParseActionJSON_CallMCP(t *testing.T) {
+	raw := `{"thought":"navigating to login page","action":"call_mcp","mcp_server":"playwright","mcp_tool":"browser_navigate","mcp_args":{"url":"http://10.0.0.5/login"}}`
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (call_mcp): %v", err)
+	}
+	if action.Action != "call_mcp" {
+		t.Errorf("Action: got %q, want %q", action.Action, "call_mcp")
+	}
+	if action.MCPServer != "playwright" {
+		t.Errorf("MCPServer: got %q, want %q", action.MCPServer, "playwright")
+	}
+	if action.MCPTool != "browser_navigate" {
+		t.Errorf("MCPTool: got %q, want %q", action.MCPTool, "browser_navigate")
+	}
+	url, ok := action.MCPArgs["url"].(string)
+	if !ok || url != "http://10.0.0.5/login" {
+		t.Errorf("MCPArgs.url: got %v, want http://10.0.0.5/login", action.MCPArgs["url"])
 	}
 }

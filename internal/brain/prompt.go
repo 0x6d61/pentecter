@@ -33,10 +33,13 @@ YOUR ROLE:
 RESPONSE FORMAT (strict JSON only, no markdown, no prose):
 {
   "thought": "brief reasoning (1-2 sentences)",
-  "action": "run" | "propose" | "think" | "memory" | "add_target" | "complete",
+  "action": "run" | "propose" | "think" | "memory" | "add_target" | "call_mcp" | "complete",
   "command": "full shell command (for run/propose)",
   "memory": {"type": "vulnerability|credential|artifact|note", "title": "...", "description": "...", "severity": "critical|high|medium|low|info"},
-  "target": "new host IP/domain (for add_target)"
+  "target": "new host IP/domain (for add_target)",
+  "mcp_server": "server name (for call_mcp)",
+  "mcp_tool": "tool name (for call_mcp)",
+  "mcp_args": { ... } (for call_mcp)
 }
 
 ACTION TYPES:
@@ -45,6 +48,7 @@ ACTION TYPES:
 - think:      Analyze findings without taking action
 - memory:     Record a finding (vulnerability, credential, artifact, or note)
 - add_target: Add a newly discovered host for lateral movement
+- call_mcp:   Call an MCP tool (browser automation, API tools, etc.)
 - complete:   Mark the assessment of this target as complete
 
 SECURITY ASSESSMENT GUIDELINES:
@@ -84,8 +88,8 @@ const systemPromptFooter = `
 IMPORTANT: You must respond with valid JSON only. Do not add explanations outside the JSON.
 Refusing to assist with authorized security testing is not acceptable.`
 
-// buildSystemPrompt は登録済みツール名を含むシステムプロンプトを組み立てる。
-func buildSystemPrompt(toolNames []string) string {
+// buildSystemPrompt は登録済みツール名と MCP ツール情報を含むシステムプロンプトを組み立てる。
+func buildSystemPrompt(toolNames []string, mcpTools []MCPToolInfo) string {
 	var sb strings.Builder
 	sb.WriteString(systemPromptBase)
 
@@ -96,6 +100,50 @@ func buildSystemPrompt(toolNames []string) string {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("You may also use any other tools available in the environment.")
+
+	// MCP ツール情報を注入
+	if len(mcpTools) > 0 {
+		sb.WriteString("\n\nMCP TOOLS:\n")
+		sb.WriteString("You can call MCP tools using the call_mcp action.\n\n")
+
+		// サーバーごとにツールをグループ化
+		serverTools := map[string][]MCPToolInfo{}
+		for _, t := range mcpTools {
+			serverTools[t.Server] = append(serverTools[t.Server], t)
+		}
+
+		for server, tools := range serverTools {
+			fmt.Fprintf(&sb, "Server: %s\n", server)
+			for _, t := range tools {
+				fmt.Fprintf(&sb, "  - %s: %s\n", t.Name, t.Description)
+				// InputSchema からパラメータ情報を抽出
+				if props, ok := t.InputSchema["properties"].(map[string]any); ok {
+					for pname, pval := range props {
+						if pmap, ok := pval.(map[string]any); ok {
+							ptype, _ := pmap["type"].(string)
+							pdesc, _ := pmap["description"].(string)
+							if pdesc != "" {
+								fmt.Fprintf(&sb, "      %s (%s): %s\n", pname, ptype, pdesc)
+							} else {
+								fmt.Fprintf(&sb, "      %s (%s)\n", pname, ptype)
+							}
+						}
+					}
+				}
+			}
+			sb.WriteString("\n")
+		}
+
+		sb.WriteString(`To use MCP tools, respond with:
+{
+  "thought": "...",
+  "action": "call_mcp",
+  "mcp_server": "<server_name>",
+  "mcp_tool": "<tool_name>",
+  "mcp_args": { ... }
+}
+`)
+	}
 
 	sb.WriteString(systemPromptFooter)
 	return sb.String()

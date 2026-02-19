@@ -706,3 +706,40 @@ func TestLoop_BuildHistory_EmptyHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestLoop_Run_CallMCP_NoManager(t *testing.T) {
+	// MCP マネージャーが未設定の場合、call_mcp はエラーをログしてループ継続
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "browse target", Action: schema.ActionCallMCP,
+				MCPServer: "playwright", MCPTool: "browser_navigate",
+				MCPArgs: map[string]any{"url": "http://10.0.0.1/"}},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	gotMCPError := false
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "MCP not configured") {
+				gotMCPError = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotMCPError {
+					t.Error("expected MCP not configured error before complete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
