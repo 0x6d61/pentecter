@@ -8,80 +8,109 @@ import (
 	"github.com/0x6d61/pentecter/internal/tools"
 )
 
-func TestExtractIPFromText(t *testing.T) {
+func TestExtractHostFromText(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantIP  string
-		wantMsg string
-		wantOK  bool
+		name     string
+		input    string
+		wantHost string
+		wantMsg  string
+		wantOK   bool
 	}{
 		{
-			name:    "Japanese with IP",
-			input:   "192.168.81.1をスキャンして",
-			wantIP:  "192.168.81.1",
-			wantMsg: "をスキャンして",
-			wantOK:  true,
+			name:     "Japanese with IP",
+			input:    "192.168.81.1をスキャンして",
+			wantHost: "192.168.81.1",
+			wantMsg:  "をスキャンして",
+			wantOK:   true,
 		},
 		{
-			name:    "English with IP",
-			input:   "scan 10.0.0.5 please",
-			wantIP:  "10.0.0.5",
-			wantMsg: "scan please",
-			wantOK:  true,
+			name:     "English with IP",
+			input:    "scan 10.0.0.5 please",
+			wantHost: "10.0.0.5",
+			wantMsg:  "scan please",
+			wantOK:   true,
 		},
 		{
-			name:    "IP only",
-			input:   "192.168.1.1",
-			wantIP:  "192.168.1.1",
-			wantMsg: "",
-			wantOK:  true,
+			name:     "IP only",
+			input:    "192.168.1.1",
+			wantHost: "192.168.1.1",
+			wantMsg:  "",
+			wantOK:   true,
 		},
 		{
-			name:    "IP at end of text",
-			input:   "please scan 172.16.0.1",
-			wantIP:  "172.16.0.1",
-			wantMsg: "please scan",
-			wantOK:  true,
+			name:     "IP at end of text",
+			input:    "please scan 172.16.0.1",
+			wantHost: "172.16.0.1",
+			wantMsg:  "please scan",
+			wantOK:   true,
 		},
 		{
-			name:    "no IP",
-			input:   "run nmap scan",
-			wantIP:  "",
-			wantMsg: "",
-			wantOK:  false,
+			name:     "no IP or domain",
+			input:    "hello world",
+			wantHost: "",
+			wantMsg:  "",
+			wantOK:   false,
 		},
 		{
-			name:    "command prefix",
-			input:   "/target 10.0.0.5",
-			wantIP:  "",
-			wantMsg: "",
-			wantOK:  false,
+			name:     "command prefix",
+			input:    "/target 10.0.0.5",
+			wantHost: "",
+			wantMsg:  "",
+			wantOK:   false,
 		},
 		{
-			name:    "empty string",
-			input:   "",
-			wantIP:  "",
-			wantMsg: "",
-			wantOK:  false,
+			name:     "empty string",
+			input:    "",
+			wantHost: "",
+			wantMsg:  "",
+			wantOK:   false,
 		},
 		{
-			name:    "IP with surrounding Japanese",
-			input:   "ターゲット10.0.0.8を追加して脆弱性を調べて",
-			wantIP:  "10.0.0.8",
-			wantMsg: "ターゲットを追加して脆弱性を調べて",
-			wantOK:  true,
+			name:     "IP with surrounding Japanese",
+			input:    "ターゲット10.0.0.8を追加して脆弱性を調べて",
+			wantHost: "10.0.0.8",
+			wantMsg:  "ターゲットを追加して脆弱性を調べて",
+			wantOK:   true,
+		},
+		// ドメイン名テストケース
+		{
+			name:     "Domain with Japanese",
+			input:    "eighteen.htbをスキャンして",
+			wantHost: "eighteen.htb",
+			wantMsg:  "をスキャンして",
+			wantOK:   true,
+		},
+		{
+			name:     "Domain only",
+			input:    "example.com",
+			wantHost: "example.com",
+			wantMsg:  "",
+			wantOK:   true,
+		},
+		{
+			name:     "Subdomain with Japanese",
+			input:    "sub.domain.co.jp にペンテスト",
+			wantHost: "sub.domain.co.jp",
+			wantMsg:  "にペンテスト",
+			wantOK:   true,
+		},
+		{
+			name:     "no match plain text",
+			input:    "run nmap scan",
+			wantHost: "",
+			wantMsg:  "",
+			wantOK:   false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ip, msg, ok := extractIPFromText(tt.input)
+			host, msg, ok := extractHostFromText(tt.input)
 			if ok != tt.wantOK {
 				t.Errorf("ok: got %v, want %v", ok, tt.wantOK)
 			}
-			if ip != tt.wantIP {
-				t.Errorf("ip: got %q, want %q", ip, tt.wantIP)
+			if host != tt.wantHost {
+				t.Errorf("host: got %q, want %q", host, tt.wantHost)
 			}
 			if msg != tt.wantMsg {
 				t.Errorf("msg: got %q, want %q", msg, tt.wantMsg)
@@ -219,22 +248,6 @@ func TestHandleApproveCommand_OffArgs_ShowsSelectUI(t *testing.T) {
 	// Auto-approve should still be true (not changed until select callback)
 	if !runner.AutoApprove() {
 		t.Error("auto-approve should remain ON until user selects from UI")
-	}
-}
-
-func TestNewWithTargets_SetsSuggestions(t *testing.T) {
-	m := NewWithTargets(nil)
-
-	got := m.input.AvailableSuggestions()
-	want := []string{"/model", "/approve", "/target"}
-
-	if len(got) != len(want) {
-		t.Fatalf("suggestions length: got %d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("suggestions[%d]: got %q, want %q", i, got[i], want[i])
-		}
 	}
 }
 

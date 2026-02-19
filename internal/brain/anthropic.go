@@ -94,6 +94,76 @@ func (b *anthropicBrain) Think(ctx context.Context, input Input) (*schema.Action
 	return parseAnthropicResponse(respBytes)
 }
 
+// ExtractTarget はユーザーテキストから LLM を使ってターゲットホストを抽出する。
+func (b *anthropicBrain) ExtractTarget(ctx context.Context, userText string) (string, string, error) {
+	body := map[string]any{
+		"model":      b.cfg.Model,
+		"max_tokens": 256,
+		"system":     extractTargetPrompt,
+		"messages": []map[string]string{
+			{"role": "user", "content": userText},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return "", "", fmt.Errorf("anthropic: marshal request: %w", err)
+	}
+
+	baseURL := b.cfg.BaseURL
+	if baseURL == "" {
+		baseURL = defaultAnthropicBaseURL
+	}
+	url := strings.TrimRight(baseURL, "/") + anthropicMessagesPath
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", "", fmt.Errorf("anthropic: create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", anthropicVersion)
+
+	switch b.cfg.AuthType {
+	case AuthOAuthToken:
+		req.Header.Set("Authorization", "Bearer "+b.cfg.Token)
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+	default:
+		req.Header.Set("x-api-key", b.cfg.Token)
+	}
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("anthropic: send request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("anthropic: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	// Anthropic レスポンスからテキストを取得
+	var anthropicResp anthropicResponse
+	if err := json.Unmarshal(respBytes, &anthropicResp); err != nil {
+		return "", "", fmt.Errorf("anthropic: unmarshal response: %w", err)
+	}
+
+	for _, block := range anthropicResp.Content {
+		if block.Type != "text" {
+			continue
+		}
+		return parseExtractTargetResponse(block.Text)
+	}
+
+	return "", "", fmt.Errorf("anthropic: no text content in response")
+}
+
 // anthropicResponse は Anthropic Messages API のレスポンス構造体（必要最小限）。
 type anthropicResponse struct {
 	Content []struct {

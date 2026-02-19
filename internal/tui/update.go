@@ -17,29 +17,40 @@ import (
 // ipv4Re matches an IPv4 address in text.
 var ipv4Re = regexp.MustCompile(`\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b`)
 
-// extractIPFromText extracts an IPv4 address from natural language text.
-// Returns (ip, remainingMessage, found).
+// domainRe matches a domain name with at least one dot (e.g. eighteen.htb, example.com, sub.domain.co.jp).
+var domainRe = regexp.MustCompile(`([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}`)
+
+// extractHostFromText extracts an IPv4 address or domain name from natural language text.
+// Returns (host, remainingMessage, found).
+// Tries IPv4 first, then falls back to domain name matching.
 // Does not match /target commands (handled separately by parseTargetInput).
-func extractIPFromText(text string) (string, string, bool) {
+func extractHostFromText(text string) (string, string, bool) {
 	if text == "" || strings.HasPrefix(text, "/") {
 		return "", "", false
 	}
 
+	// Try IPv4 first
 	match := ipv4Re.FindStringSubmatchIndex(text)
-	if match == nil {
-		return "", "", false
+	if match != nil {
+		ip := text[match[2]:match[3]]
+		// Validate it's a real IP
+		if net.ParseIP(ip) != nil {
+			raw := text[:match[2]] + text[match[3]:]
+			remaining := strings.TrimSpace(strings.Join(strings.Fields(raw), " "))
+			return ip, remaining, true
+		}
 	}
 
-	ip := text[match[2]:match[3]]
-	// Validate it's a real IP
-	if net.ParseIP(ip) == nil {
-		return "", "", false
+	// Fallback: try domain name
+	domainMatch := domainRe.FindStringIndex(text)
+	if domainMatch != nil {
+		domain := text[domainMatch[0]:domainMatch[1]]
+		raw := text[:domainMatch[0]] + text[domainMatch[1]:]
+		remaining := strings.TrimSpace(strings.Join(strings.Fields(raw), " "))
+		return domain, remaining, true
 	}
 
-	// Build remaining message by removing the IP and collapsing whitespace
-	raw := text[:match[2]] + text[match[3]:]
-	remaining := strings.TrimSpace(strings.Join(strings.Fields(raw), " "))
-	return ip, remaining, true
+	return "", "", false
 }
 
 // Update implements tea.Model and routes all incoming messages.
@@ -153,21 +164,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case FocusInput:
 			switch msg.String() {
-			case "alt+enter", "ctrl+enter":
-				// Accumulate current line and clear input for next line
-				if text := m.input.Value(); text != "" {
-					m.multilineBuffer = append(m.multilineBuffer, text)
-					m.input.SetValue("")
-					m.input.Placeholder = fmt.Sprintf("[%d lines] Continue typing or Alt+Enter for more...", len(m.multilineBuffer))
-				}
-			case "esc":
-				if len(m.multilineBuffer) > 0 {
-					m.multilineBuffer = nil
-					m.input.Placeholder = "Chat with AI or enter command..."
-				}
 			case "enter":
 				m.submitInput()
 			default:
+				// textarea handles Ctrl+Enter / Alt+Enter as newline via KeyMap.InsertNewline
 				m.input, cmd = m.input.Update(msg)
 				cmds = append(cmds, cmd)
 			}
@@ -215,7 +215,7 @@ func (m *Model) handleResize(w, h int) {
 	}
 
 	// Input bar: spans full width minus borders.
-	m.input.Width = w - 6 // subtract 2 borders + 2 side margins + 2 for prompt prefix
+	m.input.SetWidth(w - 6) // subtract 2 borders + 2 side margins + 2 for prompt prefix
 }
 
 // cycleFocus advances focus to the next pane in order: List → Viewport → Input → List.
@@ -235,23 +235,12 @@ func (m *Model) cycleFocus() {
 
 // submitInput sends the current input as a USER log entry and to the Agent.
 func (m *Model) submitInput() {
-	currentText := m.input.Value()
-
-	// Combine multiline buffer with current input
-	var fullText string
-	if len(m.multilineBuffer) > 0 {
-		allLines := append(m.multilineBuffer, currentText)
-		fullText = strings.TrimSpace(strings.Join(allLines, "\n"))
-		m.multilineBuffer = nil
-		m.input.Placeholder = "Chat with AI or enter command..."
-	} else {
-		fullText = strings.TrimSpace(currentText)
-	}
+	fullText := strings.TrimSpace(m.input.Value())
 
 	if fullText == "" {
 		return
 	}
-	m.input.SetValue("")
+	m.input.Reset()
 
 	// /approve command — toggle auto-approve
 	if strings.HasPrefix(fullText, "/approve") {
@@ -271,10 +260,10 @@ func (m *Model) submitInput() {
 		return
 	}
 
-	// Natural language IP extraction: "192.168.81.1をスキャンして" → add target + send message
+	// Natural language host extraction: "192.168.81.1をスキャンして" or "eighteen.htbをスキャンして" → add target + send message
 	if m.team != nil && len(m.targets) == 0 {
-		if ip, msg, ok := extractIPFromText(fullText); ok {
-			m.addTarget(ip)
+		if host, msg, ok := extractHostFromText(fullText); ok {
+			m.addTarget(host)
 			// Log the full original input as user message
 			if t := m.activeTarget(); t != nil {
 				t.AddLog(agent.SourceUser, fullText)
@@ -313,7 +302,7 @@ func (m *Model) submitInput() {
 	}
 }
 
-// parseTargetInput は IP アドレスまたは /target <host> を検知する。
+// parseTargetInput は IP アドレス、ドメイン名、または /target <host> を検知する。
 func parseTargetInput(text string) (string, bool) {
 	// /target <host>
 	if strings.HasPrefix(text, "/target ") {
@@ -324,6 +313,10 @@ func parseTargetInput(text string) (string, bool) {
 	}
 	// 素の IP アドレス（ターゲットが未選択のときのみ自然に追加）
 	if net.ParseIP(text) != nil {
+		return text, true
+	}
+	// 素のドメイン名（完全一致）
+	if domainRe.MatchString(text) && domainRe.FindString(text) == text {
 		return text, true
 	}
 	return "", false

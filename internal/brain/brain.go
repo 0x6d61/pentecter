@@ -84,6 +84,10 @@ type Input struct {
 // Brain は LLM との対話インターフェース。
 type Brain interface {
 	Think(ctx context.Context, input Input) (*schema.Action, error)
+	// ExtractTarget はユーザーテキストから LLM を使ってターゲットホストを抽出する。
+	// 正規表現でホストが見つからない場合のフォールバックとして使用する。
+	// host が空の場合はホストが見つからなかったことを意味する。
+	ExtractTarget(ctx context.Context, userText string) (host string, instruction string, err error)
 	Provider() string
 }
 

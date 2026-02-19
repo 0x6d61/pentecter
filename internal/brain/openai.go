@@ -90,6 +90,71 @@ func (b *openAIBrain) Think(ctx context.Context, input Input) (*schema.Action, e
 	return parseOpenAIResponse(respBytes)
 }
 
+// ExtractTarget はユーザーテキストから LLM を使ってターゲットホストを抽出する。
+func (b *openAIBrain) ExtractTarget(ctx context.Context, userText string) (string, string, error) {
+	body := map[string]any{
+		"model": b.cfg.Model,
+		"messages": []map[string]string{
+			{"role": "system", "content": extractTargetPrompt},
+			{"role": "user", "content": userText},
+		},
+		"max_tokens":  256,
+		"temperature": 0.0,
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return "", "", fmt.Errorf("openai: marshal request: %w", err)
+	}
+
+	baseURL := b.cfg.BaseURL
+	if baseURL == "" {
+		baseURL = defaultOpenAIBaseURL
+	}
+	base := strings.TrimRight(baseURL, "/")
+	var url string
+	if strings.HasSuffix(base, "/v1") {
+		url = base + "/chat/completions"
+	} else {
+		url = base + openAIChatCompletePath
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", "", fmt.Errorf("openai: create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+b.cfg.Token)
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("openai: send request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("openai: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	// OpenAI レスポンスからテキストを取得
+	var openAIResp openAIResponse
+	if err := json.Unmarshal(respBytes, &openAIResp); err != nil {
+		return "", "", fmt.Errorf("openai: unmarshal response: %w", err)
+	}
+
+	if len(openAIResp.Choices) == 0 {
+		return "", "", fmt.Errorf("openai: empty choices in response")
+	}
+
+	return parseExtractTargetResponse(openAIResp.Choices[0].Message.Content)
+}
+
 // openAIResponse は Chat Completions API のレスポンス構造体（必要最小限）。
 type openAIResponse struct {
 	Choices []struct {

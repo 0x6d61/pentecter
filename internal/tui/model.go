@@ -6,9 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -59,7 +58,7 @@ type Model struct {
 	selected int // index into targets
 	list     list.Model
 	viewport viewport.Model
-	input    textinput.Model
+	input    textarea.Model
 
 	// Agent チームとの通信チャネル（nil = デモモード）
 	team           *agent.Team              // 動的ターゲット追加用（nil = デモモード）
@@ -73,9 +72,6 @@ type Model struct {
 	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
 	Runner *tools.CommandRunner
 
-	// multilineBuffer は Alt+Enter（または Ctrl+Enter）で蓄積された複数行入力。
-	// Enter 送信時に現在の入力と結合して全テキストを送信する。
-	multilineBuffer []string
 	// logsExpanded が true の場合、すべてのログ内容を折りたたまずに表示する。
 	logsExpanded bool
 
@@ -156,20 +152,21 @@ func NewWithTargets(targets []*agent.Target) Model {
 		Bold(true).
 		Padding(0, 1)
 
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.Placeholder = "Chat with AI or enter command..."
-	ti.CharLimit = 500
-	ti.ShowSuggestions = true
-	ti.SetSuggestions([]string{"/model", "/approve", "/target"})
-	ti.KeyMap.AcceptSuggestion = key.NewBinding(key.WithKeys("right"))
-	ti.Focus() // Start with input focused
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.Placeholder = "Chat with AI or enter command..."
+	ta.CharLimit = 2000
+	ta.MaxHeight = 5       // 最大5行まで拡張
+	ta.ShowLineNumbers = false
+	ta.Focus()
+	// Enter で送信（Update() で処理）、Ctrl+Enter/Alt+Enter で改行
+	ta.KeyMap.InsertNewline.SetKeys("ctrl+enter", "alt+enter")
 
 	return Model{
 		targets:         targets,
 		selected:        0,
 		list:            l,
-		input:           ti,
+		input:           ta,
 		focus:           FocusInput,
 		agentApproveMap: make(map[int]chan<- bool),
 		agentUserMsgMap: make(map[int]chan<- string),
