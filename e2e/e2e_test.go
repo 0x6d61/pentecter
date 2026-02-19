@@ -271,6 +271,9 @@ func (m *mockBrainForE2E) Think(_ context.Context, _ brain.Input) (*schema.Actio
 	m.idx++
 	return &a, nil
 }
+func (m *mockBrainForE2E) ExtractTarget(_ context.Context, userText string) (string, string, error) {
+	return "", userText, nil
+}
 func (m *mockBrainForE2E) Provider() string { return "mock-e2e" }
 
 // TestE2E_NmapThenEntity は実 nmap + モック Brain でエンティティ収集を検証する。

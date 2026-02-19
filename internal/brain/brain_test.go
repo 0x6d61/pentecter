@@ -506,3 +506,140 @@ func TestEnsureV1Path_URLEndingWithV1Slash(t *testing.T) {
 		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionThink)
 	}
 }
+
+// --- ExtractTarget 統合テスト ---
+
+func TestAnthropicBrain_ExtractTarget_WithHost(t *testing.T) {
+	extractJSON := `{"host":"eighteen.htb","instruction":"攻略して"}`
+	srv := mockAnthropicServer(t, anthropicResponse(extractJSON))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderAnthropic,
+		Model:    "claude-sonnet-4-6",
+		AuthType: brain.AuthAPIKey,
+		Token:    "sk-ant-test-key",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New: %v", err)
+	}
+
+	host, instruction, err := b.ExtractTarget(context.Background(), "eighteen.htbを攻略して")
+	if err != nil {
+		t.Fatalf("ExtractTarget: %v", err)
+	}
+	if host != "eighteen.htb" {
+		t.Errorf("host: got %q, want %q", host, "eighteen.htb")
+	}
+	if instruction != "攻略して" {
+		t.Errorf("instruction: got %q, want %q", instruction, "攻略して")
+	}
+}
+
+func TestAnthropicBrain_ExtractTarget_NoHost(t *testing.T) {
+	extractJSON := `{"host":"","instruction":"Webサーバーのセキュリティを診断"}`
+	srv := mockAnthropicServer(t, anthropicResponse(extractJSON))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderAnthropic,
+		Model:    "claude-sonnet-4-6",
+		AuthType: brain.AuthAPIKey,
+		Token:    "sk-ant-test-key",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New: %v", err)
+	}
+
+	host, instruction, err := b.ExtractTarget(context.Background(), "Webサーバーのセキュリティを診断")
+	if err != nil {
+		t.Fatalf("ExtractTarget: %v", err)
+	}
+	if host != "" {
+		t.Errorf("host: got %q, want empty", host)
+	}
+	if instruction != "Webサーバーのセキュリティを診断" {
+		t.Errorf("instruction: got %q, want %q", instruction, "Webサーバーのセキュリティを診断")
+	}
+}
+
+func TestOpenAIBrain_ExtractTarget_WithHost(t *testing.T) {
+	extractJSON := `{"host":"192.168.1.1","instruction":"会社のサーバーをスキャンして"}`
+	srv := mockOpenAIServer(t, openAIResponse(extractJSON))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOpenAI,
+		Model:    "gpt-4o",
+		AuthType: brain.AuthAPIKey,
+		Token:    "sk-openai-test",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New: %v", err)
+	}
+
+	host, instruction, err := b.ExtractTarget(context.Background(), "会社のサーバー 192.168.1.1 をスキャンして")
+	if err != nil {
+		t.Fatalf("ExtractTarget: %v", err)
+	}
+	if host != "192.168.1.1" {
+		t.Errorf("host: got %q, want %q", host, "192.168.1.1")
+	}
+	if instruction != "会社のサーバーをスキャンして" {
+		t.Errorf("instruction: got %q, want %q", instruction, "会社のサーバーをスキャンして")
+	}
+}
+
+func TestOllamaBrain_ExtractTarget_WithHost(t *testing.T) {
+	extractJSON := `{"host":"target.local","instruction":"scan it"}`
+	srv := mockOpenAIServer(t, openAIResponse(extractJSON))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOllama,
+		Model:    "llama3.2",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New (ollama): %v", err)
+	}
+
+	host, instruction, err := b.ExtractTarget(context.Background(), "target.local を scan して")
+	if err != nil {
+		t.Fatalf("ExtractTarget: %v", err)
+	}
+	if host != "target.local" {
+		t.Errorf("host: got %q, want %q", host, "target.local")
+	}
+	if instruction != "scan it" {
+		t.Errorf("instruction: got %q, want %q", instruction, "scan it")
+	}
+}
+
+func TestAnthropicBrain_ExtractTarget_APIError(t *testing.T) {
+	// エラーレスポンスを返すサーバー
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal server error"}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderAnthropic,
+		Model:    "claude-sonnet-4-6",
+		AuthType: brain.AuthAPIKey,
+		Token:    "sk-ant-test-key",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New: %v", err)
+	}
+
+	_, _, err = b.ExtractTarget(context.Background(), "eighteen.htbを攻略して")
+	if err == nil {
+		t.Error("expected error for API error response, got nil")
+	}
+}

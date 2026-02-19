@@ -51,6 +51,10 @@ func (m *slowMockBrain) Think(ctx context.Context, _ brain.Input) (*schema.Actio
 	return m.actions[i], nil
 }
 
+func (m *slowMockBrain) ExtractTarget(_ context.Context, userText string) (string, string, error) {
+	return "", userText, nil
+}
+
 func (m *slowMockBrain) Provider() string { return "slow-mock" }
 
 func TestSmartSubAgent_Run_MultiTurn(t *testing.T) {

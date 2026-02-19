@@ -231,8 +231,14 @@ func (l *Loop) Run(ctx context.Context) {
 
 		case schema.ActionComplete:
 			l.target.Status = StatusPwned
-			l.emit(Event{Type: EventComplete, Message: "Assessment complete"})
-			return
+			l.emit(Event{Type: EventComplete, Message: "Assessment complete — waiting for further instructions (report, cleanup, etc.)"})
+			// PWNED 後もユーザー指示を待ち続ける
+			userMsg = l.waitForUserMsg(ctx)
+			if userMsg == "" {
+				return // context cancelled
+			}
+			l.pendingUserMsg = userMsg
+			// メインループの次のイテレーションで処理される
 
 		default:
 			l.emit(Event{Type: EventLog, Source: SourceSystem,

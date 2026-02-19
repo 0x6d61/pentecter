@@ -36,3 +36,9 @@ func (b *ollamaBrain) Provider() string { return string(ProviderOllama) }
 func (b *ollamaBrain) Think(ctx context.Context, input Input) (*schema.Action, error) {
 	return b.inner.Think(ctx, input)
 }
+
+// ExtractTarget はユーザーテキストから LLM を使ってターゲットホストを抽出する。
+// OpenAI 互換 API 経由で委譲する。
+func (b *ollamaBrain) ExtractTarget(ctx context.Context, userText string) (string, string, error) {
+	return b.inner.ExtractTarget(ctx, userText)
+}

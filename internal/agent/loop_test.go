@@ -37,6 +37,10 @@ func (m *mockBrain) Think(_ context.Context, input brain.Input) (*schema.Action,
 	return a, nil
 }
 
+func (m *mockBrain) ExtractTarget(_ context.Context, userText string) (string, string, error) {
+	return "", userText, nil
+}
+
 func (m *mockBrain) Provider() string { return "mock" }
 
 // newTestLoop はテスト用 Loop を構築する（空レジストリ + 基本ブラックリスト）。
@@ -899,6 +903,69 @@ func TestLoop_Run_KillTask(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Complete_WaitsForUserMsg(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// 1st: complete (PWNED), then user sends "Write a report"
+	// 2nd: think("Report generated"), 3rd: complete again + context cancel
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "pwned the target", Action: schema.ActionComplete},
+			{Thought: "Report generated", Action: schema.ActionThink},
+			// 3rd call → default complete (mockBrain returns ActionComplete when idx >= len(actions))
+		},
+	}
+
+	loop, events, _, userMsg := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotFirstComplete := false
+	gotSecondComplete := false
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete && !gotFirstComplete {
+				gotFirstComplete = true
+				// Verify status is PWNED
+				if target.Status != agent.StatusPwned {
+					t.Errorf("expected StatusPwned after first complete, got %v", target.Status)
+				}
+				// Send user message to resume the loop
+				go func() {
+					userMsg <- "Write a report"
+				}()
+			} else if e.Type == agent.EventComplete && gotFirstComplete {
+				gotSecondComplete = true
+				// After second complete, cancel context to break out of waitForUserMsg
+				cancel()
+			}
+			if gotSecondComplete {
+				// Verify that Brain received the user message
+				foundUserMsg := false
+				for _, inp := range mb.inputs {
+					if inp.UserMessage == "Write a report" {
+						foundUserMsg = true
+						break
+					}
+				}
+				if !foundUserMsg {
+					t.Error("expected 'Write a report' to be delivered to Brain.Think()")
+				}
+				// Verify at least 3 Think() calls: complete, think, complete
+				if len(mb.inputs) < 3 {
+					t.Errorf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for second EventComplete after PWNED resume")
 		}
 	}
 }

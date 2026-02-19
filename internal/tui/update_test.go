@@ -133,6 +133,43 @@ func TestParseTargetInput_IPv6(t *testing.T) {
 	}
 }
 
+func TestParseTargetInput_DomainDirect(t *testing.T) {
+	host, ok := parseTargetInput("eighteen.htb")
+	if !ok {
+		t.Fatal("expected ok=true for domain name")
+	}
+	if host != "eighteen.htb" {
+		t.Errorf("expected host 'eighteen.htb', got %q", host)
+	}
+}
+
+func TestParseTargetInput_TargetCommandDomain(t *testing.T) {
+	host, ok := parseTargetInput("/target eighteen.htb")
+	if !ok {
+		t.Fatal("expected ok=true for /target with domain")
+	}
+	if host != "eighteen.htb" {
+		t.Errorf("expected host 'eighteen.htb', got %q", host)
+	}
+}
+
+func TestParseTargetInput_SubdomainDirect(t *testing.T) {
+	host, ok := parseTargetInput("sub.domain.co.jp")
+	if !ok {
+		t.Fatal("expected ok=true for subdomain")
+	}
+	if host != "sub.domain.co.jp" {
+		t.Errorf("expected host 'sub.domain.co.jp', got %q", host)
+	}
+}
+
+func TestParseTargetInput_PlainWord_NoDot(t *testing.T) {
+	_, ok := parseTargetInput("localhost")
+	if ok {
+		t.Error("expected ok=false for single word without dot")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // targetByID
 // ---------------------------------------------------------------------------
@@ -677,19 +714,21 @@ func TestHandleAgentEvent_EventCommandResult(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// extractIPFromText — invalid IP to cover ParseIP failure branch
+// extractHostFromText — invalid IP to cover ParseIP failure branch
 // ---------------------------------------------------------------------------
 
-func TestExtractIPFromText_InvalidIP(t *testing.T) {
-	// 999.999.999.999 matches the regex pattern but fails net.ParseIP
-	_, _, ok := extractIPFromText("scan 999.999.999.999 please")
+func TestExtractHostFromText_InvalidIP(t *testing.T) {
+	// 999.999.999.999 matches the IPv4 regex pattern but fails net.ParseIP;
+	// however it also does NOT match domainRe (purely numeric labels),
+	// so this should return ok=false.
+	_, _, ok := extractHostFromText("scan 999.999.999.999 please")
 	if ok {
 		t.Error("expected ok=false for invalid IP 999.999.999.999")
 	}
 }
 
-func TestExtractIPFromText_InvalidIP_300(t *testing.T) {
-	_, _, ok := extractIPFromText("300.400.500.600")
+func TestExtractHostFromText_InvalidIP_300(t *testing.T) {
+	_, _, ok := extractHostFromText("300.400.500.600")
 	if ok {
 		t.Error("expected ok=false for 300.400.500.600")
 	}
@@ -844,22 +883,21 @@ func TestUpdate_WindowSizeMsg(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// submitInput — multiline buffer
+// submitInput — textarea multiline support
 // ---------------------------------------------------------------------------
 
-func TestSubmitInput_MultilineBuffer(t *testing.T) {
+func TestSubmitInput_MultilineViaTextarea(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
 
-	// Simulate Ctrl+Enter: accumulate first line
-	m.multilineBuffer = []string{"line 1", "line 2"}
-	m.input.SetValue("line 3")
+	// textarea.SetValue supports multiline text directly
+	m.input.SetValue("line 1\nline 2\nline 3")
 
 	m.submitInput()
 
-	// Should have combined all lines
+	// Should have submitted all lines as a single message
 	lastLog := t1.Logs[len(t1.Logs)-1]
 	if !strings.Contains(lastLog.Message, "line 1") {
 		t.Errorf("expected multiline message to contain 'line 1', got %q", lastLog.Message)
@@ -867,134 +905,23 @@ func TestSubmitInput_MultilineBuffer(t *testing.T) {
 	if !strings.Contains(lastLog.Message, "line 3") {
 		t.Errorf("expected multiline message to contain 'line 3', got %q", lastLog.Message)
 	}
-	// Buffer should be cleared
-	if len(m.multilineBuffer) != 0 {
-		t.Error("expected multiline buffer to be cleared after submit")
+	// Input should be cleared after submit
+	if m.input.Value() != "" {
+		t.Errorf("expected input to be cleared after submit, got %q", m.input.Value())
 	}
 }
 
-func TestUpdate_AltEnter_MultilineAccumulate(t *testing.T) {
-	t1 := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{t1})
-	m.handleResize(120, 40)
-	m.ready = true
-	m.focus = FocusInput
-	m.input.SetValue("first line")
-
-	// Simulate Alt+Enter
-	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	rm := result.(Model)
-
-	if len(rm.multilineBuffer) != 1 {
-		t.Fatalf("expected 1 line in buffer, got %d", len(rm.multilineBuffer))
-	}
-	if rm.multilineBuffer[0] != "first line" {
-		t.Errorf("expected 'first line' in buffer, got %q", rm.multilineBuffer[0])
-	}
-	if rm.input.Value() != "" {
-		t.Error("expected input to be cleared after Alt+Enter")
-	}
-}
-
-func TestUpdate_AltEnter_EmptyInput_NoAccumulate(t *testing.T) {
-	t1 := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{t1})
-	m.handleResize(120, 40)
-	m.ready = true
-	m.focus = FocusInput
-	m.input.SetValue("")
-
-	// Simulate Alt+Enter with empty input — should not accumulate
-	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	rm := result.(Model)
-
-	if len(rm.multilineBuffer) != 0 {
-		t.Errorf("expected 0 lines in buffer for empty input, got %d", len(rm.multilineBuffer))
-	}
-}
-
-func TestUpdate_AltEnter_MultipleLines(t *testing.T) {
-	t1 := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{t1})
-	m.handleResize(120, 40)
-	m.ready = true
-	m.focus = FocusInput
-
-	// Accumulate first line
-	m.input.SetValue("line one")
-	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	m = result.(Model)
-
-	// Accumulate second line
-	m.input.SetValue("line two")
-	result, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	m = result.(Model)
-
-	if len(m.multilineBuffer) != 2 {
-		t.Fatalf("expected 2 lines in buffer, got %d", len(m.multilineBuffer))
-	}
-	if m.multilineBuffer[0] != "line one" {
-		t.Errorf("expected first line 'line one', got %q", m.multilineBuffer[0])
-	}
-	if m.multilineBuffer[1] != "line two" {
-		t.Errorf("expected second line 'line two', got %q", m.multilineBuffer[1])
-	}
-
-	// Now submit with Enter
-	m.input.SetValue("line three")
-	logsBefore := len(t1.Logs)
-	result, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = result.(Model)
-
-	// Should have submitted all 3 lines combined
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log after submit, got %d", len(t1.Logs)-logsBefore)
-	}
-	lastLog := t1.Logs[len(t1.Logs)-1]
-	if !strings.Contains(lastLog.Message, "line one") ||
-		!strings.Contains(lastLog.Message, "line two") ||
-		!strings.Contains(lastLog.Message, "line three") {
-		t.Errorf("expected all 3 lines in message, got %q", lastLog.Message)
-	}
-	// Buffer should be cleared
-	if len(m.multilineBuffer) != 0 {
-		t.Error("expected multiline buffer to be cleared after submit")
-	}
-}
-
-func TestUpdate_Esc_ClearsMultilineBuffer(t *testing.T) {
-	t1 := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{t1})
-	m.handleResize(120, 40)
-	m.ready = true
-	m.focus = FocusInput
-
-	// Accumulate a line
-	m.multilineBuffer = []string{"buffered line"}
-
-	// Press Esc to discard multiline buffer
-	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	rm := result.(Model)
-
-	if len(rm.multilineBuffer) != 0 {
-		t.Errorf("expected multiline buffer to be cleared on Esc, got %d lines", len(rm.multilineBuffer))
-	}
-}
-
-func TestSubmitInput_MultilineBuffer_EmptySubmit(t *testing.T) {
+func TestSubmitInput_TextareaReset(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
 
-	// Accumulate lines then submit with empty current input
-	m.multilineBuffer = []string{"only line"}
-	m.input.SetValue("")
-
-	logsBefore := len(t1.Logs)
+	m.input.SetValue("some text")
 	m.submitInput()
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log from buffer content, got %d", len(t1.Logs)-logsBefore)
+	// After submit, textarea should be reset (empty)
+	if m.input.Value() != "" {
+		t.Errorf("expected textarea to be reset after submit, got %q", m.input.Value())
 	}
 }
