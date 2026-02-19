@@ -27,6 +27,20 @@ const (
 	FocusInput                      // bottom: input bar
 )
 
+// InputMode tracks whether the input bar is in normal text mode or select mode.
+type InputMode int
+
+const (
+	InputNormal InputMode = iota // normal text input
+	InputSelect                  // interactive selection UI
+)
+
+// SelectOption represents a single option in the select UI.
+type SelectOption struct {
+	Label string
+	Value string
+}
+
 // leftPaneOuterWidth is the total rendered width of the left pane (borders included).
 const leftPaneOuterWidth = 32
 
@@ -56,6 +70,13 @@ type Model struct {
 
 	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
 	Runner *tools.CommandRunner
+
+	// Select mode fields — used by /model, /approve to show interactive selection.
+	inputMode      InputMode
+	selectOptions  []SelectOption
+	selectIndex    int
+	selectTitle    string
+	selectCallback func(m *Model, value string)
 }
 
 // AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。
@@ -258,6 +279,16 @@ func (m *Model) syncListItems() {
 		items[i] = targetListItem{t: t}
 	}
 	m.list.SetItems(items)
+}
+
+// showSelect activates the select UI with the given title, options, and callback.
+// The callback is invoked when the user presses Enter on an option.
+func (m *Model) showSelect(title string, options []SelectOption, callback func(m *Model, value string)) {
+	m.inputMode = InputSelect
+	m.selectOptions = options
+	m.selectIndex = 0
+	m.selectTitle = title
+	m.selectCallback = callback
 }
 
 // buildDemoTargets creates representative demo targets for Phase 1 display.

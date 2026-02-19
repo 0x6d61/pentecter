@@ -102,15 +102,22 @@ func TestHandleModelCommand_ListProviders(t *testing.T) {
 
 	m.handleModelCommand("/model")
 
-	// Should have logged available providers
+	// With providers available, should show select UI instead of log
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	}
+	if len(m.selectOptions) < 1 {
+		t.Error("expected at least 1 provider in select options")
+	}
+	// Verify anthropic is in the options
 	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && len(log.Message) > 0 {
+	for _, opt := range m.selectOptions {
+		if opt.Value == "anthropic" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected system log about available providers")
+		t.Error("expected 'anthropic' in select options")
 	}
 }
 
@@ -163,14 +170,12 @@ func TestHandleApproveCommand_ShowState(t *testing.T) {
 
 	m.handleApproveCommand("/approve")
 
-	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: OFF" {
-			found = true
-		}
+	// /approve without args now shows select UI instead of logging state
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
 	}
-	if !found {
-		t.Error("expected system log showing auto-approve state OFF")
+	if len(m.selectOptions) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(m.selectOptions))
 	}
 }
 

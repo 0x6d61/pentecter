@@ -56,6 +56,11 @@ SECURITY ASSESSMENT GUIDELINES:
 - Prefer targeted, precise commands over broad scans
 - Always include findings in your thought process
 
+USER INTERACTION:
+- When a "Security Professional's Instruction" is present, you MUST address it in your thought and action
+- Use "think" action to respond to questions or provide analysis when no command is needed
+- The security professional's input always takes priority over autonomous assessment
+
 STALL PREVENTION:
 - Do NOT repeat the same or similar command if the previous attempt returned no useful results
 - If a host appears unreachable after 2-3 scan attempts, use "complete" with a note that the host is unreachable
@@ -95,6 +100,12 @@ func buildPrompt(input Input) string {
 	sb.WriteString(input.TargetSnapshot)
 	sb.WriteString("\n```\n")
 
+	// Last Command セクション（Target State の後、Last Assessment Output の前）
+	if input.LastCommand != "" {
+		sb.WriteString("\n## Last Command\n")
+		fmt.Fprintf(&sb, "`%s` → exit code: %d\n", input.LastCommand, input.LastExitCode)
+	}
+
 	if input.ToolOutput != "" {
 		sb.WriteString("\n## Last Assessment Output\n")
 		sb.WriteString("```\n")
@@ -102,13 +113,21 @@ func buildPrompt(input Input) string {
 		sb.WriteString("\n```\n")
 	}
 
-	if input.UserMessage != "" {
-		sb.WriteString("\n## Security Professional's Instruction\n")
-		sb.WriteString(input.UserMessage)
+	// Recent Command History セクション（Last Assessment Output の後）
+	if input.CommandHistory != "" {
+		sb.WriteString("\n## Recent Command History\n")
+		sb.WriteString(input.CommandHistory)
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\nDetermine the next security assessment action. Respond with JSON only.")
+	if input.UserMessage != "" {
+		sb.WriteString("\n## Security Professional's Instruction (PRIORITY)\n")
+		sb.WriteString(input.UserMessage)
+		sb.WriteString("\n")
+		sb.WriteString("\nAddress the professional's instruction first. Respond with JSON only.")
+	} else {
+		sb.WriteString("\nDetermine the next security assessment action. Respond with JSON only.")
+	}
 	return sb.String()
 }
 

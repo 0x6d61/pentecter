@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
@@ -18,6 +19,14 @@ const (
 	// maxConsecutiveFailures は連続失敗でユーザーに方針を聞く閾値。
 	maxConsecutiveFailures = 3
 )
+
+// commandEntry はコマンド履歴の1エントリを保持する。
+type commandEntry struct {
+	Command  string
+	ExitCode int
+	Summary  string // 出力の先頭200文字（切り捨て済み）
+	Time     time.Time
+}
 
 // Loop は Brain・CommandRunner・TUI を接続するオーケストレーター。
 //
@@ -43,6 +52,11 @@ type Loop struct {
 
 	lastToolOutput      string
 	consecutiveFailures int
+
+	// Brain コンテキスト強化用：コマンド履歴
+	lastCommand  string         // 直前に実行したコマンド
+	lastExitCode int            // 直前のコマンドの exit code
+	history      []commandEntry // 直近の実行履歴（最大10件）
 }
 
 // NewLoop は Loop を構築する。
@@ -115,6 +129,9 @@ func (l *Loop) Run(ctx context.Context) {
 			action, brainErr = l.br.Think(ctx, brain.Input{
 				TargetSnapshot: l.buildSnapshot(),
 				ToolOutput:     l.lastToolOutput,
+				LastCommand:    l.lastCommand,
+				LastExitCode:   l.lastExitCode,
+				CommandHistory: l.buildHistory(),
 				UserMessage:    userMsg,
 			})
 			if brainErr == nil {
@@ -183,6 +200,7 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 		return
 	}
 
+	l.lastCommand = command
 	l.emit(Event{Type: EventLog, Source: SourceTool, Message: command})
 	l.target.Status = StatusRunning
 
@@ -207,6 +225,7 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 
 // handlePropose は Proposal を TUI に表示し承認を待つ。
 func (l *Loop) handlePropose(ctx context.Context, command, description string) bool {
+	l.lastCommand = command
 	p := &Proposal{
 		Description: description,
 		Tool:        command,
@@ -363,6 +382,24 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 		l.target.AddEntities(result.Entities)
 		l.lastToolOutput = result.Truncated
 	}
+
+	// コマンド履歴を記録
+	entry := commandEntry{
+		Command:  l.lastCommand,
+		ExitCode: result.ExitCode,
+		Time:     result.FinishedAt,
+	}
+	if len(result.Truncated) > 200 {
+		entry.Summary = result.Truncated[:200]
+	} else {
+		entry.Summary = result.Truncated
+	}
+	l.history = append(l.history, entry)
+	if len(l.history) > 10 {
+		l.history = l.history[len(l.history)-10:]
+	}
+	l.lastExitCode = result.ExitCode
+
 	l.target.Status = StatusScanning
 }
 
@@ -382,6 +419,23 @@ func (l *Loop) drainUserMsg() string {
 	default:
 		return ""
 	}
+}
+
+// buildHistory は直近5件のコマンド履歴をテキストで返す。
+func (l *Loop) buildHistory() string {
+	if len(l.history) == 0 {
+		return ""
+	}
+	n := len(l.history)
+	start := 0
+	if n > 5 {
+		start = n - 5
+	}
+	var sb strings.Builder
+	for i, e := range l.history[start:] {
+		fmt.Fprintf(&sb, "%d. `%s` → exit %d\n", i+1, e.Command, e.ExitCode)
+	}
+	return sb.String()
 }
 
 func (l *Loop) buildSnapshot() string {

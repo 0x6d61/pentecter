@@ -53,6 +53,12 @@ type Input struct {
 	TargetSnapshot string
 	// ToolOutput は直前のツール実行結果（切り捨て済み）。空でも可。
 	ToolOutput string
+	// LastCommand は直前に実行したコマンド (e.g. "nmap -sV 10.0.0.5")。空でも可。
+	LastCommand string
+	// LastExitCode は直前のコマンドの exit code (0 = success)。
+	LastExitCode int
+	// CommandHistory は直近N件のコマンド履歴の要約テキスト。空でも可。
+	CommandHistory string
 	// UserMessage はユーザーからの自然言語指示（チャット入力）。空でも可。
 	UserMessage string
 }
