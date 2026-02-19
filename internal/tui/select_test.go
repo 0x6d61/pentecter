@@ -258,7 +258,7 @@ func TestApproveCommand_SelectCallback_Off(t *testing.T) {
 	}
 }
 
-func TestModelCommand_NoArgs_ShowsSelect(t *testing.T) {
+func TestModelCommand_NoArgs_ShowsProviderSelect(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
 	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -279,6 +279,91 @@ func TestModelCommand_NoArgs_ShowsSelect(t *testing.T) {
 	// Should have at least 1 provider option (anthropic)
 	if len(m.selectOptions) < 1 {
 		t.Errorf("expected at least 1 provider option, got %d", len(m.selectOptions))
+	}
+	if m.selectTitle != "Select provider:" {
+		t.Errorf("expected provider select title, got %q", m.selectTitle)
+	}
+}
+
+func TestModelCommand_ProviderThenModelSelect(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	target := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{target})
+
+	var finalHint brain.ConfigHint
+	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
+		finalHint = hint
+		return nil, nil
+	}
+
+	m.handleModelCommand("/model")
+
+	// Step 1: Provider select should be showing
+	if m.inputMode != InputSelect {
+		t.Fatal("expected InputSelect mode for provider selection")
+	}
+
+	// Select anthropic (first option)
+	m.handleSelectKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Step 2: Should now show model select (not return to normal)
+	if m.inputMode != InputSelect {
+		t.Fatal("expected InputSelect mode for model selection after provider")
+	}
+	if m.selectTitle != "Select model (anthropic):" {
+		t.Errorf("expected model select title, got %q", m.selectTitle)
+	}
+	// Should have model options
+	if len(m.selectOptions) < 2 {
+		t.Errorf("expected at least 2 model options for anthropic, got %d", len(m.selectOptions))
+	}
+
+	// Select a model
+	m.handleSelectKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Should now be back to normal mode
+	if m.inputMode != InputNormal {
+		t.Error("expected InputNormal after model selection")
+	}
+	// BrainFactory should have been called with both provider and model
+	if finalHint.Provider != brain.ProviderAnthropic {
+		t.Errorf("expected anthropic provider, got %q", finalHint.Provider)
+	}
+	if finalHint.Model == "" {
+		t.Error("expected non-empty model after two-step selection")
+	}
+}
+
+func TestModelModels_ReturnsModelsForProvider(t *testing.T) {
+	anthropicModels := modelsForProvider(brain.ProviderAnthropic)
+	if len(anthropicModels) == 0 {
+		t.Error("expected anthropic models to be non-empty")
+	}
+	// Check that claude-sonnet-4-6 is included
+	found := false
+	for _, m := range anthropicModels {
+		if m.Value == "claude-sonnet-4-6" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected claude-sonnet-4-6 in anthropic models")
+	}
+
+	openaiModels := modelsForProvider(brain.ProviderOpenAI)
+	if len(openaiModels) == 0 {
+		t.Error("expected openai models to be non-empty")
+	}
+
+	ollamaModels := modelsForProvider(brain.ProviderOllama)
+	if len(ollamaModels) == 0 {
+		t.Error("expected ollama models to be non-empty")
 	}
 }
 

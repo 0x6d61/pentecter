@@ -354,14 +354,41 @@ func (m *Model) handleApproveCommand(text string) {
 	}
 }
 
+// modelsForProvider はプロバイダーごとの代表的なモデル一覧を返す。
+func modelsForProvider(p brain.Provider) []SelectOption {
+	switch p {
+	case brain.ProviderAnthropic:
+		return []SelectOption{
+			{Label: "claude-sonnet-4-6 (recommended)", Value: "claude-sonnet-4-6"},
+			{Label: "claude-opus-4-6", Value: "claude-opus-4-6"},
+			{Label: "claude-haiku-4-5", Value: "claude-haiku-4-5-20251001"},
+		}
+	case brain.ProviderOpenAI:
+		return []SelectOption{
+			{Label: "gpt-4o (recommended)", Value: "gpt-4o"},
+			{Label: "gpt-4o-mini", Value: "gpt-4o-mini"},
+			{Label: "o3-mini", Value: "o3-mini"},
+		}
+	case brain.ProviderOllama:
+		return []SelectOption{
+			{Label: "llama3.2 (recommended)", Value: "llama3.2"},
+			{Label: "llama3.2:3b", Value: "llama3.2:3b"},
+			{Label: "qwen2.5:7b", Value: "qwen2.5:7b"},
+			{Label: "gemma2:9b", Value: "gemma2:9b"},
+		}
+	default:
+		return nil
+	}
+}
+
 // handleModelCommand processes /model commands.
-// /model          → show interactive select UI with available providers
+// /model          → show interactive 2-step select UI (provider → model)
 // /model <p>      → switch to provider with default model (backward compatible)
 // /model <p>/<m>  → switch to provider with specific model (backward compatible)
 func (m *Model) handleModelCommand(text string) {
 	arg := strings.TrimSpace(strings.TrimPrefix(text, "/model"))
 
-	// /model (no args) → show select UI with available providers
+	// /model (no args) → show 2-step select UI: provider → model
 	if arg == "" {
 		detected := brain.DetectAvailableProviders()
 		if len(detected) == 0 {
@@ -380,8 +407,22 @@ func (m *Model) handleModelCommand(text string) {
 		m.showSelect(
 			"Select provider:",
 			options,
-			func(m *Model, value string) {
-				m.switchModel(brain.Provider(value), "")
+			func(m *Model, providerValue string) {
+				provider := brain.Provider(providerValue)
+				models := modelsForProvider(provider)
+				if len(models) == 0 {
+					// プロバイダーにモデル一覧がない場合はデフォルトモデルで切り替え
+					m.switchModel(provider, "")
+					return
+				}
+				// Step 2: モデル選択
+				m.showSelect(
+					fmt.Sprintf("Select model (%s):", providerValue),
+					models,
+					func(m *Model, modelValue string) {
+						m.switchModel(provider, modelValue)
+					},
+				)
 			},
 		)
 		return
@@ -497,12 +538,19 @@ func (m *Model) handleSelectKey(msg tea.KeyMsg) {
 			m.selectIndex++
 		}
 	case tea.KeyEnter:
-		if m.selectCallback != nil && len(m.selectOptions) > 0 {
-			m.selectCallback(m, m.selectOptions[m.selectIndex].Value)
+		cb := m.selectCallback
+		value := ""
+		if len(m.selectOptions) > 0 {
+			value = m.selectOptions[m.selectIndex].Value
 		}
+		// 先にリセット（コールバック内で showSelect が再設定する可能性がある）
 		m.inputMode = InputNormal
 		m.selectOptions = nil
 		m.selectCallback = nil
+		// コールバック実行（内部で showSelect が呼ばれると InputSelect に戻る）
+		if cb != nil && value != "" {
+			cb(m, value)
+		}
 	case tea.KeyEscape:
 		m.inputMode = InputNormal
 		m.selectOptions = nil
