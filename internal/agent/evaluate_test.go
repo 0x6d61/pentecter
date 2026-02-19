@@ -248,6 +248,53 @@ func TestEvaluateResult_ExitCodeZero_SuccessfulOutput(t *testing.T) {
 	}
 }
 
+func TestBuildHistory_WithSummary(t *testing.T) {
+	evCh := make(chan Event, 32)
+	l := &Loop{
+		target: NewTarget(1, "10.0.0.1"),
+		events: evCh,
+		history: []commandEntry{
+			{Command: "nmap -sV 10.0.0.5", ExitCode: 0, Summary: "PORT 22/tcp open ssh"},
+			{Command: "curl http://10.0.0.5", ExitCode: 0, Summary: "HTTP/1.1 200 OK"},
+			{Command: "nikto -h 10.0.0.5", ExitCode: 1, Summary: ""},
+		},
+	}
+	got := l.buildHistory()
+
+	// エントリ1: summary あり → "exit 0: PORT 22/tcp open ssh"
+	if !containsCI(got, "exit 0: PORT 22/tcp open ssh") {
+		t.Errorf("expected summary in history entry 1, got:\n%s", got)
+	}
+	// エントリ2: summary あり → "exit 0: HTTP/1.1 200 OK"
+	if !containsCI(got, "exit 0: HTTP/1.1 200 OK") {
+		t.Errorf("expected summary in history entry 2, got:\n%s", got)
+	}
+	// エントリ3: summary なし → "exit 1" のみ（コロンなし）
+	if containsCI(got, "exit 1:") {
+		t.Errorf("entry 3 has empty summary, should not have colon after exit code, got:\n%s", got)
+	}
+	if !containsCI(got, "exit 1") {
+		t.Errorf("expected exit code 1 in history entry 3, got:\n%s", got)
+	}
+}
+
+func TestBuildHistory_EmptySummary_NoColon(t *testing.T) {
+	evCh := make(chan Event, 32)
+	l := &Loop{
+		target: NewTarget(1, "10.0.0.1"),
+		events: evCh,
+		history: []commandEntry{
+			{Command: "whoami", ExitCode: 0, Summary: ""},
+		},
+	}
+	got := l.buildHistory()
+
+	// summary が空なら "exit 0" のみで、コロンは付かない
+	if containsCI(got, "exit 0:") {
+		t.Errorf("empty summary should not produce colon, got:\n%s", got)
+	}
+}
+
 func TestEvaluateResult_Repetition_CountsAsFailure(t *testing.T) {
 	evCh := make(chan Event, 32)
 	l := &Loop{

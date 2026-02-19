@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/agent"
+	"github.com/mattn/go-runewidth"
 )
 
 // ---------------------------------------------------------------------------
@@ -195,6 +196,23 @@ func TestRenderInputBar_FocusInput(t *testing.T) {
 	}
 }
 
+func TestRenderInputBar_NoDoublePrompt(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.focus = FocusInput
+
+	output := m.renderInputBar()
+
+	// Should contain exactly one "> " prefix, not "> > "
+	if strings.Contains(output, "> >") {
+		t.Error("input bar should not contain double prompt '> >'")
+	}
+	if !strings.Contains(output, ">") {
+		t.Error("input bar should contain prompt '>'")
+	}
+}
+
 func TestRenderInputBar_SelectMode(t *testing.T) {
 	m := NewWithTargets(nil)
 	m.handleResize(120, 40)
@@ -325,6 +343,76 @@ func TestSoftWrap_EmptyString(t *testing.T) {
 	result := softWrap("", 40)
 	if result != "" {
 		t.Errorf("empty string should return empty, got %q", result)
+	}
+}
+
+func TestSoftWrap_CJKText(t *testing.T) {
+	// Each CJK character takes 2 display columns
+	// "日本語テスト" = 6 chars × 2 columns = 12 columns
+	result := softWrap("日本語テスト データ", 10)
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		w := runewidth.StringWidth(line)
+		if w > 10 {
+			t.Errorf("CJK line exceeds maxWidth: %q (display width=%d)", line, w)
+		}
+	}
+	if len(lines) < 2 {
+		t.Errorf("expected CJK text to wrap, got single line: %q", result)
+	}
+}
+
+func TestSoftWrap_CJKSingleLongWord(t *testing.T) {
+	// CJK text without spaces should be force-broken at display width
+	result := softWrap("日本語テストデータ確認中", 8)
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		w := runewidth.StringWidth(line)
+		if w > 8 {
+			t.Errorf("CJK line exceeds maxWidth after force-break: %q (display width=%d)", line, w)
+		}
+	}
+	if len(lines) < 2 {
+		t.Errorf("expected CJK long word to be force-broken, got single line: %q", result)
+	}
+}
+
+func TestSoftWrap_MixedASCIICJK(t *testing.T) {
+	// Mixed ASCII and CJK text
+	result := softWrap("ポート80 open HTTP Apache httpd 2.4.49", 20)
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		w := runewidth.StringWidth(line)
+		if w > 20 {
+			t.Errorf("mixed line exceeds maxWidth: %q (display width=%d)", line, w)
+		}
+	}
+}
+
+func TestTruncateToWidth(t *testing.T) {
+	tests := []struct {
+		input    string
+		maxWidth int
+		wantLen  int // expected display width of chunk
+	}{
+		{"hello", 3, 3},
+		{"日本語", 4, 4},        // 日本 (2+2=4)
+		{"日本語", 3, 2},        // 日 (2) — can't fit 本 (would be 4)
+		{"abc日本", 5, 5},       // abc日 (1+1+1+2=5)
+	}
+	for _, tt := range tests {
+		chunk, rest := truncateToWidth(tt.input, tt.maxWidth)
+		w := runewidth.StringWidth(chunk)
+		if w > tt.maxWidth {
+			t.Errorf("truncateToWidth(%q, %d): chunk %q has width %d > %d", tt.input, tt.maxWidth, chunk, w, tt.maxWidth)
+		}
+		if w != tt.wantLen {
+			t.Errorf("truncateToWidth(%q, %d): chunk %q has width %d, want %d", tt.input, tt.maxWidth, chunk, w, tt.wantLen)
+		}
+		// chunk + rest should reconstruct original
+		if chunk+rest != tt.input {
+			t.Errorf("truncateToWidth(%q, %d): chunk+rest = %q, want %q", tt.input, tt.maxWidth, chunk+rest, tt.input)
+		}
 	}
 }
 

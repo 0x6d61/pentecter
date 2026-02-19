@@ -55,6 +55,9 @@ SECURITY ASSESSMENT GUIDELINES:
 - When you discover new hosts, use add_target to expand the assessment scope
 - Prefer targeted, precise commands over broad scans
 - Always include findings in your thought process
+- After reconnaissance (nmap, nikto, curl), ALWAYS use "memory" action to record key findings before proceeding
+- Do NOT repeat a scan if its results are already in the Previous Findings section
+- Check Previous Findings before running any command — avoid redundant scans
 
 USER INTERACTION:
 - When a "Security Professional's Instruction" is present, you MUST address it in your thought and action
@@ -63,6 +66,10 @@ USER INTERACTION:
 - When a user message is present, you MUST respond to it — do NOT ignore it
 - If the user asks a question, use "think" action to answer BEFORE taking other actions
 - If the user gives a new direction, IMMEDIATELY change your approach
+LANGUAGE:
+- ALWAYS match the language of the user's input. If the user writes in Japanese, ALL your "thought" text MUST be in Japanese. If in English, use English.
+- This applies to EVERY response — even when the user hasn't sent a message yet, check the initial instruction language.
+- The "command" field stays in English (shell commands), but "thought" MUST match the user's language.
 
 STALL PREVENTION:
 - Do NOT repeat the same or similar command if the previous attempt returned no useful results
@@ -103,6 +110,12 @@ func buildPrompt(input Input) string {
 	sb.WriteString(input.TargetSnapshot)
 	sb.WriteString("\n```\n")
 
+	if input.Memory != "" {
+		sb.WriteString("\n## Previous Findings (from memory)\n")
+		sb.WriteString(input.Memory)
+		sb.WriteString("\n")
+	}
+
 	// Last Command セクション（Target State の後、Last Assessment Output の前）
 	if input.LastCommand != "" {
 		sb.WriteString("\n## Last Command\n")
@@ -134,11 +147,24 @@ func buildPrompt(input Input) string {
 		sb.WriteString("\n## Security Professional's Instruction (PRIORITY)\n")
 		sb.WriteString(input.UserMessage)
 		sb.WriteString("\n")
-		sb.WriteString("\nAddress the professional's instruction first. Respond with JSON only.")
+		if hasNonASCII(input.UserMessage) {
+			sb.WriteString("\nIMPORTANT: The user wrote in a non-English language. Your \"thought\" field MUST be in the SAME language as the user's message above.\n")
+		}
+		sb.WriteString("Address the professional's instruction first. Respond with JSON only.")
 	} else {
 		sb.WriteString("\nDetermine the next security assessment action. Respond with JSON only.")
 	}
 	return sb.String()
+}
+
+// hasNonASCII はテキストに非ASCII文字（日本語・中国語等）が含まれるかを判定する。
+func hasNonASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonBlockRe は LLM がコードブロックで JSON を返した場合に抽出するパターン。

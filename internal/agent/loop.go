@@ -146,6 +146,7 @@ func (l *Loop) Run(ctx context.Context) {
 				CommandHistory: l.buildHistory(),
 				UserMessage:    userMsg,
 				TurnCount:      l.turnCount,
+				Memory:         l.buildMemory(),
 			})
 			if brainErr == nil {
 				break
@@ -568,9 +569,21 @@ func (l *Loop) buildHistory() string {
 	}
 	var sb strings.Builder
 	for i, e := range l.history[start:] {
-		fmt.Fprintf(&sb, "%d. `%s` → exit %d\n", i+1, e.Command, e.ExitCode)
+		if e.Summary != "" {
+			fmt.Fprintf(&sb, "%d. `%s` → exit %d: %s\n", i+1, e.Command, e.ExitCode, e.Summary)
+		} else {
+			fmt.Fprintf(&sb, "%d. `%s` → exit %d\n", i+1, e.Command, e.ExitCode)
+		}
 	}
 	return sb.String()
+}
+
+// buildMemory はメモリストアからターゲットの過去の発見物を読み出す。
+func (l *Loop) buildMemory() string {
+	if l.memoryStore == nil {
+		return ""
+	}
+	return l.memoryStore.Read(l.target.Host)
 }
 
 func (l *Loop) buildSnapshot() string {
@@ -583,13 +596,6 @@ func (l *Loop) buildSnapshot() string {
 		"host":     l.target.Host,
 		"status":   string(l.target.Status),
 		"entities": entityMap,
-	}
-
-	// Memory Store から過去の発見物を読み込み、Brain のコンテキストに含める
-	if l.memoryStore != nil {
-		if mem := l.memoryStore.Read(l.target.Host); mem != "" {
-			snapshot["memory"] = mem
-		}
 	}
 
 	b, err := json.Marshal(snapshot)

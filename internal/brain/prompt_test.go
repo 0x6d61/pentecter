@@ -311,3 +311,130 @@ func TestParseActionJSON_WithMemoryAction(t *testing.T) {
 		t.Errorf("Memory.Type: got %q, want %q", action.Memory.Type, "credential")
 	}
 }
+
+func TestBuildPrompt_WithMemory(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		Memory:         "[vulnerability] CVE-2021-41773: Apache 2.4.49 Path Traversal (critical)",
+	}
+	prompt := buildPrompt(input)
+
+	if !strings.Contains(prompt, "## Previous Findings (from memory)") {
+		t.Error("expected '## Previous Findings (from memory)' section in prompt")
+	}
+	if !strings.Contains(prompt, "CVE-2021-41773") {
+		t.Error("expected memory content in prompt")
+	}
+
+	// Previous Findings は Target State の後、Last Command の前に出るべき
+	targetIdx := strings.Index(prompt, "## Authorized Target State")
+	memoryIdx := strings.Index(prompt, "## Previous Findings")
+	if memoryIdx <= targetIdx {
+		t.Error("Previous Findings should appear after Target State")
+	}
+}
+
+func TestBuildPrompt_WithoutMemory(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		Memory:         "",
+	}
+	prompt := buildPrompt(input)
+
+	if strings.Contains(prompt, "## Previous Findings") {
+		t.Error("should not contain '## Previous Findings' when Memory is empty")
+	}
+}
+
+func TestBuildPrompt_MemoryBeforeLastCommand(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		Memory:         "[note] Open ports: 22, 80, 443",
+		LastCommand:    "nmap -sV 10.0.0.5",
+		LastExitCode:   0,
+		ToolOutput:     "PORT 22/tcp open ssh",
+	}
+	prompt := buildPrompt(input)
+
+	memoryIdx := strings.Index(prompt, "## Previous Findings")
+	cmdIdx := strings.Index(prompt, "## Last Command")
+	if memoryIdx < 0 {
+		t.Fatal("expected Previous Findings section")
+	}
+	if cmdIdx < 0 {
+		t.Fatal("expected Last Command section")
+	}
+	if memoryIdx >= cmdIdx {
+		t.Error("Previous Findings should appear before Last Command")
+	}
+}
+
+func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
+	prompt := buildSystemPrompt(nil)
+
+	if !strings.Contains(prompt, "ALWAYS use \"memory\" action to record key findings") {
+		t.Error("system prompt should contain memory recording enforcement")
+	}
+	if !strings.Contains(prompt, "Do NOT repeat a scan if its results are already in the Previous Findings") {
+		t.Error("system prompt should prohibit redundant scans")
+	}
+	if !strings.Contains(prompt, "Check Previous Findings before running any command") {
+		t.Error("system prompt should instruct checking previous findings")
+	}
+}
+
+func TestSystemPrompt_ContainsLanguageAdaptation(t *testing.T) {
+	prompt := buildSystemPrompt(nil)
+
+	if !strings.Contains(prompt, "LANGUAGE:") {
+		t.Error("system prompt should contain LANGUAGE section")
+	}
+	if !strings.Contains(prompt, "ALWAYS match the language of the user's input") {
+		t.Error("system prompt should contain language adaptation instruction")
+	}
+}
+
+func TestBuildPrompt_NonASCII_LanguageHint(t *testing.T) {
+	prompt := buildPrompt(Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		UserMessage:    "vsftpdを攻撃して",
+	})
+
+	if !strings.Contains(prompt, "non-English language") {
+		t.Error("expected non-English language hint for Japanese user message")
+	}
+	if !strings.Contains(prompt, "SAME language") {
+		t.Error("expected SAME language instruction for non-ASCII user message")
+	}
+}
+
+func TestBuildPrompt_ASCII_NoLanguageHint(t *testing.T) {
+	prompt := buildPrompt(Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		UserMessage:    "scan the target",
+	})
+
+	if strings.Contains(prompt, "non-English language") {
+		t.Error("should not contain non-English language hint for ASCII user message")
+	}
+}
+
+func TestHasNonASCII(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"hello world", false},
+		{"nmap -sV 10.0.0.5", false},
+		{"vsftpdを攻撃して", true},
+		{"日本語テスト", true},
+		{"café", true},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := hasNonASCII(tt.input)
+		if got != tt.want {
+			t.Errorf("hasNonASCII(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}

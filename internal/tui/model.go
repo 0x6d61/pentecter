@@ -16,6 +16,7 @@ import (
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
 	"github.com/0x6d61/pentecter/internal/tools"
+	"github.com/mattn/go-runewidth"
 )
 
 // FocusState tracks which pane has keyboard focus.
@@ -70,6 +71,10 @@ type Model struct {
 
 	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
 	Runner *tools.CommandRunner
+
+	// multilineBuffer は Alt+Enter（または Ctrl+Enter）で蓄積された複数行入力。
+	// Enter 送信時に現在の入力と結合して全テキストを送信する。
+	multilineBuffer []string
 
 	// Select mode fields — used by /model, /approve to show interactive selection.
 	inputMode      InputMode
@@ -149,6 +154,7 @@ func NewWithTargets(targets []*agent.Target) Model {
 		Padding(0, 1)
 
 	ti := textinput.New()
+	ti.Prompt = ""
 	ti.Placeholder = "Chat with AI or enter command..."
 	ti.CharLimit = 500
 	ti.ShowSuggestions = true
@@ -282,7 +288,7 @@ func (m *Model) rebuildViewport() {
 			msgMaxW = 20
 		}
 
-		if len(entry.Message) <= msgMaxW {
+		if runewidth.StringWidth(entry.Message) <= msgMaxW {
 			fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, entry.Message)
 		} else {
 			wrapped := softWrap(entry.Message, msgMaxW)
