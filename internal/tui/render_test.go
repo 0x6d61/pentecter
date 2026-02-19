@@ -388,7 +388,7 @@ func TestRenderMemoryBlock(t *testing.T) {
 func TestRenderSubTaskBlock_InProgress(t *testing.T) {
 	b := agent.NewSubTaskBlock("task-1", "Scan port 80 for vulnerabilities")
 
-	result := renderSubTaskBlock(b, "⠋")
+	result := renderSubTaskBlock(b, 80, "⠋")
 
 	if !strings.Contains(result, "Scan port 80 for vulnerabilities") {
 		t.Error("expected task goal in output")
@@ -404,7 +404,7 @@ func TestRenderSubTaskBlock_InProgress_WithSpinner(t *testing.T) {
 
 	// 各スピナーフレームが出力に反映されることを確認
 	for _, frame := range []string{"⠋", "⠙", "⠹", "⠸"} {
-		result := renderSubTaskBlock(b, frame)
+		result := renderSubTaskBlock(b, 80, frame)
 		if !strings.Contains(result, frame) {
 			t.Errorf("expected spinner frame %q in output, got: %q", frame, result)
 		}
@@ -419,7 +419,7 @@ func TestRenderSubTaskBlock_Completed(t *testing.T) {
 	b.TaskDone = true
 	b.TaskDuration = 5 * time.Second
 
-	result := renderSubTaskBlock(b, "⠋")
+	result := renderSubTaskBlock(b, 80, "⠋")
 
 	// Goal should be present (with strikethrough)
 	if !strings.Contains(result, "Scan port 80") {
@@ -436,6 +436,26 @@ func TestRenderSubTaskBlock_Completed(t *testing.T) {
 	// 完了ブロックにはスピナーフレームが含まれないこと
 	if strings.Contains(result, "⠋") {
 		t.Error("completed subtask block should NOT contain spinner frame")
+	}
+}
+
+func TestRenderSubTaskBlock_LongGoal_Wraps(t *testing.T) {
+	goal := "Perform comprehensive MySQL enumeration on 172.30.0.20 to discover databases, users, and potential injection points"
+	b := agent.NewSubTaskBlock("task-1", goal)
+
+	result := renderSubTaskBlock(b, 40, "⠋")
+
+	// ゴール全文が含まれること（折り返しても）
+	if !strings.Contains(result, "Perform comprehensive") {
+		t.Error("expected start of goal text")
+	}
+	if !strings.Contains(result, "injection points") {
+		t.Error("expected end of goal text")
+	}
+	// 複数行に折り返されること
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Errorf("expected multi-line wrap for long goal at width 40, got %d lines", len(lines))
 	}
 }
 

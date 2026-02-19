@@ -120,15 +120,43 @@ func renderMemoryBlock(b *agent.DisplayBlock) string {
 // renderSubTaskBlock はサブタスク進捗ブロックをレンダリングする。
 // 処理中: <spinnerFrame> goal (アニメーション付きスピナー)
 // 完了: ~~goal~~ ✓ Xs (取り消し線)
-func renderSubTaskBlock(b *agent.DisplayBlock, spinnerFrame string) string {
+// width でゴールテキストを折り返す。
+func renderSubTaskBlock(b *agent.DisplayBlock, width int, spinnerFrame string) string {
+	if width <= 0 {
+		width = 80
+	}
 	if b.TaskDone {
 		dur := formatDuration(b.TaskDuration)
-		style := lipgloss.NewStyle().Strikethrough(true).Foreground(colorMuted)
+		goalStyle := lipgloss.NewStyle().Strikethrough(true).Foreground(colorMuted)
 		checkStyle := lipgloss.NewStyle().Foreground(colorSuccess)
-		return style.Render(b.TaskGoal) + " " + checkStyle.Render(fmt.Sprintf("✓ %s", dur)) + "\n"
+		check := checkStyle.Render(fmt.Sprintf(" ✓ %s", dur))
+		goal := goalStyle.Render(b.TaskGoal)
+		// 1行に収まる場合はそのまま
+		if lipgloss.Width(goal)+lipgloss.Width(check) <= width {
+			return goal + check + "\n"
+		}
+		// 収まらない場合はゴールを折り返し、チェックマークを最終行に付与
+		return goalStyle.Width(width).Render(b.TaskGoal) + check + "\n"
+	}
+	prefix := spinnerFrame + " "
+	goalW := width - lipgloss.Width(prefix)
+	if goalW < 20 {
+		goalW = 20
 	}
 	style := lipgloss.NewStyle().Foreground(colorPrimary)
-	return style.Render(spinnerFrame + " " + b.TaskGoal) + "\n"
+	wrapped := lipgloss.NewStyle().Width(goalW).Render(b.TaskGoal)
+	lines := strings.Split(wrapped, "\n")
+	var sb strings.Builder
+	indent := strings.Repeat(" ", lipgloss.Width(prefix))
+	for i, line := range lines {
+		if i == 0 {
+			sb.WriteString(style.Render(prefix + line))
+		} else {
+			sb.WriteString(style.Render(indent + line))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // renderUserInputBlock はユーザー入力ブロックをハイライト背景でレンダリングする。
@@ -172,7 +200,7 @@ func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinne
 		case agent.BlockMemory:
 			sb.WriteString(renderMemoryBlock(b))
 		case agent.BlockSubTask:
-			sb.WriteString(renderSubTaskBlock(b, spinnerFrame))
+			sb.WriteString(renderSubTaskBlock(b, width, spinnerFrame))
 		case agent.BlockUserInput:
 			sb.WriteString(renderUserInputBlock(b, width))
 		case agent.BlockSystem:

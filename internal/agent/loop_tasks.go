@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
@@ -94,8 +95,13 @@ func (l *Loop) handleWait(ctx context.Context, action *schema.Action) {
 	}
 }
 
+// checkTaskCooldown は新しい出力がないときの check_task クールダウン時間。
+// 自律ループが高速ポーリングするのを防ぐ。
+const checkTaskCooldown = 10 * time.Second
+
 // handleCheckTask は check_task アクションを処理する。タスクの部分出力を取得する。
-func (l *Loop) handleCheckTask(action *schema.Action) {
+// 新しい出力がなくタスクがまだ実行中の場合、クールダウン（10秒）を入れてから返す。
+func (l *Loop) handleCheckTask(ctx context.Context, action *schema.Action) {
 	if l.taskMgr == nil {
 		l.lastToolOutput = "Error: TaskManager not configured"
 		return
@@ -110,6 +116,25 @@ func (l *Loop) handleCheckTask(action *schema.Action) {
 	// 新しい出力を取得してカーソルを進める
 	newLines := task.ReadNewOutput()
 	task.AdvanceReadCursor()
+
+	// 新しい出力がなくまだ実行中 → クールダウンしてから再取得
+	if len(newLines) == 0 && task.Status == TaskStatusRunning {
+		cooldown := l.CheckTaskCooldown
+		if cooldown == 0 {
+			cooldown = checkTaskCooldown
+		}
+		l.emit(Event{Type: EventLog, Source: SourceSystem,
+			Message: fmt.Sprintf("Task %s still running, waiting %s for new output...", action.TaskID, cooldown)})
+		select {
+		case <-time.After(cooldown):
+		case <-ctx.Done():
+			l.lastToolOutput = "Error: check_task cancelled"
+			return
+		}
+		// クールダウン後に再取得
+		newLines = task.ReadNewOutput()
+		task.AdvanceReadCursor()
+	}
 
 	var sb strings.Builder
 	sb.WriteString(task.Summary())

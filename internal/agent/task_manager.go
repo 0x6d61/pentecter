@@ -110,6 +110,13 @@ func (tm *TaskManager) GetTask(id string) (*SubTask, bool) {
 	return task, ok
 }
 
+// InjectTask はテスト用にタスクを直接注入する。
+func (tm *TaskManager) InjectTask(id string, task *SubTask) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.tasks[id] = task
+}
+
 // WaitAny は完了したサブタスクの ID を1つ返す。
 // コンテキストがキャンセルされた場合は空文字を返す。
 func (tm *TaskManager) WaitAny(ctx context.Context) string {
