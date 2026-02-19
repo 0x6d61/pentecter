@@ -141,6 +141,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case FocusViewport:
+			if msg.String() == "ctrl+o" {
+				m.logsExpanded = !m.logsExpanded
+				m.rebuildViewport()
+				return m, nil
+			}
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
 

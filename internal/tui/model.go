@@ -76,6 +76,8 @@ type Model struct {
 	// multilineBuffer は Alt+Enter（または Ctrl+Enter）で蓄積された複数行入力。
 	// Enter 送信時に現在の入力と結合して全テキストを送信する。
 	multilineBuffer []string
+	// logsExpanded が true の場合、すべてのログ内容を折りたたまずに表示する。
+	logsExpanded bool
 
 	// Select mode fields — used by /model, /approve to show interactive selection.
 	inputMode      InputMode
@@ -289,10 +291,18 @@ func (m *Model) rebuildViewport() {
 			msgMaxW = 20
 		}
 
-		if runewidth.StringWidth(entry.Message) <= msgMaxW {
-			fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, entry.Message)
+		// ツール出力の折りたたみ
+		msg := entry.Message
+		if entry.Source == agent.SourceTool && !m.logsExpanded {
+			folded, wasFolded := foldToolOutput(msg)
+			if wasFolded {
+				msg = folded
+			}
+		}
+		if runewidth.StringWidth(msg) <= msgMaxW {
+			fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, msg)
 		} else {
-			wrapped := softWrap(entry.Message, msgMaxW)
+			wrapped := softWrap(msg, msgMaxW)
 			wrapLines := strings.Split(wrapped, "\n")
 			indent := strings.Repeat(" ", logPrefixW)
 			for i, line := range wrapLines {
