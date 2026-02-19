@@ -15,6 +15,7 @@ import (
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/knowledge"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
@@ -162,6 +163,23 @@ Chat commands:
 	skillsReg := skills.NewRegistry()
 	_ = skillsReg.LoadDir("skills")
 
+	// --- Knowledge Base ---
+	var knowledgeStore *knowledge.Store
+	knowledgeCfg, kErr := knowledge.LoadConfig("config/knowledge.yaml")
+	if kErr != nil {
+		fmt.Fprintf(os.Stderr, "Knowledge config warning: %v\n", kErr)
+	}
+	if knowledgeCfg != nil && len(knowledgeCfg.Knowledge) > 0 {
+		// 最初のエントリを使用（将来的に複数対応可能）
+		ks := knowledge.NewStore(knowledgeCfg.Knowledge[0].Path)
+		if ks != nil {
+			knowledgeStore = ks
+			log.Printf("Knowledge base loaded: %s (%s)", knowledgeCfg.Knowledge[0].Name, knowledgeCfg.Knowledge[0].Path)
+		} else {
+			log.Printf("Knowledge base path not found: %s (run: git clone --depth 1 https://github.com/carlospolop/hacktricks.git)", knowledgeCfg.Knowledge[0].Path)
+		}
+	}
+
 	// --- Memory ---
 	memoryStore := memory.NewStore("memory")
 
@@ -184,7 +202,8 @@ Chat commands:
 		Runner:      runner,
 		SkillsReg:   skillsReg,
 		MemoryStore: memoryStore,
-		MCPManager:  mcpMgr,
+		MCPManager:     mcpMgr,
+		KnowledgeStore: knowledgeStore,
 	})
 
 	// CLI ターゲットを事前追加
