@@ -1,0 +1,9 @@
+name: hydra
+description: "Hydra — brute force login cracker"
+tags: [exploit, brute-force]
+timeout: 300
+proposal_required: false
+output:
+  strategy: head_tail
+  head_lines: 20
+  tail_lines: 30

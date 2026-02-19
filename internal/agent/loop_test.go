@@ -466,3 +466,238 @@ func TestTeam_AddTarget_DynamicStart(t *testing.T) {
 		}
 	}
 }
+
+func TestTeam_SetBrain_ChangesForNewTargets(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	originalBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "original brain thinking", Action: schema.ActionThink},
+		},
+	}
+	newBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "new brain thinking", Action: schema.ActionThink},
+		},
+	}
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  originalBrain,
+		Runner: runner,
+	})
+
+	// Change the brain before adding targets
+	team.SetBrain(newBrain)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	team.Start(ctx)
+
+	// Add a target after SetBrain — it should use the new brain
+	target, _, _ := team.AddTarget("10.0.0.50")
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete && e.TargetID == target.ID {
+				// The new brain should have been called, not the original
+				if len(newBrain.inputs) == 0 {
+					t.Error("expected newBrain.Think() to be called, but it was not")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete after SetBrain")
+		}
+	}
+}
+
+func TestTeam_Loops_ReturnsAllLoops(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{},
+		Runner: runner,
+	})
+
+	// Initially no loops
+	loops := team.Loops()
+	if len(loops) != 0 {
+		t.Errorf("Loops() before AddTarget: got %d, want 0", len(loops))
+	}
+
+	// Add targets
+	team.AddTarget("10.0.0.1")
+	team.AddTarget("10.0.0.2")
+	team.AddTarget("10.0.0.3")
+
+	loops = team.Loops()
+	if len(loops) != 3 {
+		t.Errorf("Loops() after 3 AddTarget: got %d, want 3", len(loops))
+	}
+}
+
+func TestTeam_Loops_CountMatchesAfterDynamicAdd(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{},
+		Runner: runner,
+	})
+
+	// Add 2 targets before Start
+	team.AddTarget("10.0.0.1")
+	team.AddTarget("10.0.0.2")
+
+	if len(team.Loops()) != 2 {
+		t.Errorf("Loops() count: got %d, want 2", len(team.Loops()))
+	}
+
+	// Add 1 more target (without Start — no goroutine launched but loop is registered)
+	team.AddTarget("10.0.0.3")
+
+	if len(team.Loops()) != 3 {
+		t.Errorf("Loops() count after dynamic add: got %d, want 3", len(team.Loops()))
+	}
+}
+
+func TestLoop_Run_TurnCount_PassedToBrain(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "turn 1", Action: schema.ActionThink},
+			{Thought: "turn 2", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// 3回の Think() 呼び出し: turn 1, turn 2, complete
+				if len(mb.inputs) < 3 {
+					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				// TurnCount は1から始まりインクリメントされる
+				if mb.inputs[0].TurnCount != 1 {
+					t.Errorf("Turn 1: TurnCount = %d, want 1", mb.inputs[0].TurnCount)
+				}
+				if mb.inputs[1].TurnCount != 2 {
+					t.Errorf("Turn 2: TurnCount = %d, want 2", mb.inputs[1].TurnCount)
+				}
+				if mb.inputs[2].TurnCount != 3 {
+					t.Errorf("Turn 3: TurnCount = %d, want 3", mb.inputs[2].TurnCount)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_PendingUserMsg_DeliveredNextTurn(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// Action 1: run echo (during execution, user sends message)
+	// Action 2: think (should receive the pending user message)
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "running command", Action: schema.ActionRun, Command: "echo hello"},
+			{Thought: "got user msg", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, userMsg := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	sentMsg := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			// When we see the tool output from echo, send a user message
+			// so it gets picked up by post-exec drain
+			if e.Type == agent.EventLog && e.Source == agent.SourceTool && !sentMsg {
+				// Send user message while command is running / just after
+				select {
+				case userMsg <- "change approach please":
+					sentMsg = true
+				default:
+				}
+			}
+			if e.Type == agent.EventComplete {
+				if !sentMsg {
+					t.Skip("could not send user message during execution")
+				}
+				// Check that the pending message was delivered in a subsequent Think() call
+				foundUserMsg := false
+				for _, inp := range mb.inputs {
+					if inp.UserMessage == "change approach please" {
+						foundUserMsg = true
+						break
+					}
+				}
+				if !foundUserMsg {
+					t.Error("expected pending user message to be delivered to Brain.Think()")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_BuildHistory_EmptyHistory(t *testing.T) {
+	// Test that a loop with no command history produces empty buildHistory output.
+	// We verify this by checking that the first Brain.Think() call receives empty CommandHistory.
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "analyzing", Action: schema.ActionThink},
+			// next call → default complete
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// The first Think() call should have empty CommandHistory
+				if len(mb.inputs) < 1 {
+					t.Fatal("expected at least 1 Think() call")
+				}
+				if mb.inputs[0].CommandHistory != "" {
+					t.Errorf("first Think() CommandHistory: got %q, want empty string", mb.inputs[0].CommandHistory)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}

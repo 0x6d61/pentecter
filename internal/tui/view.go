@@ -97,7 +97,13 @@ func (m Model) renderFocusIndicator() string {
 }
 
 // renderInputBar renders the bottom input area with context-aware prefix.
+// When select mode is active, it renders the select UI instead of the text input.
 func (m Model) renderInputBar() string {
+	// Select mode: show interactive options instead of text input
+	if m.inputMode == InputSelect {
+		return m.renderSelectBar()
+	}
+
 	var prefix string
 	switch m.focus {
 	case FocusList:
@@ -115,6 +121,71 @@ func (m Model) renderInputBar() string {
 		return inputBarActiveStyle.Width(w).Render(content)
 	}
 	return inputBarStyle.Width(w).Render(content)
+}
+
+// renderSelectBar renders the interactive selection UI in the input bar area.
+func (m Model) renderSelectBar() string {
+	var sb strings.Builder
+
+	title := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render(m.selectTitle)
+	sb.WriteString(title + "\n")
+
+	for i, opt := range m.selectOptions {
+		if i == m.selectIndex {
+			selected := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("> " + opt.Label)
+			sb.WriteString("  " + selected + "\n")
+		} else {
+			sb.WriteString("    " + opt.Label + "\n")
+		}
+	}
+
+	hint := lipgloss.NewStyle().Foreground(colorMuted).Render("[Up/Down] Move  [Enter] Select  [Esc] Cancel")
+	sb.WriteString(hint)
+
+	w := m.width - 2
+	return inputBarActiveStyle.Width(w).Render(sb.String())
+}
+
+// softWrap wraps plain text at word boundaries to fit within maxWidth.
+// If a single word exceeds maxWidth, it is force-broken at maxWidth.
+func softWrap(text string, maxWidth int) string {
+	if maxWidth <= 0 || len(text) <= maxWidth {
+		return text
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return text
+	}
+
+	var lines []string
+	currentLine := ""
+
+	for _, word := range words {
+		if currentLine == "" {
+			// Force-break long words that exceed maxWidth
+			for len(word) > maxWidth {
+				lines = append(lines, word[:maxWidth])
+				word = word[maxWidth:]
+			}
+			currentLine = word
+		} else if len(currentLine)+1+len(word) <= maxWidth {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			// Force-break long words
+			for len(word) > maxWidth {
+				lines = append(lines, word[:maxWidth])
+				word = word[maxWidth:]
+			}
+			currentLine = word
+		}
+	}
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // max returns the larger of two integers.

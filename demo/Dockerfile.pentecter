@@ -7,18 +7,24 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /pentecter ./cmd/pentecter
 
 # Stage 2: ランタイム（ペンテストツール入り）
-FROM alpine:3.21
-RUN apk add --no-cache \
-    nmap nmap-scripts \
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    nmap \
     nikto \
     curl \
+    wget \
     bash \
     netcat-openbsd \
     python3 \
     hydra \
     openssh-client \
     socat \
-    bind-tools
+    dnsutils \
+    iputils-ping \
+    sqlmap \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /pentecter /usr/local/bin/pentecter
 COPY tools/  /app/tools/
 COPY skills/ /app/skills/

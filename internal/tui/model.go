@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -25,6 +26,20 @@ const (
 	FocusViewport                   // right pane: session log
 	FocusInput                      // bottom: input bar
 )
+
+// InputMode tracks whether the input bar is in normal text mode or select mode.
+type InputMode int
+
+const (
+	InputNormal InputMode = iota // normal text input
+	InputSelect                  // interactive selection UI
+)
+
+// SelectOption represents a single option in the select UI.
+type SelectOption struct {
+	Label string
+	Value string
+}
 
 // leftPaneOuterWidth is the total rendered width of the left pane (borders included).
 const leftPaneOuterWidth = 32
@@ -55,6 +70,13 @@ type Model struct {
 
 	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
 	Runner *tools.CommandRunner
+
+	// Select mode fields — used by /model, /approve to show interactive selection.
+	inputMode      InputMode
+	selectOptions  []SelectOption
+	selectIndex    int
+	selectTitle    string
+	selectCallback func(m *Model, value string)
 }
 
 // AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。
@@ -129,6 +151,9 @@ func NewWithTargets(targets []*agent.Target) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Chat with AI or enter command..."
 	ti.CharLimit = 500
+	ti.ShowSuggestions = true
+	ti.SetSuggestions([]string{"/model", "/approve", "/target"})
+	ti.KeyMap.AcceptSuggestion = key.NewBinding(key.WithKeys("right"))
 	ti.Focus() // Start with input focused
 
 	return Model{
@@ -186,6 +211,11 @@ func (m *Model) rebuildViewport() {
 
 	var sb strings.Builder
 
+	vpWidth := m.viewport.Width
+	if vpWidth <= 0 {
+		vpWidth = 80 // fallback
+	}
+
 	header := lipgloss.NewStyle().
 		Foreground(colorPrimary).
 		Bold(true).
@@ -193,7 +223,43 @@ func (m *Model) rebuildViewport() {
 	sb.WriteString(header + "\n\n")
 
 	for _, entry := range t.Logs {
-		ts := lipgloss.NewStyle().Foreground(colorMuted).Render(entry.Time.Format("15:04:05"))
+		// ターン区切り
+		if entry.Type == agent.EventTurnStart {
+			separator := turnSeparatorStyle.Render(fmt.Sprintf("─── Turn %d ───", entry.TurnNumber))
+			sb.WriteString("\n" + separator + "\n")
+			continue
+		}
+
+		// コマンド結果サマリー
+		if entry.Type == agent.EventCommandResult {
+			const resultPrefix = "  → "
+			resultPrefixW := len(resultPrefix) // ASCII only, len is fine
+			msgMaxW := vpWidth - resultPrefixW
+			if msgMaxW < 20 {
+				msgMaxW = 20
+			}
+
+			wrapped := softWrap(entry.Message, msgMaxW)
+			wrapLines := strings.Split(wrapped, "\n")
+			indent := strings.Repeat(" ", resultPrefixW)
+
+			for i, line := range wrapLines {
+				text := indent + line
+				if i == 0 {
+					text = resultPrefix + line
+				}
+				if entry.ExitCode == 0 {
+					sb.WriteString(commandSuccessStyle.Render(text) + "\n")
+				} else {
+					sb.WriteString(commandFailStyle.Render(text) + "\n")
+				}
+			}
+			continue
+		}
+
+		// 通常のログエントリ
+		ts := entry.Time.Format("15:04:05")
+		styledTs := lipgloss.NewStyle().Foreground(colorMuted).Render(ts)
 
 		var srcLabel string
 		switch entry.Source {
@@ -209,7 +275,27 @@ func (m *Model) rebuildViewport() {
 			srcLabel = fmt.Sprintf("[%s]", entry.Source)
 		}
 
-		fmt.Fprintf(&sb, "%s %s  %s\n", ts, srcLabel, entry.Message)
+		// Prefix visual width: "15:04:05 [TOOL]  " = 8 + 1 + 6 + 2 = 17
+		const logPrefixW = 17
+		msgMaxW := vpWidth - logPrefixW
+		if msgMaxW < 20 {
+			msgMaxW = 20
+		}
+
+		if len(entry.Message) <= msgMaxW {
+			fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, entry.Message)
+		} else {
+			wrapped := softWrap(entry.Message, msgMaxW)
+			wrapLines := strings.Split(wrapped, "\n")
+			indent := strings.Repeat(" ", logPrefixW)
+			for i, line := range wrapLines {
+				if i == 0 {
+					fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, line)
+				} else {
+					sb.WriteString(indent + line + "\n")
+				}
+			}
+		}
 	}
 
 	// Render pending proposal at the bottom of the session log.
@@ -254,6 +340,16 @@ func (m *Model) syncListItems() {
 		items[i] = targetListItem{t: t}
 	}
 	m.list.SetItems(items)
+}
+
+// showSelect activates the select UI with the given title, options, and callback.
+// The callback is invoked when the user presses Enter on an option.
+func (m *Model) showSelect(title string, options []SelectOption, callback func(m *Model, value string)) {
+	m.inputMode = InputSelect
+	m.selectOptions = options
+	m.selectIndex = 0
+	m.selectTitle = title
+	m.selectCallback = callback
 }
 
 // buildDemoTargets creates representative demo targets for Phase 1 display.

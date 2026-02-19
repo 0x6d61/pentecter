@@ -1,0 +1,9 @@
+name: nc
+description: "Netcat — network connection utility for backdoors, reverse shells"
+tags: [exploit, network]
+timeout: 30
+proposal_required: false
+output:
+  strategy: head_tail
+  head_lines: 20
+  tail_lines: 20

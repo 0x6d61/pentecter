@@ -151,13 +151,14 @@ func (r *CommandRunner) execute(
 		if useDocker && def != nil && def.Docker != nil {
 			cmd = buildDockerCmd(ctx, def.Docker, binary, args)
 		} else {
-			absPath, err := resolveBinary(binary)
+			// sh -c でシェル経由実行（パイプ・リダイレクト・変数展開を有効化）
+			shPath, err := resolveBinary("sh")
 			if err != nil {
 				resultCh <- &ToolResult{ID: id, ToolName: binary, StartedAt: startedAt,
-					FinishedAt: time.Now(), Err: fmt.Errorf("binary not found: %w", err)}
+					FinishedAt: time.Now(), Err: fmt.Errorf("shell not found: %w", err)}
 				return
 			}
-			cmd = exec.CommandContext(ctx, absPath, args...) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- absPath は LookPath で検証済み
+			cmd = exec.CommandContext(ctx, shPath, "-c", originalCommand) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- originalCommand はブラックリスト検証済み
 		}
 
 		stdout, _ := cmd.StdoutPipe()

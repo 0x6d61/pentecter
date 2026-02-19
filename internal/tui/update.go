@@ -5,6 +5,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -63,6 +64,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Select mode intercepts all keys before any other handling.
+		if m.inputMode == InputSelect {
+			m.handleSelectKey(msg)
+			return m, nil
+		}
+
 		// Global: always handle quit.
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -231,10 +238,13 @@ func (m *Model) submitInput() {
 	if m.team != nil && len(m.targets) == 0 {
 		if ip, msg, ok := extractIPFromText(text); ok {
 			m.addTarget(ip)
-			// Send remaining message to agent if non-empty
+			// Log the full original input as user message
+			if t := m.activeTarget(); t != nil {
+				t.AddLog(agent.SourceUser, text)
+			}
+			// Send remaining message (without IP) to agent for processing
 			if msg != "" {
 				if t := m.activeTarget(); t != nil {
-					t.AddLog(agent.SourceUser, msg)
 					if ch, ok := m.agentUserMsgMap[t.ID]; ok {
 						select {
 						case ch <- msg:
@@ -296,68 +306,106 @@ func (m *Model) addTarget(host string) {
 }
 
 // handleApproveCommand processes /approve commands.
-// /approve       → show current auto-approve state
-// /approve on    → enable auto-approve
-// /approve off   → disable auto-approve
-func (m *Model) handleApproveCommand(text string) {
+// Always shows interactive select UI (ON/OFF).
+func (m *Model) handleApproveCommand(_ string) {
 	if m.Runner == nil {
 		m.logSystem("Auto-approve not available")
 		return
 	}
 
-	arg := strings.TrimSpace(strings.TrimPrefix(text, "/approve"))
+	currentStatus := "OFF"
+	if m.Runner.AutoApprove() {
+		currentStatus = "ON"
+	}
+	m.showSelect(
+		fmt.Sprintf("Auto-approve (current: %s):", currentStatus),
+		[]SelectOption{
+			{Label: "ON  -- auto-approve all commands", Value: "on"},
+			{Label: "OFF -- require approval", Value: "off"},
+		},
+		func(m *Model, value string) {
+			if m.Runner == nil {
+				return
+			}
+			switch value {
+			case "on":
+				m.Runner.SetAutoApprove(true)
+				m.logSystem("Auto-approve: ON -- all commands will execute without confirmation")
+			case "off":
+				m.Runner.SetAutoApprove(false)
+				m.logSystem("Auto-approve: OFF -- proposals will require confirmation")
+			}
+		},
+	)
+}
 
-	switch arg {
-	case "":
-		if m.Runner.AutoApprove() {
-			m.logSystem("Auto-approve: ON")
-		} else {
-			m.logSystem("Auto-approve: OFF")
+// modelsForProvider はプロバイダーごとの代表的なモデル一覧を返す。
+func modelsForProvider(p brain.Provider) []SelectOption {
+	switch p {
+	case brain.ProviderAnthropic:
+		return []SelectOption{
+			{Label: "claude-sonnet-4-6 (recommended)", Value: "claude-sonnet-4-6"},
+			{Label: "claude-opus-4-6", Value: "claude-opus-4-6"},
+			{Label: "claude-haiku-4-5", Value: "claude-haiku-4-5-20251001"},
 		}
-	case "on":
-		m.Runner.SetAutoApprove(true)
-		m.logSystem("Auto-approve: ON — all commands will execute without confirmation")
-	case "off":
-		m.Runner.SetAutoApprove(false)
-		m.logSystem("Auto-approve: OFF — proposals will require confirmation")
+	case brain.ProviderOpenAI:
+		return []SelectOption{
+			{Label: "gpt-4o (recommended)", Value: "gpt-4o"},
+			{Label: "gpt-4o-mini", Value: "gpt-4o-mini"},
+			{Label: "o3-mini", Value: "o3-mini"},
+		}
+	case brain.ProviderOllama:
+		return []SelectOption{
+			{Label: "llama3.2 (recommended)", Value: "llama3.2"},
+			{Label: "llama3.2:3b", Value: "llama3.2:3b"},
+			{Label: "qwen2.5:7b", Value: "qwen2.5:7b"},
+			{Label: "gemma2:9b", Value: "gemma2:9b"},
+		}
 	default:
-		m.logSystem("Usage: /approve [on|off]")
+		return nil
 	}
 }
 
 // handleModelCommand processes /model commands.
-// /model          → list available providers
-// /model <p>      → switch to provider with default model
-// /model <p>/<m>  → switch to provider with specific model
-func (m *Model) handleModelCommand(text string) {
-	arg := strings.TrimSpace(strings.TrimPrefix(text, "/model"))
-
-	// /model (no args) → show available providers
-	if arg == "" {
-		detected := brain.DetectAvailableProviders()
-		if len(detected) == 0 {
-			m.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
-			return
-		}
-		var lines []string
-		for _, p := range detected {
-			lines = append(lines, "  "+string(p))
-		}
-		m.logSystem("Available providers:\n" + strings.Join(lines, "\n"))
-		m.logSystem("Usage: /model <provider> or /model <provider>/<model>")
+// Always shows interactive 2-step select UI (provider → model).
+func (m *Model) handleModelCommand(_ string) {
+	detected := brain.DetectAvailableProviders()
+	if len(detected) == 0 {
+		m.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
 		return
 	}
 
-	// Parse provider/model
-	var provider brain.Provider
-	var model string
-	if parts := strings.SplitN(arg, "/", 2); len(parts) == 2 {
-		provider = brain.Provider(parts[0])
-		model = parts[1]
-	} else {
-		provider = brain.Provider(arg)
+	options := make([]SelectOption, len(detected))
+	for i, p := range detected {
+		options[i] = SelectOption{
+			Label: string(p),
+			Value: string(p),
+		}
 	}
 
+	m.showSelect(
+		"Select provider:",
+		options,
+		func(m *Model, providerValue string) {
+			provider := brain.Provider(providerValue)
+			models := modelsForProvider(provider)
+			if len(models) == 0 {
+				m.switchModel(provider, "")
+				return
+			}
+			m.showSelect(
+				fmt.Sprintf("Select model (%s):", providerValue),
+				models,
+				func(m *Model, modelValue string) {
+					m.switchModel(provider, modelValue)
+				},
+			)
+		},
+	)
+}
+
+// switchModel executes the actual model switch via BrainFactory.
+func (m *Model) switchModel(provider brain.Provider, model string) {
 	if m.BrainFactory == nil {
 		m.logSystem("Model switching not available (no brain factory)")
 		return
@@ -433,10 +481,58 @@ func (m *Model) handleAgentEvent(e agent.Event) {
 	case agent.EventStalled:
 		t.AddLog(agent.SourceSystem, "⚠ "+e.Message)
 		t.AddLog(agent.SourceSystem, "Type a message to give the agent new direction.")
+	case agent.EventTurnStart:
+		t.Logs = append(t.Logs, agent.LogEntry{
+			Time:       time.Now(),
+			Source:     agent.SourceSystem,
+			Message:    fmt.Sprintf("Turn %d", e.TurnNumber),
+			Type:       agent.EventTurnStart,
+			TurnNumber: e.TurnNumber,
+		})
+	case agent.EventCommandResult:
+		t.Logs = append(t.Logs, agent.LogEntry{
+			Time:     time.Now(),
+			Source:   agent.SourceTool,
+			Message:  e.Message,
+			Type:     agent.EventCommandResult,
+			ExitCode: e.ExitCode,
+		})
 	}
 
 	m.syncListItems()
 	if needsViewportUpdate {
 		m.rebuildViewport()
+	}
+}
+
+// handleSelectKey processes key events when the select UI is active.
+func (m *Model) handleSelectKey(msg tea.KeyMsg) {
+	switch msg.Type {
+	case tea.KeyUp:
+		if m.selectIndex > 0 {
+			m.selectIndex--
+		}
+	case tea.KeyDown:
+		if m.selectIndex < len(m.selectOptions)-1 {
+			m.selectIndex++
+		}
+	case tea.KeyEnter:
+		cb := m.selectCallback
+		value := ""
+		if len(m.selectOptions) > 0 {
+			value = m.selectOptions[m.selectIndex].Value
+		}
+		// 先にリセット（コールバック内で showSelect が再設定する可能性がある）
+		m.inputMode = InputNormal
+		m.selectOptions = nil
+		m.selectCallback = nil
+		// コールバック実行（内部で showSelect が呼ばれると InputSelect に戻る）
+		if cb != nil && value != "" {
+			cb(m, value)
+		}
+	case tea.KeyEscape:
+		m.inputMode = InputNormal
+		m.selectOptions = nil
+		m.selectCallback = nil
 	}
 }

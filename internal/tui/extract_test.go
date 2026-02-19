@@ -102,56 +102,70 @@ func TestHandleModelCommand_ListProviders(t *testing.T) {
 
 	m.handleModelCommand("/model")
 
-	// Should have logged available providers
+	// With providers available, should show select UI instead of log
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	}
+	if len(m.selectOptions) < 1 {
+		t.Error("expected at least 1 provider in select options")
+	}
+	// Verify anthropic is in the options
 	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && len(log.Message) > 0 {
+	for _, opt := range m.selectOptions {
+		if opt.Value == "anthropic" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected system log about available providers")
+		t.Error("expected 'anthropic' in select options")
 	}
 }
 
-func TestHandleModelCommand_SwitchProvider(t *testing.T) {
+func TestHandleModelCommand_WithArgs_ShowsSelectUI(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})
-
-	factoryCalled := false
 	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
-		factoryCalled = true
-		if hint.Provider != brain.ProviderOpenAI {
-			t.Errorf("provider: got %q, want openai", hint.Provider)
-		}
-		if hint.Model != "gpt-4o" {
-			t.Errorf("model: got %q, want gpt-4o", hint.Model)
-		}
-		return nil, nil // stub
+		return nil, nil
 	}
 
+	// Args are ignored — always shows select UI
 	m.handleModelCommand("/model openai/gpt-4o")
 
-	if !factoryCalled {
-		t.Error("expected BrainFactory to be called")
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
 	}
 }
 
-func TestHandleModelCommand_NoFactory(t *testing.T) {
+func TestHandleModelCommand_NoProviders(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})
 
-	m.handleModelCommand("/model anthropic")
+	m.handleModelCommand("/model")
 
-	// Should log that factory is not available
+	// No providers → should log message, not show select
+	if m.inputMode == InputSelect {
+		t.Error("should not show select when no providers are available")
+	}
 	found := false
 	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && log.Message == "Model switching not available (no brain factory)" {
+		if log.Source == agent.SourceSystem {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected error log about missing brain factory")
+		t.Error("expected system log about no providers")
 	}
 }
 
@@ -163,61 +177,64 @@ func TestHandleApproveCommand_ShowState(t *testing.T) {
 
 	m.handleApproveCommand("/approve")
 
-	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: OFF" {
-			found = true
-		}
+	// /approve without args now shows select UI instead of logging state
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
 	}
-	if !found {
-		t.Error("expected system log showing auto-approve state OFF")
+	if len(m.selectOptions) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(m.selectOptions))
 	}
 }
 
-func TestHandleApproveCommand_On(t *testing.T) {
+func TestHandleApproveCommand_WithArgs_ShowsSelectUI(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})
 	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
 	m.Runner = runner
 
+	// Args are ignored — always shows select UI
 	m.handleApproveCommand("/approve on")
 
-	if !runner.AutoApprove() {
-		t.Error("expected auto-approve to be enabled")
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
 	}
-
-	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: ON — all commands will execute without confirmation" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected system log confirming auto-approve ON")
+	if len(m.selectOptions) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(m.selectOptions))
 	}
 }
 
-func TestHandleApproveCommand_Off(t *testing.T) {
+func TestHandleApproveCommand_OffArgs_ShowsSelectUI(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})
 	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
 	runner.SetAutoApprove(true) // Start with ON
 	m.Runner = runner
 
+	// Args are ignored — always shows select UI
 	m.handleApproveCommand("/approve off")
 
-	if runner.AutoApprove() {
-		t.Error("expected auto-approve to be disabled")
+	if m.inputMode != InputSelect {
+		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
 	}
+	// Auto-approve should still be true (not changed until select callback)
+	if !runner.AutoApprove() {
+		t.Error("auto-approve should remain ON until user selects from UI")
+	}
+}
 
-	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: OFF — proposals will require confirmation" {
-			found = true
-		}
+func TestNewWithTargets_SetsSuggestions(t *testing.T) {
+	m := NewWithTargets(nil)
+
+	got := m.input.AvailableSuggestions()
+	want := []string{"/model", "/approve", "/target"}
+
+	if len(got) != len(want) {
+		t.Fatalf("suggestions length: got %d, want %d", len(got), len(want))
 	}
-	if !found {
-		t.Error("expected system log confirming auto-approve OFF")
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("suggestions[%d]: got %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 

@@ -2,7 +2,7 @@
 
 ## プロジェクト概要
 自律型ペネトレーションテストエージェント（TUIベース）。
-詳細は `docs/architecture_design/architecture.md` および `docs/architecture_design/ui-spec.md` を参照。
+詳細は `docs/architecture.md` および `docs/ui-spec.md` を参照。
 
 ---
 
@@ -74,17 +74,6 @@ CI は push ごとに自動実行されるが、**事前にローカルで確認
 
 ---
 
-## コマンド実行モデル
-
-- Brain が生成したコマンドは `CommandRunner` が実行する
-- 実行環境は `tools/*.yaml` の設定で決定論的に決まる（AI は関与しない）
-- 登録済み + docker 設定あり → Docker コンテナ / 登録済み + docker なし → ホスト / 未登録 → ホスト
-- 「ホスト」= pentecter が動いている環境（本番: OS、デモ: コンテナ内）
-- グローバル auto-approve（`--auto-approve` / `/approve on`）で全コマンド自動実行可能
-- 詳細: `docs/architecture_design/execution-model.md`
-
----
-
 ## 攻撃技術の開発サイクル
 
 新しい攻撃技術を追加するときは、以下の順序で実装する：
@@ -95,3 +84,13 @@ CI は push ごとに自動実行されるが、**事前にローカルで確認
 4. **統合テスト・E2E テスト** — 実際のツールに対して成功すること
 
 この 4 ステップを踏まずに完了宣言禁止。
+
+## ドキュメントルール
+
+ドキュメントのディレクトリは以下で対応する
+1. **設計に関するもの**(`/docs/architecture_design/`)
+2. **ツールのマニュアル**(`/docs/`)
+
+このドキュメント構造を守ること。
+
+会話して設計が確定した場合は速やかに`/docs/architecture_design/`へ記載する

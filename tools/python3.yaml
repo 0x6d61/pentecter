@@ -1,0 +1,9 @@
+name: python3
+description: "Python 3 — exploit script execution"
+tags: [exploit, scripting]
+timeout: 120
+proposal_required: false
+output:
+  strategy: head_tail
+  head_lines: 30
+  tail_lines: 30
