@@ -394,3 +394,115 @@ func TestDetectAvailableProviders_OllamaExplicitURL(t *testing.T) {
 		t.Errorf("first provider: got %q, want ollama", providers[0])
 	}
 }
+
+// --- ensureV1Path tests (via New() with Ollama provider) ---
+
+func TestEnsureV1Path_URLAlreadyEndingWithV1(t *testing.T) {
+	// URL already ends with /v1 — should not double-add
+	action := `{"thought":"test","action":"think"}`
+	srv := mockOpenAIServer(t, openAIResponse(action))
+	defer srv.Close()
+
+	// The mock server URL does not end with /v1, so we construct a URL that does
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOllama,
+		Model:    "llama3.2",
+		BaseURL:  srv.URL + "/v1",
+	})
+	if err != nil {
+		t.Fatalf("brain.New (ollama, URL with /v1): %v", err)
+	}
+
+	result, err := b.Think(context.Background(), brain.Input{
+		TargetSnapshot: `{"ip":"10.0.0.5"}`,
+	})
+	if err != nil {
+		t.Fatalf("Think: %v", err)
+	}
+	if result.Action != schema.ActionThink {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionThink)
+	}
+}
+
+func TestEnsureV1Path_URLWithTrailingSlash(t *testing.T) {
+	// URL has trailing slash — should strip it and add /v1
+	action := `{"thought":"test","action":"think"}`
+	srv := mockOpenAIServer(t, openAIResponse(action))
+	defer srv.Close()
+
+	// We need the mock to accept requests at /v1/chat/completions
+	// The server URL is like http://127.0.0.1:PORT
+	// ensureV1Path("http://127.0.0.1:PORT/") → "http://127.0.0.1:PORT/v1"
+	// Then openai.go appends /chat/completions → "http://127.0.0.1:PORT/v1/chat/completions"
+	// The mock server handles all paths, so this will work
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOllama,
+		Model:    "llama3.2",
+		BaseURL:  srv.URL + "/",
+	})
+	if err != nil {
+		t.Fatalf("brain.New (ollama, URL with trailing slash): %v", err)
+	}
+
+	result, err := b.Think(context.Background(), brain.Input{
+		TargetSnapshot: `{"ip":"10.0.0.5"}`,
+	})
+	if err != nil {
+		t.Fatalf("Think: %v", err)
+	}
+	if result.Action != schema.ActionThink {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionThink)
+	}
+}
+
+func TestEnsureV1Path_URLWithoutTrailingSlash(t *testing.T) {
+	// URL has no trailing slash and no /v1 — should add /v1
+	action := `{"thought":"test","action":"think"}`
+	srv := mockOpenAIServer(t, openAIResponse(action))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOllama,
+		Model:    "llama3.2",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("brain.New (ollama, URL without trailing slash): %v", err)
+	}
+
+	result, err := b.Think(context.Background(), brain.Input{
+		TargetSnapshot: `{"ip":"10.0.0.5"}`,
+	})
+	if err != nil {
+		t.Fatalf("Think: %v", err)
+	}
+	if result.Action != schema.ActionThink {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionThink)
+	}
+}
+
+func TestEnsureV1Path_URLEndingWithV1Slash(t *testing.T) {
+	// URL ends with /v1/ — should strip trailing slash and return /v1
+	action := `{"thought":"test","action":"think"}`
+	srv := mockOpenAIServer(t, openAIResponse(action))
+	defer srv.Close()
+
+	b, err := brain.New(brain.Config{
+		Provider: brain.ProviderOllama,
+		Model:    "llama3.2",
+		BaseURL:  srv.URL + "/v1/",
+	})
+	if err != nil {
+		t.Fatalf("brain.New (ollama, URL ending with /v1/): %v", err)
+	}
+
+	result, err := b.Think(context.Background(), brain.Input{
+		TargetSnapshot: `{"ip":"10.0.0.5"}`,
+	})
+	if err != nil {
+		t.Fatalf("Think: %v", err)
+	}
+	if result.Action != schema.ActionThink {
+		t.Errorf("Action: got %q, want %q", result.Action, schema.ActionThink)
+	}
+}

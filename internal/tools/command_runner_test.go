@@ -233,6 +233,51 @@ func TestCommandRunner_AutoApprove_Default_Off(t *testing.T) {
 	}
 }
 
+// --- AutoApprove getter テスト ---
+
+func TestCommandRunner_AutoApprove_Getter(t *testing.T) {
+	runner := newTestRunner()
+
+	// デフォルトは false
+	if runner.AutoApprove() {
+		t.Error("AutoApprove() should default to false")
+	}
+
+	// true に設定して取得
+	runner.SetAutoApprove(true)
+	if !runner.AutoApprove() {
+		t.Error("AutoApprove() should return true after SetAutoApprove(true)")
+	}
+
+	// false に戻す
+	runner.SetAutoApprove(false)
+	if runner.AutoApprove() {
+		t.Error("AutoApprove() should return false after SetAutoApprove(false)")
+	}
+}
+
+// --- ParseCommand empty input テスト ---
+
+func TestCommandRunner_ParseCommand_Empty(t *testing.T) {
+	binary, args := tools.ParseCommand("")
+	if binary != "" {
+		t.Errorf("ParseCommand(\"\") binary: got %q, want empty", binary)
+	}
+	if args != nil {
+		t.Errorf("ParseCommand(\"\") args: got %v, want nil", args)
+	}
+}
+
+func TestCommandRunner_ParseCommand_WhitespaceOnly(t *testing.T) {
+	binary, args := tools.ParseCommand("   ")
+	if binary != "" {
+		t.Errorf("ParseCommand(\"   \") binary: got %q, want empty", binary)
+	}
+	if args != nil {
+		t.Errorf("ParseCommand(\"   \") args: got %v, want nil", args)
+	}
+}
+
 func containsSubstring(ss []string, sub string) bool {
 	for _, s := range ss {
 		if strings.Contains(s, sub) {

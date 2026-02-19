@@ -151,3 +151,126 @@ func TestBuildPrompt_NoHistory(t *testing.T) {
 		t.Error("expected Last Assessment Output section")
 	}
 }
+
+// --- parseActionJSON tests ---
+
+func TestParseActionJSON_RawJSON(t *testing.T) {
+	raw := `{"thought":"port 80 found","action":"run","command":"nmap -sV 10.0.0.5"}`
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON: %v", err)
+	}
+	if action.Thought != "port 80 found" {
+		t.Errorf("Thought: got %q, want %q", action.Thought, "port 80 found")
+	}
+	if action.Action != "run" {
+		t.Errorf("Action: got %q, want %q", action.Action, "run")
+	}
+	if action.Command != "nmap -sV 10.0.0.5" {
+		t.Errorf("Command: got %q, want %q", action.Command, "nmap -sV 10.0.0.5")
+	}
+}
+
+func TestParseActionJSON_MarkdownWrapped(t *testing.T) {
+	raw := "```json\n{\"thought\":\"analyzing\",\"action\":\"think\"}\n```"
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (markdown wrapped): %v", err)
+	}
+	if action.Thought != "analyzing" {
+		t.Errorf("Thought: got %q, want %q", action.Thought, "analyzing")
+	}
+	if action.Action != "think" {
+		t.Errorf("Action: got %q, want %q", action.Action, "think")
+	}
+}
+
+func TestParseActionJSON_MarkdownWrappedNoLang(t *testing.T) {
+	raw := "```\n{\"thought\":\"checking\",\"action\":\"run\",\"command\":\"curl http://10.0.0.5/\"}\n```"
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (markdown wrapped no lang): %v", err)
+	}
+	if action.Action != "run" {
+		t.Errorf("Action: got %q, want %q", action.Action, "run")
+	}
+	if action.Command != "curl http://10.0.0.5/" {
+		t.Errorf("Command: got %q, want %q", action.Command, "curl http://10.0.0.5/")
+	}
+}
+
+func TestParseActionJSON_EmptyString(t *testing.T) {
+	_, err := parseActionJSON("")
+	if err == nil {
+		t.Error("expected error for empty string, got nil")
+	}
+}
+
+func TestParseActionJSON_InvalidJSON(t *testing.T) {
+	_, err := parseActionJSON("this is not json at all")
+	if err == nil {
+		t.Error("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestParseActionJSON_MissingActionField(t *testing.T) {
+	raw := `{"thought":"analyzing"}`
+	_, err := parseActionJSON(raw)
+	if err == nil {
+		t.Error("expected error for JSON missing 'action' field, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing 'action' field") {
+		t.Errorf("error message should mention missing action field, got: %v", err)
+	}
+}
+
+func TestParseActionJSON_WithLeadingTrailingWhitespace(t *testing.T) {
+	raw := "   \n  {\"thought\":\"trimmed\",\"action\":\"think\"}  \n  "
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (whitespace): %v", err)
+	}
+	if action.Thought != "trimmed" {
+		t.Errorf("Thought: got %q, want %q", action.Thought, "trimmed")
+	}
+	if action.Action != "think" {
+		t.Errorf("Action: got %q, want %q", action.Action, "think")
+	}
+}
+
+func TestParseActionJSON_WithProseBeforeJSON(t *testing.T) {
+	// Some LLMs add prose text before the JSON
+	raw := `Here is my analysis: {"thought":"found vuln","action":"memory","memory":{"type":"vulnerability","title":"CVE-2021-41773","description":"Path Traversal"}}`
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (prose before JSON): %v", err)
+	}
+	if action.Action != "memory" {
+		t.Errorf("Action: got %q, want %q", action.Action, "memory")
+	}
+}
+
+func TestParseActionJSON_EmptyActionField(t *testing.T) {
+	raw := `{"thought":"analyzing","action":"","command":"nmap 10.0.0.5"}`
+	_, err := parseActionJSON(raw)
+	if err == nil {
+		t.Error("expected error for empty action field, got nil")
+	}
+}
+
+func TestParseActionJSON_WithMemoryAction(t *testing.T) {
+	raw := `{"thought":"found credential","action":"memory","memory":{"type":"credential","title":"SSH Key","description":"Found SSH private key"}}`
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (memory): %v", err)
+	}
+	if action.Action != "memory" {
+		t.Errorf("Action: got %q, want %q", action.Action, "memory")
+	}
+	if action.Memory == nil {
+		t.Fatal("Memory should not be nil")
+	}
+	if action.Memory.Type != "credential" {
+		t.Errorf("Memory.Type: got %q, want %q", action.Memory.Type, "credential")
+	}
+}

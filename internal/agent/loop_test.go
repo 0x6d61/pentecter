@@ -466,3 +466,141 @@ func TestTeam_AddTarget_DynamicStart(t *testing.T) {
 		}
 	}
 }
+
+func TestTeam_SetBrain_ChangesForNewTargets(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	originalBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "original brain thinking", Action: schema.ActionThink},
+		},
+	}
+	newBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "new brain thinking", Action: schema.ActionThink},
+		},
+	}
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  originalBrain,
+		Runner: runner,
+	})
+
+	// Change the brain before adding targets
+	team.SetBrain(newBrain)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	team.Start(ctx)
+
+	// Add a target after SetBrain — it should use the new brain
+	target, _, _ := team.AddTarget("10.0.0.50")
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete && e.TargetID == target.ID {
+				// The new brain should have been called, not the original
+				if len(newBrain.inputs) == 0 {
+					t.Error("expected newBrain.Think() to be called, but it was not")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete after SetBrain")
+		}
+	}
+}
+
+func TestTeam_Loops_ReturnsAllLoops(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{},
+		Runner: runner,
+	})
+
+	// Initially no loops
+	loops := team.Loops()
+	if len(loops) != 0 {
+		t.Errorf("Loops() before AddTarget: got %d, want 0", len(loops))
+	}
+
+	// Add targets
+	team.AddTarget("10.0.0.1")
+	team.AddTarget("10.0.0.2")
+	team.AddTarget("10.0.0.3")
+
+	loops = team.Loops()
+	if len(loops) != 3 {
+		t.Errorf("Loops() after 3 AddTarget: got %d, want 3", len(loops))
+	}
+}
+
+func TestTeam_Loops_CountMatchesAfterDynamicAdd(t *testing.T) {
+	events := make(chan agent.Event, 128)
+	runner := newTestRunner()
+
+	team := agent.NewTeam(agent.TeamConfig{
+		Events: events,
+		Brain:  &mockBrain{},
+		Runner: runner,
+	})
+
+	// Add 2 targets before Start
+	team.AddTarget("10.0.0.1")
+	team.AddTarget("10.0.0.2")
+
+	if len(team.Loops()) != 2 {
+		t.Errorf("Loops() count: got %d, want 2", len(team.Loops()))
+	}
+
+	// Add 1 more target (without Start — no goroutine launched but loop is registered)
+	team.AddTarget("10.0.0.3")
+
+	if len(team.Loops()) != 3 {
+		t.Errorf("Loops() count after dynamic add: got %d, want 3", len(team.Loops()))
+	}
+}
+
+func TestLoop_BuildHistory_EmptyHistory(t *testing.T) {
+	// Test that a loop with no command history produces empty buildHistory output.
+	// We verify this by checking that the first Brain.Think() call receives empty CommandHistory.
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "analyzing", Action: schema.ActionThink},
+			// next call → default complete
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// The first Think() call should have empty CommandHistory
+				if len(mb.inputs) < 1 {
+					t.Fatal("expected at least 1 Think() call")
+				}
+				if mb.inputs[0].CommandHistory != "" {
+					t.Errorf("first Think() CommandHistory: got %q, want empty string", mb.inputs[0].CommandHistory)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
