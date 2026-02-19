@@ -5,6 +5,7 @@ import (
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/tools"
 )
 
 func TestExtractIPFromText(t *testing.T) {
@@ -151,5 +152,89 @@ func TestHandleModelCommand_NoFactory(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected error log about missing brain factory")
+	}
+}
+
+func TestHandleApproveCommand_ShowState(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{target})
+	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
+	m.Runner = runner
+
+	m.handleApproveCommand("/approve")
+
+	found := false
+	for _, log := range target.Logs {
+		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: OFF" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected system log showing auto-approve state OFF")
+	}
+}
+
+func TestHandleApproveCommand_On(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{target})
+	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
+	m.Runner = runner
+
+	m.handleApproveCommand("/approve on")
+
+	if !runner.AutoApprove() {
+		t.Error("expected auto-approve to be enabled")
+	}
+
+	found := false
+	for _, log := range target.Logs {
+		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: ON — all commands will execute without confirmation" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected system log confirming auto-approve ON")
+	}
+}
+
+func TestHandleApproveCommand_Off(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{target})
+	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
+	runner.SetAutoApprove(true) // Start with ON
+	m.Runner = runner
+
+	m.handleApproveCommand("/approve off")
+
+	if runner.AutoApprove() {
+		t.Error("expected auto-approve to be disabled")
+	}
+
+	found := false
+	for _, log := range target.Logs {
+		if log.Source == agent.SourceSystem && log.Message == "Auto-approve: OFF — proposals will require confirmation" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected system log confirming auto-approve OFF")
+	}
+}
+
+func TestHandleApproveCommand_NilRunner(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{target})
+	// Runner is nil by default
+
+	m.handleApproveCommand("/approve")
+
+	found := false
+	for _, log := range target.Logs {
+		if log.Source == agent.SourceSystem && log.Message == "Auto-approve not available" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected system log about auto-approve not available")
 	}
 }

@@ -25,8 +25,9 @@ func main() {
 	_ = godotenv.Load()
 
 	var (
-		provider = flag.String("provider", "", "LLM provider: anthropic, openai, ollama (auto-detect if empty)")
-		model    = flag.String("model", "", "Model name (default: provider's default)")
+		provider    = flag.String("provider", "", "LLM provider: anthropic, openai, ollama (auto-detect if empty)")
+		model       = flag.String("model", "", "Model name (default: provider's default)")
+		autoApprove = flag.Bool("auto-approve", false, "Auto-approve all commands without proposal")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `⚡ Pentecter — Autonomous Penetration Testing Agent
@@ -107,6 +108,9 @@ Chat commands:
 	// --- CommandRunner ---
 	logStore := tools.NewLogStore()
 	runner := tools.NewCommandRunner(registry, blacklist, logStore)
+	if *autoApprove {
+		runner.SetAutoApprove(true)
+	}
 
 	// --- Agent Team ---
 	events := make(chan agent.Event, 512)
@@ -133,6 +137,9 @@ Chat commands:
 	// --- TUI ---
 	m := tui.NewWithTargets(targets)
 	m.ConnectTeam(team, events, approveMap, userMsgMap)
+
+	// Connect CommandRunner for /approve command
+	m.Runner = runner
 
 	// BrainFactory for /model command
 	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {

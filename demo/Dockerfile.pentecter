@@ -12,7 +12,13 @@ RUN apk add --no-cache \
     nmap nmap-scripts \
     nikto \
     curl \
-    bash
+    bash \
+    netcat-openbsd \
+    python3 \
+    hydra \
+    openssh-client \
+    socat \
+    bind-tools
 COPY --from=builder /pentecter /usr/local/bin/pentecter
 COPY tools/  /app/tools/
 COPY skills/ /app/skills/
