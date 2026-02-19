@@ -61,6 +61,8 @@ type Input struct {
 	CommandHistory string
 	// UserMessage はユーザーからの自然言語指示（チャット入力）。空でも可。
 	UserMessage string
+	// TurnCount は現在のターン番号（1始まり）。自律ループの進行度を Brain に伝える。
+	TurnCount int
 }
 
 // Brain は LLM との対話インターフェース。

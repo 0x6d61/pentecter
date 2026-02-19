@@ -57,6 +57,10 @@ type Loop struct {
 	lastCommand  string         // 直前に実行したコマンド
 	lastExitCode int            // 直前のコマンドの exit code
 	history      []commandEntry // 直近の実行履歴（最大10件）
+
+	// ユーザーメッセージ即時処理用
+	pendingUserMsg string // post-drain で取得したユーザーメッセージ
+	turnCount      int    // 現在のターン番号
 }
 
 // NewLoop は Loop を構築する。
@@ -104,7 +108,14 @@ func (l *Loop) Run(ctx context.Context) {
 		default:
 		}
 
-		userMsg := l.drainUserMsg()
+		var userMsg string
+		if l.pendingUserMsg != "" {
+			userMsg = l.pendingUserMsg
+			l.pendingUserMsg = ""
+		} else {
+			userMsg = l.drainUserMsg()
+		}
+		l.turnCount++
 
 		// Check if stalled: consecutive failures reached threshold → pause and ask user
 		if l.consecutiveFailures >= maxConsecutiveFailures {
@@ -121,6 +132,7 @@ func (l *Loop) Run(ctx context.Context) {
 			l.target.Status = StatusScanning
 		}
 
+		l.emit(Event{Type: EventTurnStart, TurnNumber: l.turnCount})
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Thinking..."})
 
 		var action *schema.Action
@@ -133,6 +145,7 @@ func (l *Loop) Run(ctx context.Context) {
 				LastExitCode:   l.lastExitCode,
 				CommandHistory: l.buildHistory(),
 				UserMessage:    userMsg,
+				TurnCount:      l.turnCount,
 			})
 			if brainErr == nil {
 				break
@@ -151,6 +164,11 @@ func (l *Loop) Run(ctx context.Context) {
 			l.emit(Event{Type: EventError, Message: fmt.Sprintf("Brain error after %d retries: %v", maxBrainRetries, brainErr)})
 			l.target.Status = StatusFailed
 			return
+		}
+
+		// Post-think drain: Brain.Think() 中に届いたユーザーメッセージを回収
+		if msg := l.drainUserMsg(); msg != "" {
+			l.pendingUserMsg = msg
 		}
 
 		if action.Thought != "" {
@@ -221,6 +239,11 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	}
 
 	l.streamAndCollect(ctx, linesCh, resultCh)
+
+	// Post-exec drain: コマンド実行中に届いたユーザーメッセージを回収
+	if msg := l.drainUserMsg(); msg != "" {
+		l.pendingUserMsg = msg
+	}
 }
 
 // handlePropose は Proposal を TUI に表示し承認を待つ。
@@ -284,13 +307,106 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 }
 
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
-// 失敗の場合 consecutiveFailures をインクリメント、成功でリセット。
+// 3つのシグナルで判定: exit code, 出力パターン, コマンド繰り返し。
 func (l *Loop) evaluateResult() {
+	failed := false
+
+	// Signal A: exit code != 0 → 失敗
+	if l.lastExitCode != 0 {
+		failed = true
+	}
+
+	// Signal B: 出力パターンマッチ
 	if isFailedOutput(l.lastToolOutput) {
+		failed = true
+	}
+
+	// Signal C: 同一バイナリの繰り返し（直近5件で3回以上）
+	if l.isCommandRepetition() {
+		failed = true
+		l.emit(Event{Type: EventLog, Source: SourceSystem,
+			Message: "Repetition detected: same tool used repeatedly"})
+	}
+
+	if failed {
 		l.consecutiveFailures++
 	} else {
 		l.consecutiveFailures = 0
 	}
+}
+
+// isCommandRepetition は直近5件のコマンド履歴で同一バイナリが3回以上使われたか判定する。
+func (l *Loop) isCommandRepetition() bool {
+	n := len(l.history)
+	if n < 3 {
+		return false
+	}
+	start := 0
+	if n > 5 {
+		start = n - 5
+	}
+	counts := map[string]int{}
+	for _, e := range l.history[start:] {
+		bin := extractBinary(e.Command)
+		if bin != "" {
+			counts[bin]++
+		}
+	}
+	for _, c := range counts {
+		if c >= 3 {
+			return true
+		}
+	}
+	return false
+}
+
+// extractBinary はコマンド文字列から実行バイナリ名を抽出する。
+// "nmap -sV 10.0.0.5" → "nmap", "/usr/bin/nmap -sV" → "nmap"
+func extractBinary(command string) string {
+	if command == "" {
+		return ""
+	}
+	// 最初のスペースまでがコマンド部分
+	cmd := command
+	if idx := strings.IndexByte(command, ' '); idx >= 0 {
+		cmd = command[:idx]
+	}
+	// パスからファイル名だけ取り出す
+	if idx := strings.LastIndexByte(cmd, '/'); idx >= 0 {
+		cmd = cmd[idx+1:]
+	}
+	if idx := strings.LastIndexByte(cmd, '\\'); idx >= 0 {
+		cmd = cmd[idx+1:]
+	}
+	return cmd
+}
+
+// buildCommandSummary はコマンド実行結果のサマリーを生成する。
+func buildCommandSummary(exitCode int, output string) string {
+	lines := 0
+	if output != "" {
+		lines = strings.Count(output, "\n") + 1
+	}
+
+	if exitCode == 0 {
+		if lines > 0 {
+			return fmt.Sprintf("exit 0 (%d lines)", lines)
+		}
+		return "exit 0"
+	}
+
+	// 失敗時: exit code + 出力の1行目（エラーメッセージ）
+	firstLine := output
+	if idx := strings.IndexByte(output, '\n'); idx >= 0 {
+		firstLine = output[:idx]
+	}
+	if len(firstLine) > 80 {
+		firstLine = firstLine[:80] + "..."
+	}
+	if firstLine != "" {
+		return fmt.Sprintf("exit %d: %s", exitCode, firstLine)
+	}
+	return fmt.Sprintf("exit %d", exitCode)
 }
 
 // isFailedOutput はツール出力が実質的に失敗かどうかを判定する。
@@ -299,6 +415,7 @@ func isFailedOutput(output string) bool {
 		return true
 	}
 	failurePatterns := []string{
+		// ネットワークエラー
 		"0 hosts up",
 		"Host seems down",
 		"host is down",
@@ -308,6 +425,17 @@ func isFailedOutput(output string) bool {
 		"Network is unreachable",
 		"Name or service not known",
 		"couldn't connect to host",
+		// プログラムエラー
+		"SyntaxError",
+		"command not found",
+		"No such file or directory",
+		"Permission denied",
+		"Traceback (most recent call last)",
+		"ModuleNotFoundError",
+		"ImportError",
+		"panic:",
+		"NameError",
+		"Segmentation fault",
 	}
 	for _, pattern := range failurePatterns {
 		if containsCI(output, pattern) {
@@ -399,6 +527,13 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 		l.history = l.history[len(l.history)-10:]
 	}
 	l.lastExitCode = result.ExitCode
+
+	l.emit(Event{
+		Type:     EventCommandResult,
+		Source:   SourceTool,
+		Message:  buildCommandSummary(result.ExitCode, result.Truncated),
+		ExitCode: result.ExitCode,
+	})
 
 	l.target.Status = StatusScanning
 }

@@ -250,6 +250,43 @@ func TestParseActionJSON_WithProseBeforeJSON(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_WithTurnCount(t *testing.T) {
+	prompt := buildPrompt(Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		TurnCount:      5,
+	})
+	if !strings.Contains(prompt, "## Turn") {
+		t.Error("expected Turn section in prompt")
+	}
+	if !strings.Contains(prompt, "turn 5") {
+		t.Error("expected turn number in prompt")
+	}
+	// 10以下なので警告なし
+	if strings.Contains(prompt, "autonomously for many turns") {
+		t.Error("should not show autonomy warning for turn 5")
+	}
+}
+
+func TestBuildPrompt_HighTurnCount_AutonomyWarning(t *testing.T) {
+	prompt := buildPrompt(Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		TurnCount:      15,
+	})
+	if !strings.Contains(prompt, "autonomously for many turns") {
+		t.Error("expected autonomy warning for turn > 10")
+	}
+}
+
+func TestBuildPrompt_ZeroTurnCount_NoSection(t *testing.T) {
+	prompt := buildPrompt(Input{
+		TargetSnapshot: `{"host":"10.0.0.5"}`,
+		TurnCount:      0,
+	})
+	if strings.Contains(prompt, "## Turn") {
+		t.Error("should not contain Turn section when TurnCount is 0")
+	}
+}
+
 func TestParseActionJSON_EmptyActionField(t *testing.T) {
 	raw := `{"thought":"analyzing","action":"","command":"nmap 10.0.0.5"}`
 	_, err := parseActionJSON(raw)

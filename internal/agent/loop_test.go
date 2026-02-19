@@ -568,6 +568,103 @@ func TestTeam_Loops_CountMatchesAfterDynamicAdd(t *testing.T) {
 	}
 }
 
+func TestLoop_Run_TurnCount_PassedToBrain(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "turn 1", Action: schema.ActionThink},
+			{Thought: "turn 2", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// 3回の Think() 呼び出し: turn 1, turn 2, complete
+				if len(mb.inputs) < 3 {
+					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+				}
+				// TurnCount は1から始まりインクリメントされる
+				if mb.inputs[0].TurnCount != 1 {
+					t.Errorf("Turn 1: TurnCount = %d, want 1", mb.inputs[0].TurnCount)
+				}
+				if mb.inputs[1].TurnCount != 2 {
+					t.Errorf("Turn 2: TurnCount = %d, want 2", mb.inputs[1].TurnCount)
+				}
+				if mb.inputs[2].TurnCount != 3 {
+					t.Errorf("Turn 3: TurnCount = %d, want 3", mb.inputs[2].TurnCount)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_PendingUserMsg_DeliveredNextTurn(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// Action 1: run echo (during execution, user sends message)
+	// Action 2: think (should receive the pending user message)
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "running command", Action: schema.ActionRun, Command: "echo hello"},
+			{Thought: "got user msg", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, userMsg := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	sentMsg := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			// When we see the tool output from echo, send a user message
+			// so it gets picked up by post-exec drain
+			if e.Type == agent.EventLog && e.Source == agent.SourceTool && !sentMsg {
+				// Send user message while command is running / just after
+				select {
+				case userMsg <- "change approach please":
+					sentMsg = true
+				default:
+				}
+			}
+			if e.Type == agent.EventComplete {
+				if !sentMsg {
+					t.Skip("could not send user message during execution")
+				}
+				// Check that the pending message was delivered in a subsequent Think() call
+				foundUserMsg := false
+				for _, inp := range mb.inputs {
+					if inp.UserMessage == "change approach please" {
+						foundUserMsg = true
+						break
+					}
+				}
+				if !foundUserMsg {
+					t.Error("expected pending user message to be delivered to Brain.Think()")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
 func TestLoop_BuildHistory_EmptyHistory(t *testing.T) {
 	// Test that a loop with no command history produces empty buildHistory output.
 	// We verify this by checking that the first Brain.Think() call receives empty CommandHistory.

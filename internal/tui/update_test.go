@@ -622,6 +622,61 @@ func TestHandleAgentEvent_EventLog_CorrectTarget(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// handleAgentEvent — EventTurnStart / EventCommandResult
+// ---------------------------------------------------------------------------
+
+func TestHandleAgentEvent_EventTurnStart(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	logsBefore := len(t1.Logs)
+	m.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventTurnStart,
+		TurnNumber: 3,
+	})
+
+	if len(t1.Logs) != logsBefore+1 {
+		t.Fatalf("expected 1 new log for turn start, got %d", len(t1.Logs)-logsBefore)
+	}
+	lastLog := t1.Logs[len(t1.Logs)-1]
+	if lastLog.Type != agent.EventTurnStart {
+		t.Errorf("expected Type EventTurnStart, got %q", lastLog.Type)
+	}
+	if lastLog.TurnNumber != 3 {
+		t.Errorf("expected TurnNumber 3, got %d", lastLog.TurnNumber)
+	}
+}
+
+func TestHandleAgentEvent_EventCommandResult(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	logsBefore := len(t1.Logs)
+	m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCommandResult,
+		Message:  "exit 0 (5 lines)",
+		ExitCode: 0,
+	})
+
+	if len(t1.Logs) != logsBefore+1 {
+		t.Fatalf("expected 1 new log for command result, got %d", len(t1.Logs)-logsBefore)
+	}
+	lastLog := t1.Logs[len(t1.Logs)-1]
+	if lastLog.Type != agent.EventCommandResult {
+		t.Errorf("expected Type EventCommandResult, got %q", lastLog.Type)
+	}
+	if lastLog.ExitCode != 0 {
+		t.Errorf("expected ExitCode 0, got %d", lastLog.ExitCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // extractIPFromText — invalid IP to cover ParseIP failure branch
 // ---------------------------------------------------------------------------
 

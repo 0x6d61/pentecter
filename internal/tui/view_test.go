@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 )
@@ -211,6 +212,70 @@ func TestRenderInputBar_SelectMode(t *testing.T) {
 	}
 	if !strings.Contains(output, "A") {
 		t.Error("expected option A in input bar during select mode")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rebuildViewport — TurnSeparator / CommandResult
+// ---------------------------------------------------------------------------
+
+func TestRebuildViewport_TurnSeparator(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	t1.Logs = append(t1.Logs, agent.LogEntry{
+		Time:       time.Now(),
+		Source:     agent.SourceSystem,
+		Message:    "Turn 3",
+		Type:       agent.EventTurnStart,
+		TurnNumber: 3,
+	})
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.rebuildViewport()
+
+	content := m.viewport.View()
+	if !strings.Contains(content, "Turn 3") {
+		t.Errorf("expected 'Turn 3' in viewport, got: %s", content)
+	}
+}
+
+func TestRebuildViewport_CommandResult_Success(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	t1.Logs = append(t1.Logs, agent.LogEntry{
+		Time:     time.Now(),
+		Source:   agent.SourceTool,
+		Message:  "exit 0 (5 lines)",
+		Type:     agent.EventCommandResult,
+		ExitCode: 0,
+	})
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.rebuildViewport()
+
+	content := m.viewport.View()
+	if !strings.Contains(content, "exit 0") {
+		t.Errorf("expected 'exit 0' in viewport, got: %s", content)
+	}
+}
+
+func TestRebuildViewport_CommandResult_Failure(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	t1.Logs = append(t1.Logs, agent.LogEntry{
+		Time:     time.Now(),
+		Source:   agent.SourceTool,
+		Message:  "exit 2: SyntaxError: invalid syntax",
+		Type:     agent.EventCommandResult,
+		ExitCode: 2,
+	})
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.rebuildViewport()
+
+	content := m.viewport.View()
+	if !strings.Contains(content, "exit 2") {
+		t.Errorf("expected 'exit 2' in viewport, got: %s", content)
 	}
 }
 

@@ -16,14 +16,20 @@ const (
 	EventAddTarget EventType = "add_target"
 	// EventStalled は連続失敗でユーザーの方針指示を待つとき。
 	EventStalled EventType = "stalled"
+	// EventTurnStart は Brain 思考サイクルの開始を示す。
+	EventTurnStart EventType = "turn_start"
+	// EventCommandResult はコマンド実行結果のサマリー。
+	EventCommandResult EventType = "command_result"
 )
 
 // Event は Agent ループから TUI へ送るメッセージ。
 type Event struct {
-	TargetID int       // どのターゲットのイベントか（TUI のルーティング用）
-	Type     EventType
-	Source   LogSource // EventLog 時に使用
-	Message  string
-	Proposal *Proposal // EventProposal 時に使用
-	NewHost  string    // EventAddTarget 時に使用
+	TargetID   int       // どのターゲットのイベントか（TUI のルーティング用）
+	Type       EventType
+	Source     LogSource // EventLog 時に使用
+	Message    string
+	Proposal   *Proposal // EventProposal 時に使用
+	NewHost    string    // EventAddTarget 時に使用
+	TurnNumber int       // EventTurnStart 時のターン番号
+	ExitCode   int       // EventCommandResult 時の exit code
 }

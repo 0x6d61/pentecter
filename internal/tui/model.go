@@ -218,6 +218,26 @@ func (m *Model) rebuildViewport() {
 	sb.WriteString(header + "\n\n")
 
 	for _, entry := range t.Logs {
+		// ターン区切り
+		if entry.Type == agent.EventTurnStart {
+			separator := turnSeparatorStyle.Render(fmt.Sprintf("─── Turn %d ───", entry.TurnNumber))
+			sb.WriteString("\n" + separator + "\n")
+			continue
+		}
+
+		// コマンド結果サマリー
+		if entry.Type == agent.EventCommandResult {
+			var resultLine string
+			if entry.ExitCode == 0 {
+				resultLine = commandSuccessStyle.Render("  → " + entry.Message)
+			} else {
+				resultLine = commandFailStyle.Render("  → " + entry.Message)
+			}
+			sb.WriteString(resultLine + "\n")
+			continue
+		}
+
+		// 通常のログエントリ
 		ts := lipgloss.NewStyle().Foreground(colorMuted).Render(entry.Time.Format("15:04:05"))
 
 		var srcLabel string

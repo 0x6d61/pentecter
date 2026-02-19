@@ -5,6 +5,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -480,6 +481,22 @@ func (m *Model) handleAgentEvent(e agent.Event) {
 	case agent.EventStalled:
 		t.AddLog(agent.SourceSystem, "⚠ "+e.Message)
 		t.AddLog(agent.SourceSystem, "Type a message to give the agent new direction.")
+	case agent.EventTurnStart:
+		t.Logs = append(t.Logs, agent.LogEntry{
+			Time:       time.Now(),
+			Source:     agent.SourceSystem,
+			Message:    fmt.Sprintf("Turn %d", e.TurnNumber),
+			Type:       agent.EventTurnStart,
+			TurnNumber: e.TurnNumber,
+		})
+	case agent.EventCommandResult:
+		t.Logs = append(t.Logs, agent.LogEntry{
+			Time:     time.Now(),
+			Source:   agent.SourceTool,
+			Message:  e.Message,
+			Type:     agent.EventCommandResult,
+			ExitCode: e.ExitCode,
+		})
 	}
 
 	m.syncListItems()

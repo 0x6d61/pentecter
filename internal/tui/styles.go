@@ -74,3 +74,17 @@ var (
 	statusPwnedStyle    = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
 	statusFailedStyle   = lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 )
+
+// Turn separator and command result styles
+var (
+	turnSeparatorStyle = lipgloss.NewStyle().
+				Foreground(colorMuted).
+				Bold(true)
+
+	commandSuccessStyle = lipgloss.NewStyle().
+				Foreground(colorSuccess)
+
+	commandFailStyle = lipgloss.NewStyle().
+				Foreground(colorDanger).
+				Bold(true)
+)

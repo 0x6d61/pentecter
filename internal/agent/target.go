@@ -51,9 +51,12 @@ const (
 
 // LogEntry is a single timestamped message in a target's session log.
 type LogEntry struct {
-	Time    time.Time
-	Source  LogSource
-	Message string
+	Time       time.Time
+	Source     LogSource
+	Message    string
+	Type       EventType // "turn_start", "command_result", or "" (通常ログ)
+	TurnNumber int       // EventTurnStart 時のターン番号
+	ExitCode   int       // EventCommandResult 時の exit code
 }
 
 // Proposal is a pending action queued by the Brain and awaiting user approval.

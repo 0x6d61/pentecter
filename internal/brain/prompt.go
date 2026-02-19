@@ -60,6 +60,9 @@ USER INTERACTION:
 - When a "Security Professional's Instruction" is present, you MUST address it in your thought and action
 - Use "think" action to respond to questions or provide analysis when no command is needed
 - The security professional's input always takes priority over autonomous assessment
+- When a user message is present, you MUST respond to it — do NOT ignore it
+- If the user asks a question, use "think" action to answer BEFORE taking other actions
+- If the user gives a new direction, IMMEDIATELY change your approach
 
 STALL PREVENTION:
 - Do NOT repeat the same or similar command if the previous attempt returned no useful results
@@ -118,6 +121,13 @@ func buildPrompt(input Input) string {
 		sb.WriteString("\n## Recent Command History\n")
 		sb.WriteString(input.CommandHistory)
 		sb.WriteString("\n")
+	}
+
+	if input.TurnCount > 0 {
+		sb.WriteString(fmt.Sprintf("\n## Turn\nThis is turn %d of the assessment.\n", input.TurnCount))
+		if input.TurnCount > 10 {
+			sb.WriteString("You have been running autonomously for many turns. Consider if you should propose actions for human review.\n")
+		}
 	}
 
 	if input.UserMessage != "" {
