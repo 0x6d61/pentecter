@@ -221,6 +221,22 @@ func TestHandleApproveCommand_Off(t *testing.T) {
 	}
 }
 
+func TestNewWithTargets_SetsSuggestions(t *testing.T) {
+	m := NewWithTargets(nil)
+
+	got := m.input.AvailableSuggestions()
+	want := []string{"/model", "/approve", "/target"}
+
+	if len(got) != len(want) {
+		t.Fatalf("suggestions length: got %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("suggestions[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestHandleApproveCommand_NilRunner(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -129,6 +130,9 @@ func NewWithTargets(targets []*agent.Target) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Chat with AI or enter command..."
 	ti.CharLimit = 500
+	ti.ShowSuggestions = true
+	ti.SetSuggestions([]string{"/model", "/approve", "/target"})
+	ti.KeyMap.AcceptSuggestion = key.NewBinding(key.WithKeys("right"))
 	ti.Focus() // Start with input focused
 
 	return Model{

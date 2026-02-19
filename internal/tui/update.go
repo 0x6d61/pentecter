@@ -231,10 +231,13 @@ func (m *Model) submitInput() {
 	if m.team != nil && len(m.targets) == 0 {
 		if ip, msg, ok := extractIPFromText(text); ok {
 			m.addTarget(ip)
-			// Send remaining message to agent if non-empty
+			// Log the full original input as user message
+			if t := m.activeTarget(); t != nil {
+				t.AddLog(agent.SourceUser, text)
+			}
+			// Send remaining message (without IP) to agent for processing
 			if msg != "" {
 				if t := m.activeTarget(); t != nil {
-					t.AddLog(agent.SourceUser, msg)
 					if ch, ok := m.agentUserMsgMap[t.ID]; ok {
 						select {
 						case ch <- msg:

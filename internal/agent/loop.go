@@ -219,12 +219,10 @@ func (l *Loop) handlePropose(ctx context.Context, command, description string) b
 	case approved := <-l.approve:
 		l.target.ClearProposal()
 		if approved {
-			l.target.AddLog(SourceUser, "Approved: "+description)
 			l.target.Status = StatusRunning
 			linesCh, resultCh := l.runner.ForceRun(ctx, command)
 			l.streamAndCollect(ctx, linesCh, resultCh)
 		} else {
-			l.target.AddLog(SourceUser, "Rejected: "+description)
 			l.lastToolOutput = "User rejected: " + description
 			l.target.Status = StatusScanning
 		}
