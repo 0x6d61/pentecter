@@ -57,6 +57,12 @@ var proposalBoxStyle = lipgloss.NewStyle().
 	BorderForeground(colorWarning).
 	Padding(0, 1)
 
+// Quit confirmation dialog (centered overlay)
+var confirmQuitBoxStyle = lipgloss.NewStyle().
+	Border(lipgloss.DoubleBorder()).
+	BorderForeground(colorDanger).
+	Padding(0, 2)
+
 // Log source label styles
 var (
 	sourceAIStyle   = lipgloss.NewStyle().Foreground(colorSecondary).Bold(true)

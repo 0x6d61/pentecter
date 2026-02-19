@@ -713,14 +713,112 @@ func TestUpdate_TabCyclesFocus(t *testing.T) {
 	}
 }
 
-func TestUpdate_CtrlC_Quit(t *testing.T) {
+func TestUpdate_CtrlC_ShowsConfirmDialog(t *testing.T) {
 	m := NewWithTargets(nil)
 	m.handleResize(120, 40)
 	m.ready = true
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	rm := result.(Model)
+
+	// Ctrl+C should NOT quit immediately — it should show the confirmation dialog
+	if cmd != nil {
+		t.Error("expected nil cmd on Ctrl+C (should not quit immediately)")
+	}
+	if rm.inputMode != InputConfirmQuit {
+		t.Errorf("expected InputConfirmQuit mode, got %d", rm.inputMode)
+	}
+}
+
+func TestConfirmQuit_Y_Quits(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputConfirmQuit
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if cmd == nil {
-		t.Error("expected non-nil quit cmd on Ctrl+C")
+		t.Error("expected non-nil quit cmd on Y in confirm dialog")
+	}
+}
+
+func TestConfirmQuit_UpperY_Quits(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputConfirmQuit
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	if cmd == nil {
+		t.Error("expected non-nil quit cmd on Y in confirm dialog")
+	}
+}
+
+func TestConfirmQuit_N_Cancels(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputConfirmQuit
+
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	rm := result.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd on N (should not quit)")
+	}
+	if rm.inputMode != InputNormal {
+		t.Errorf("expected InputNormal after N, got %d", rm.inputMode)
+	}
+}
+
+func TestConfirmQuit_Esc_Cancels(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputConfirmQuit
+
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	rm := result.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd on Esc (should not quit)")
+	}
+	if rm.inputMode != InputNormal {
+		t.Errorf("expected InputNormal after Esc, got %d", rm.inputMode)
+	}
+}
+
+func TestConfirmQuit_OtherKey_Ignored(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputConfirmQuit
+
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	rm := result.(Model)
+
+	// Other keys should not quit or cancel — dialog stays
+	if cmd != nil {
+		t.Error("expected nil cmd for non-y/n/esc key")
+	}
+	if rm.inputMode != InputConfirmQuit {
+		t.Errorf("expected InputConfirmQuit to persist, got %d", rm.inputMode)
+	}
+}
+
+func TestConfirmQuit_CtrlC_InSelectMode(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.inputMode = InputSelect
+	m.selectOptions = []SelectOption{{Label: "A", Value: "a"}}
+
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	rm := result.(Model)
+
+	// Ctrl+C should override select mode and show confirm dialog
+	if rm.inputMode != InputConfirmQuit {
+		t.Errorf("expected InputConfirmQuit even in select mode, got %d", rm.inputMode)
 	}
 }
 

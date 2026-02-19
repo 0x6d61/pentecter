@@ -137,7 +137,7 @@ func buildPrompt(input Input) string {
 	}
 
 	if input.TurnCount > 0 {
-		sb.WriteString(fmt.Sprintf("\n## Turn\nThis is turn %d of the assessment.\n", input.TurnCount))
+		fmt.Fprintf(&sb, "\n## Turn\nThis is turn %d of the assessment.\n", input.TurnCount)
 		if input.TurnCount > 10 {
 			sb.WriteString("You have been running autonomously for many turns. Consider if you should propose actions for human review.\n")
 		}

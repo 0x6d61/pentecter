@@ -310,12 +310,7 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
 // 3つのシグナルで判定: exit code, 出力パターン, コマンド繰り返し。
 func (l *Loop) evaluateResult() {
-	failed := false
-
-	// Signal A: exit code != 0 → 失敗
-	if l.lastExitCode != 0 {
-		failed = true
-	}
+	failed := l.lastExitCode != 0
 
 	// Signal B: 出力パターンマッチ
 	if isFailedOutput(l.lastToolOutput) {

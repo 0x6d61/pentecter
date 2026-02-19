@@ -32,8 +32,9 @@ const (
 type InputMode int
 
 const (
-	InputNormal InputMode = iota // normal text input
-	InputSelect                  // interactive selection UI
+	InputNormal     InputMode = iota // normal text input
+	InputSelect                      // interactive selection UI
+	InputConfirmQuit                 // quit confirmation dialog
 )
 
 // SelectOption represents a single option in the select UI.

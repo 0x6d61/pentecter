@@ -64,15 +64,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Quit confirmation dialog intercepts all keys when active.
+		if m.inputMode == InputConfirmQuit {
+			return m.handleConfirmQuitKey(msg)
+		}
+
+		// Ctrl+C: show confirmation dialog instead of quitting immediately.
+		if msg.String() == "ctrl+c" {
+			m.inputMode = InputConfirmQuit
+			return m, nil
+		}
+
 		// Select mode intercepts all keys before any other handling.
 		if m.inputMode == InputSelect {
 			m.handleSelectKey(msg)
 			return m, nil
-		}
-
-		// Global: always handle quit.
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
 		}
 
 		// Global: Tab cycles focus between panes.
@@ -527,6 +533,19 @@ func (m *Model) handleAgentEvent(e agent.Event) {
 	if needsViewportUpdate {
 		m.rebuildViewport()
 	}
+}
+
+// handleConfirmQuitKey processes key events in the quit confirmation dialog.
+func (m Model) handleConfirmQuitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		return m, tea.Quit
+	case "n", "N", "esc":
+		m.inputMode = InputNormal
+		return m, nil
+	}
+	// Other keys: ignore, stay in confirmation dialog.
+	return m, nil
 }
 
 // handleSelectKey processes key events when the select UI is active.
