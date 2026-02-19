@@ -33,13 +33,20 @@ YOUR ROLE:
 RESPONSE FORMAT (strict JSON only, no markdown, no prose):
 {
   "thought": "brief reasoning (1-2 sentences)",
-  "action": "run" | "propose" | "think" | "memory" | "add_target" | "call_mcp" | "complete",
+  "action": "run" | "propose" | "think" | "memory" | "add_target" | "call_mcp" | "spawn_task" | "wait" | "check_task" | "kill_task" | "complete",
   "command": "full shell command (for run/propose)",
   "memory": {"type": "vulnerability|credential|artifact|note", "title": "...", "description": "...", "severity": "critical|high|medium|low|info"},
   "target": "new host IP/domain (for add_target)",
   "mcp_server": "server name (for call_mcp)",
   "mcp_tool": "tool name (for call_mcp)",
-  "mcp_args": { ... } (for call_mcp)
+  "mcp_args": { ... } (for call_mcp),
+  "task_id": "task ID (for wait/check_task/kill_task)",
+  "task_kind": "runner|smart (for spawn_task)",
+  "task_goal": "task description (for spawn_task)",
+  "task_max_turns": 10,
+  "task_port": 80,
+  "task_service": "http",
+  "task_phase": "recon|enum|exploit|post"
 }
 
 ACTION TYPES:
@@ -49,6 +56,11 @@ ACTION TYPES:
 - memory:     Record a finding (vulnerability, credential, artifact, or note)
 - add_target: Add a newly discovered host for lateral movement
 - call_mcp:   Call an MCP tool (browser automation, API tools, etc.)
+- spawn_task: Start a background task (non-blocking, returns task ID immediately)
+  task_kind: "runner" (single command, no LLM) or "smart" (multi-step with small LLM)
+- wait:       Block until a background task completes. Optionally specify task_id.
+- check_task: Read partial output from a running task (non-blocking). Requires task_id.
+- kill_task:  Cancel a running task. Requires task_id.
 - complete:   Mark the assessment of this target as complete
 
 SECURITY ASSESSMENT GUIDELINES:
@@ -80,7 +92,21 @@ STALL PREVENTION:
 - If a host appears unreachable after 2-3 scan attempts, use "complete" with a note that the host is unreachable
 - If scans consistently show "0 hosts up" or all ports filtered, the target is likely offline — mark it complete
 - Vary your approach: if nmap fails, try curl, ping, or other tools before giving up
-- Never enter an infinite loop of the same scan type`
+- Never enter an infinite loop of the same scan type
+
+PARALLEL EXECUTION:
+- Use spawn_task to run long-running scans in the background (e.g., nmap full port scan)
+- Use wait to block until results are ready (wait without task_id = wait for ANY task)
+- Use check_task to peek at partial output without blocking
+- Spawn multiple tasks for parallel scanning (e.g., one per discovered service)
+- For quick commands (< 5 seconds), use "run" directly instead of spawn_task
+- Always set task_port/task_service/task_phase metadata for organization
+- Example workflow:
+  1. Run initial quick nmap scan (run action)
+  2. Spawn background tasks for each discovered service (spawn_task kind=runner)
+  3. Spawn smart sub-agents for complex enumeration (spawn_task kind=smart)
+  4. Wait for results (wait action)
+  5. Analyze combined findings`
 
 // systemPromptFooter はシステムプロンプトの末尾固定部分。
 const systemPromptFooter = `

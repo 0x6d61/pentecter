@@ -46,6 +46,7 @@ type Loop struct {
 	skillsReg    *skills.Registry  // スキルテンプレート（nil = 無効）
 	memoryStore  *memory.Store     // 発見物の永続化（nil = 無効）
 	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
+	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -99,6 +100,11 @@ func (l *Loop) WithMemory(store *memory.Store) *Loop {
 // WithMCP は MCP マネージャーをセットする（メソッドチェーン用）。
 func (l *Loop) WithMCP(mgr *mcp.MCPManager) *Loop {
 	l.mcpMgr = mgr
+	return l
+}
+// WithTaskManager は TaskManager をセットする（メソッドチェーン用）。
+func (l *Loop) WithTaskManager(tm *TaskManager) *Loop {
+	l.taskMgr = tm
 	return l
 }
 
@@ -200,6 +206,18 @@ func (l *Loop) Run(ctx context.Context) {
 		case schema.ActionCallMCP:
 			l.callMCP(ctx, action)
 			l.evaluateResult()
+
+		case schema.ActionSpawnTask:
+			l.handleSpawnTask(ctx, action)
+
+		case schema.ActionWait:
+			l.handleWait(ctx, action)
+
+		case schema.ActionCheckTask:
+			l.handleCheckTask(action)
+
+		case schema.ActionKillTask:
+			l.handleKillTask(action)
 
 		case schema.ActionAddTarget:
 			if action.Target != "" {
