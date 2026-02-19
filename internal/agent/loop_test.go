@@ -838,6 +838,7 @@ func TestLoop_Run_CheckTask(t *testing.T) {
 	}
 
 	loop, _, events, _, _ := newTestLoopWithTaskManager(target, mb)
+	loop.CheckTaskCooldown = 100 * time.Millisecond // テスト用に短縮
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -855,6 +856,54 @@ func TestLoop_Run_CheckTask(t *testing.T) {
 				toolOutput := mb.inputs[2].ToolOutput
 				if !strings.Contains(toolOutput, "task-1") {
 					t.Errorf("3rd Think() ToolOutput should reference task-1, got: %s", toolOutput)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+// TestCheckTaskCooldown_Unit はクールダウンロジックの単体テスト。
+// TaskManager に直接 running タスクを用意して handleCheckTask の動作を確認する。
+// Loop.Run() を使わず、handleCheckTask を間接的にテストする。
+func TestCheckTaskCooldown_Unit(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// mock brain: check_task → complete
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "check", Action: schema.ActionCheckTask, TaskID: "task-1"},
+			// next: complete (default)
+		},
+	}
+
+	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
+	loop.CheckTaskCooldown = 100 * time.Millisecond
+
+	// TaskManager に running 状態のタスクを手動で注入
+	taskMgr.InjectTask("task-1", &agent.SubTask{
+		ID:     "task-1",
+		Kind:   agent.TaskKindRunner,
+		Goal:   "long scan",
+		Status: agent.TaskStatusRunning,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				elapsed := time.Since(start)
+				// クールダウン (100ms) が発動しているはず
+				if elapsed < 80*time.Millisecond {
+					t.Errorf("expected cooldown delay (~100ms), got %v", elapsed)
 				}
 				return
 			}

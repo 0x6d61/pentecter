@@ -67,6 +67,10 @@ type Loop struct {
 
 	// コマンド実行時間計測用
 	cmdStartTime time.Time
+
+	// CheckTaskCooldown は check_task で新出力がないときのクールダウン時間。
+	// 0 の場合はデフォルト (checkTaskCooldown) を使用。テスト用にオーバーライド可。
+	CheckTaskCooldown time.Duration
 }
 
 // NewLoop は Loop を構築する。
@@ -222,7 +226,7 @@ func (l *Loop) Run(ctx context.Context) {
 			l.handleWait(ctx, action)
 
 		case schema.ActionCheckTask:
-			l.handleCheckTask(action)
+			l.handleCheckTask(ctx, action)
 
 		case schema.ActionKillTask:
 			l.handleKillTask(action)
