@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,10 +19,16 @@ type mockBrain struct {
 	actions []*schema.Action
 	idx     int
 	inputs  []brain.Input // Think() に渡された Input を記録
+	errors  []error       // non-nil entries cause Think() to return error
 }
 
 func (m *mockBrain) Think(_ context.Context, input brain.Input) (*schema.Action, error) {
 	m.inputs = append(m.inputs, input)
+	if m.idx < len(m.errors) && m.errors[m.idx] != nil {
+		err := m.errors[m.idx]
+		m.idx++
+		return nil, err
+	}
 	if m.idx >= len(m.actions) {
 		return &schema.Action{Thought: "done", Action: schema.ActionComplete}, nil
 	}
@@ -251,6 +258,127 @@ func TestLoop_Run_AddTarget_EmitsEvent(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_Run_BrainError_Retries(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// 2 errors then success → should recover
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			nil, // slot 0: error
+			nil, // slot 1: error
+			{Thought: "recovered", Action: schema.ActionThink}, // slot 2: success
+			// slot 3+: default complete
+		},
+		errors: []error{
+			fmt.Errorf("connection refused"),
+			fmt.Errorf("timeout"),
+			nil, // success
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// Recovered after 2 errors
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout: expected recovery after retries")
+		}
+	}
+}
+
+func TestLoop_Run_BrainError_MaxRetries_Fails(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// 3 consecutive errors → should fail
+	mb := &mockBrain{
+		errors: []error{
+			fmt.Errorf("error 1"),
+			fmt.Errorf("error 2"),
+			fmt.Errorf("error 3"),
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(8 * time.Second)
+	gotError := false
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventError {
+				gotError = true
+			}
+			// After max retries, loop should stop (no more events)
+			if gotError {
+				// Wait a bit more to ensure no EventComplete comes
+				time.Sleep(200 * time.Millisecond)
+				if target.Status != agent.StatusFailed {
+					t.Errorf("expected StatusFailed, got %v", target.Status)
+				}
+				return
+			}
+		case <-deadline:
+			if gotError {
+				return
+			}
+			t.Fatal("timeout: expected EventError after max retries")
+		}
+	}
+}
+
+func TestLoop_Run_Stalled_WaitsForUser(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// 3 consecutive commands that produce "failed" output, then recover after user input
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "scan 1", Action: schema.ActionRun, Command: "echo 0 hosts up"},
+			{Thought: "scan 2", Action: schema.ActionRun, Command: "echo 0 hosts up"},
+			{Thought: "scan 3", Action: schema.ActionRun, Command: "echo 0 hosts up"},
+			// After user guidance, brain should continue
+			{Thought: "trying new approach", Action: schema.ActionRun, Command: "echo PORT 80 open"},
+		},
+	}
+
+	loop, events, _, userMsg := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotStalled := false
+	deadline := time.After(12 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventStalled {
+				gotStalled = true
+				// Send user guidance to resume
+				userMsg <- "try a different approach"
+			}
+			if e.Type == agent.EventComplete {
+				if !gotStalled {
+					t.Error("expected EventStalled before EventComplete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for stall detection and recovery")
 		}
 	}
 }

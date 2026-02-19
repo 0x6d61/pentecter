@@ -21,7 +21,7 @@ jobs:
       - name: Go をセットアップ
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.25"
           cache: true
 
       - name: 依存関係を確認 (go mod tidy)
@@ -54,12 +54,11 @@ jobs:
       - name: Go をセットアップ
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.25"
           cache: true
 
       - name: golangci-lint を実行
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          # v1.64.x を固定 (v2 は設定フォーマット変更があり非互換)
-          version: v1.64.8
+          version: v2.10.1
           args: --timeout=5m

@@ -25,7 +25,7 @@ func main() {
 	_ = godotenv.Load()
 
 	var (
-		provider = flag.String("provider", "anthropic", "LLM provider: anthropic, openai, ollama")
+		provider = flag.String("provider", "", "LLM provider: anthropic, openai, ollama (auto-detect if empty)")
 		model    = flag.String("model", "", "Model name (default: provider's default)")
 	)
 	flag.Usage = func() {
@@ -59,8 +59,21 @@ Chat commands:
 	flag.Parse()
 
 	// --- Brain ---
+	// Auto-detect provider if not specified
+	selectedProvider := brain.Provider(*provider)
+	if *provider == "" {
+		detected := brain.DetectAvailableProviders()
+		if len(detected) == 0 {
+			fmt.Fprintln(os.Stderr, "No LLM provider detected. Set one of:")
+			fmt.Fprintln(os.Stderr, "  ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, or OLLAMA_BASE_URL")
+			os.Exit(1)
+		}
+		selectedProvider = detected[0]
+		fmt.Fprintf(os.Stderr, "Auto-detected provider: %s\n", selectedProvider)
+	}
+
 	brainCfg, err := brain.LoadConfig(brain.ConfigHint{
-		Provider: brain.Provider(*provider),
+		Provider: selectedProvider,
 		Model:    *model,
 	})
 	if err != nil {
@@ -120,6 +133,15 @@ Chat commands:
 	// --- TUI ---
 	m := tui.NewWithTargets(targets)
 	m.ConnectTeam(team, events, approveMap, userMsgMap)
+
+	// BrainFactory for /model command
+	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
+		cfg, err := brain.LoadConfig(hint)
+		if err != nil {
+			return nil, err
+		}
+		return brain.New(cfg)
+	}
 
 	// グレースフルシャットダウン
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

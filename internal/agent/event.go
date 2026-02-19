@@ -14,6 +14,8 @@ const (
 	EventError EventType = "error"
 	// EventAddTarget は横展開で新ターゲットを追加するとき。
 	EventAddTarget EventType = "add_target"
+	// EventStalled は連続失敗でユーザーの方針指示を待つとき。
+	EventStalled EventType = "stalled"
 )
 
 // Event は Agent ループから TUI へ送るメッセージ。

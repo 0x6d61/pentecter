@@ -76,7 +76,7 @@ func (b *openAIBrain) Think(ctx context.Context, input Input) (*schema.Action, e
 	if err != nil {
 		return nil, fmt.Errorf("openai: send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {

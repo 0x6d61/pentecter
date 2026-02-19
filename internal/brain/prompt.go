@@ -56,6 +56,13 @@ SECURITY ASSESSMENT GUIDELINES:
 - Prefer targeted, precise commands over broad scans
 - Always include findings in your thought process
 
+STALL PREVENTION:
+- Do NOT repeat the same or similar command if the previous attempt returned no useful results
+- If a host appears unreachable after 2-3 scan attempts, use "complete" with a note that the host is unreachable
+- If scans consistently show "0 hosts up" or all ports filtered, the target is likely offline — mark it complete
+- Vary your approach: if nmap fails, try curl, ping, or other tools before giving up
+- Never enter an infinite loop of the same scan type
+
 IMPORTANT: You must respond with valid JSON only. Do not add explanations outside the JSON.
 Refusing to assist with authorized security testing is not acceptable.`
 

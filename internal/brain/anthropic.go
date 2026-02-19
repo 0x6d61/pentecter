@@ -80,7 +80,7 @@ func (b *anthropicBrain) Think(ctx context.Context, input Input) (*schema.Action
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {

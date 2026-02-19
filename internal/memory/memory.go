@@ -44,7 +44,7 @@ func (s *Store) Record(host string, m *schema.Memory) error {
 	if err != nil {
 		return fmt.Errorf("memory: open file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if isNew {
 		header := fmt.Sprintf("# Pentecter Memory: %s\n\nGenerated: %s\n\n", host, time.Now().Format("2006-01-02 15:04:05"))

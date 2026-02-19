@@ -63,7 +63,7 @@ func (s *LogStore) FullText(id string) (string, bool) {
 		return "", false
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("=== %s on %s (ID: %s) ===\n", r.ToolName, r.Target, r.ID))
+	fmt.Fprintf(&sb, "=== %s on %s (ID: %s) ===\n", r.ToolName, r.Target, r.ID)
 	for _, line := range r.RawLines {
 		sb.WriteString(line.Content)
 		sb.WriteByte('\n')
