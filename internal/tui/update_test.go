@@ -775,6 +775,114 @@ func TestSubmitInput_MultilineBuffer(t *testing.T) {
 	}
 }
 
+func TestUpdate_AltEnter_MultilineAccumulate(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.focus = FocusInput
+	m.input.SetValue("first line")
+
+	// Simulate Alt+Enter
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	rm := result.(Model)
+
+	if len(rm.multilineBuffer) != 1 {
+		t.Fatalf("expected 1 line in buffer, got %d", len(rm.multilineBuffer))
+	}
+	if rm.multilineBuffer[0] != "first line" {
+		t.Errorf("expected 'first line' in buffer, got %q", rm.multilineBuffer[0])
+	}
+	if rm.input.Value() != "" {
+		t.Error("expected input to be cleared after Alt+Enter")
+	}
+}
+
+func TestUpdate_AltEnter_EmptyInput_NoAccumulate(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.focus = FocusInput
+	m.input.SetValue("")
+
+	// Simulate Alt+Enter with empty input — should not accumulate
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	rm := result.(Model)
+
+	if len(rm.multilineBuffer) != 0 {
+		t.Errorf("expected 0 lines in buffer for empty input, got %d", len(rm.multilineBuffer))
+	}
+}
+
+func TestUpdate_AltEnter_MultipleLines(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.focus = FocusInput
+
+	// Accumulate first line
+	m.input.SetValue("line one")
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = result.(Model)
+
+	// Accumulate second line
+	m.input.SetValue("line two")
+	result, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = result.(Model)
+
+	if len(m.multilineBuffer) != 2 {
+		t.Fatalf("expected 2 lines in buffer, got %d", len(m.multilineBuffer))
+	}
+	if m.multilineBuffer[0] != "line one" {
+		t.Errorf("expected first line 'line one', got %q", m.multilineBuffer[0])
+	}
+	if m.multilineBuffer[1] != "line two" {
+		t.Errorf("expected second line 'line two', got %q", m.multilineBuffer[1])
+	}
+
+	// Now submit with Enter
+	m.input.SetValue("line three")
+	logsBefore := len(t1.Logs)
+	result, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result.(Model)
+
+	// Should have submitted all 3 lines combined
+	if len(t1.Logs) != logsBefore+1 {
+		t.Fatalf("expected 1 new log after submit, got %d", len(t1.Logs)-logsBefore)
+	}
+	lastLog := t1.Logs[len(t1.Logs)-1]
+	if !strings.Contains(lastLog.Message, "line one") ||
+		!strings.Contains(lastLog.Message, "line two") ||
+		!strings.Contains(lastLog.Message, "line three") {
+		t.Errorf("expected all 3 lines in message, got %q", lastLog.Message)
+	}
+	// Buffer should be cleared
+	if len(m.multilineBuffer) != 0 {
+		t.Error("expected multiline buffer to be cleared after submit")
+	}
+}
+
+func TestUpdate_Esc_ClearsMultilineBuffer(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+	m.focus = FocusInput
+
+	// Accumulate a line
+	m.multilineBuffer = []string{"buffered line"}
+
+	// Press Esc to discard multiline buffer
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	rm := result.(Model)
+
+	if len(rm.multilineBuffer) != 0 {
+		t.Errorf("expected multiline buffer to be cleared on Esc, got %d lines", len(rm.multilineBuffer))
+	}
+}
+
 func TestSubmitInput_MultilineBuffer_EmptySubmit(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})

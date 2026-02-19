@@ -63,6 +63,8 @@ type Input struct {
 	UserMessage string
 	// TurnCount は現在のターン番号（1始まり）。自律ループの進行度を Brain に伝える。
 	TurnCount int
+	// Memory は対象ホストの過去の発見物テキスト。空でも可。
+	Memory string
 }
 
 // Brain は LLM との対話インターフェース。

@@ -210,15 +210,20 @@ func TestLoop_Run_Memory_RecordAndSnapshot(t *testing.T) {
 		select {
 		case e := <-events:
 			if e.Type == agent.EventComplete {
-				// 3回目の Think() に渡された snapshot に memory が含まれるか検証
+				// 3回目の Think() に渡された Memory フィールドに CVE が含まれるか検証
 				// inputs[0] = 1回目(memory記録), inputs[1] = 2回目(think), inputs[2] = 3回目(complete)
 				if len(mb.inputs) < 3 {
 					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
 				}
-				// 2回目以降の snapshot に CVE が含まれるはず
+				// 2回目以降の Memory フィールドに CVE が含まれるはず
+				mem := mb.inputs[2].Memory
+				if !strings.Contains(mem, "CVE-2021-41773") {
+					t.Errorf("Memory field should contain CVE content, got:\n%s", mem)
+				}
+				// snapshot には memory が含まれないこと（独立フィールドに分離済み）
 				snapshot := mb.inputs[2].TargetSnapshot
-				if !strings.Contains(snapshot, "CVE-2021-41773") {
-					t.Errorf("snapshot should contain memory content, got:\n%s", snapshot)
+				if strings.Contains(snapshot, "CVE-2021-41773") {
+					t.Errorf("TargetSnapshot should NOT contain memory content after separation, got:\n%s", snapshot)
 				}
 				return
 			}

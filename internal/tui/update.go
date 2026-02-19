@@ -140,12 +140,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case FocusInput:
 			switch msg.String() {
-			case "ctrl+enter":
+			case "alt+enter", "ctrl+enter":
 				// Accumulate current line and clear input for next line
 				if text := m.input.Value(); text != "" {
 					m.multilineBuffer = append(m.multilineBuffer, text)
 					m.input.SetValue("")
-					m.input.Placeholder = fmt.Sprintf("[%d lines] Continue typing or Enter to send...", len(m.multilineBuffer))
+					m.input.Placeholder = fmt.Sprintf("[%d lines] Continue typing or Alt+Enter for more...", len(m.multilineBuffer))
 				}
 			case "esc":
 				if len(m.multilineBuffer) > 0 {

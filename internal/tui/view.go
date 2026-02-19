@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // View implements tea.Model and renders the full Commander Console layout.
@@ -146,10 +147,11 @@ func (m Model) renderSelectBar() string {
 	return inputBarActiveStyle.Width(w).Render(sb.String())
 }
 
-// softWrap wraps plain text at word boundaries to fit within maxWidth.
-// If a single word exceeds maxWidth, it is force-broken at maxWidth.
+// softWrap wraps plain text at word boundaries to fit within maxWidth (display columns).
+// Uses runewidth for correct CJK/emoji width calculation.
+// If a single word exceeds maxWidth, it is force-broken at maxWidth columns.
 func softWrap(text string, maxWidth int) string {
-	if maxWidth <= 0 || len(text) <= maxWidth {
+	if maxWidth <= 0 || runewidth.StringWidth(text) <= maxWidth {
 		return text
 	}
 
@@ -160,25 +162,34 @@ func softWrap(text string, maxWidth int) string {
 
 	var lines []string
 	currentLine := ""
+	currentWidth := 0
 
 	for _, word := range words {
+		wordWidth := runewidth.StringWidth(word)
 		if currentLine == "" {
 			// Force-break long words that exceed maxWidth
-			for len(word) > maxWidth {
-				lines = append(lines, word[:maxWidth])
-				word = word[maxWidth:]
+			for wordWidth > maxWidth {
+				chunk, rest := truncateToWidth(word, maxWidth)
+				lines = append(lines, chunk)
+				word = rest
+				wordWidth = runewidth.StringWidth(word)
 			}
 			currentLine = word
-		} else if len(currentLine)+1+len(word) <= maxWidth {
+			currentWidth = wordWidth
+		} else if currentWidth+1+wordWidth <= maxWidth {
 			currentLine += " " + word
+			currentWidth += 1 + wordWidth
 		} else {
 			lines = append(lines, currentLine)
 			// Force-break long words
-			for len(word) > maxWidth {
-				lines = append(lines, word[:maxWidth])
-				word = word[maxWidth:]
+			for wordWidth > maxWidth {
+				chunk, rest := truncateToWidth(word, maxWidth)
+				lines = append(lines, chunk)
+				word = rest
+				wordWidth = runewidth.StringWidth(word)
 			}
 			currentLine = word
+			currentWidth = wordWidth
 		}
 	}
 	if currentLine != "" {
@@ -186,6 +197,20 @@ func softWrap(text string, maxWidth int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// truncateToWidth splits a string at the given display width boundary.
+// Returns (chunk that fits, remaining string). Safe for multi-byte characters.
+func truncateToWidth(s string, maxWidth int) (string, string) {
+	w := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxWidth {
+			return s[:i], s[i:]
+		}
+		w += rw
+	}
+	return s, ""
 }
 
 // max returns the larger of two integers.
