@@ -41,6 +41,12 @@ const (
 
 	// ActionKillTask は実行中の SubTask をキャンセルする。
 	ActionKillTask ActionType = "kill_task"
+
+	// ActionSearchKnowledge はナレッジベース（HackTricks）を検索する。
+	ActionSearchKnowledge ActionType = "search_knowledge"
+
+	// ActionReadKnowledge はナレッジベースの特定記事を読み込む。
+	ActionReadKnowledge ActionType = "read_knowledge"
 )
 
 // Action is the JSON payload emitted by the Brain (LLM).
@@ -65,6 +71,10 @@ type Action struct {
 	MCPTool   string         `json:"mcp_tool,omitempty"`
 	// MCPArgs は MCP ツールに渡す引数（ActionCallMCP 時に使用）。
 	MCPArgs   map[string]any `json:"mcp_args,omitempty"`
+
+	// Knowledge 関連フィールド
+	KnowledgeQuery string `json:"knowledge_query,omitempty"` // search_knowledge 用
+	KnowledgePath  string `json:"knowledge_path,omitempty"`  // read_knowledge 用
 
 	// SubTask 関連フィールド
 	TaskID       string `json:"task_id,omitempty"`        // wait/check_task/kill_task: 対象タスクID

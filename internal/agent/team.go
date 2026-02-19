@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/knowledge"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
@@ -19,7 +20,8 @@ type TeamConfig struct {
 	SkillsReg   *skills.Registry   // nil = スキル無効
 	MemoryStore *memory.Store      // nil = メモリ無効
 	MCPManager  *mcp.MCPManager    // nil = MCP 無効
-	SubBrain    brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
+	SubBrain       brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
+	KnowledgeStore *knowledge.Store   // ナレッジベース検索（nil = 無効）
 }
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
@@ -33,8 +35,9 @@ type Team struct {
 	skillsReg   *skills.Registry
 	memoryStore *memory.Store
 	mcpMgr      *mcp.MCPManager
-	taskMgr     *TaskManager // 全 Loop で共有
-	subBrain    brain.Brain
+	taskMgr        *TaskManager     // 全 Loop で共有
+	subBrain       brain.Brain
+	knowledgeStore *knowledge.Store
 	nextID      int
 	ctx         context.Context // Start() で保存
 	mu          sync.Mutex
@@ -49,7 +52,8 @@ func NewTeam(cfg TeamConfig) *Team {
 		skillsReg:   cfg.SkillsReg,
 		memoryStore: cfg.MemoryStore,
 		mcpMgr:      cfg.MCPManager,
-		subBrain:    cfg.SubBrain,
+		subBrain:       cfg.SubBrain,
+		knowledgeStore: cfg.KnowledgeStore,
 	}
 	// TaskManager を作成（全 Loop で共有）
 	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain)
@@ -81,7 +85,8 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 		WithSkills(t.skillsReg).
 		WithMemory(t.memoryStore).
 		WithMCP(t.mcpMgr).
-		WithTaskManager(t.taskMgr)
+		WithTaskManager(t.taskMgr).
+		WithKnowledge(t.knowledgeStore)
 
 	t.loops = append(t.loops, loop)
 

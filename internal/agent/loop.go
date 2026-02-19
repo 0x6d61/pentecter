@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/knowledge"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
 	"github.com/0x6d61/pentecter/internal/skills"
@@ -47,6 +48,7 @@ type Loop struct {
 	memoryStore  *memory.Store     // 発見物の永続化（nil = 無効）
 	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
 	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
+	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -112,6 +114,12 @@ func (l *Loop) WithMCP(mgr *mcp.MCPManager) *Loop {
 // WithTaskManager は TaskManager をセットする（メソッドチェーン用）。
 func (l *Loop) WithTaskManager(tm *TaskManager) *Loop {
 	l.taskMgr = tm
+	return l
+}
+
+// WithKnowledge は KnowledgeStore をセットする（メソッドチェーン用）。
+func (l *Loop) WithKnowledge(ks *knowledge.Store) *Loop {
+	l.knowledgeStore = ks
 	return l
 }
 
@@ -237,6 +245,12 @@ func (l *Loop) Run(ctx context.Context) {
 				msg := fmt.Sprintf("Lateral movement: adding new target %s", action.Target)
 				l.emit(Event{Type: EventLog, Source: SourceAI, Message: msg})
 			}
+
+		case schema.ActionSearchKnowledge:
+			l.handleSearchKnowledge(action)
+
+		case schema.ActionReadKnowledge:
+			l.handleReadKnowledge(action)
 
 		case schema.ActionThink:
 			// 思考のみ

@@ -1,0 +1,13 @@
+# Knowledge Base Configuration
+# Each entry points to a cloned repository's content directory.
+#
+# Setup:
+#   git clone --depth 1 https://github.com/carlospolop/hacktricks.git ~/hacktricks
+#
+# Fields:
+#   name: Identifier for the knowledge base
+#   path: Path to the content directory (${VAR} expanded from host env)
+
+knowledge:
+  - name: hacktricks
+    path: "${HOME}/hacktricks/src"
