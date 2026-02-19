@@ -95,10 +95,16 @@ func renderAIMessageBlock(b *agent.DisplayBlock, width int) string {
 // renderMarkdown は glamour を使って Markdown をターミナル用にレンダリングする。
 // ダークスタイルを明示指定（TUI は常にダークターミナルで使用される想定）。
 // WithAutoStyle() は非 TTY 環境（テスト・CI）で plain にフォールバックするため使用しない。
+// glamour の dark スタイルは左右マージンを追加するため、width を縮小して渡す。
 func renderMarkdown(text string, width int) (string, error) {
+	// glamour dark スタイルのマージン分を差し引く（左2+右2=4）
+	wrapWidth := width - 4
+	if wrapWidth < 20 {
+		wrapWidth = 20
+	}
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStylePath("dark"),
-		glamour.WithWordWrap(width),
+		glamour.WithWordWrap(wrapWidth),
 	)
 	if err != nil {
 		return "", err
