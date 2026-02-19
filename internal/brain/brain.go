@@ -56,6 +56,9 @@ type Config struct {
 	ToolNames []string // Registry から読み込んだ登録済みツール名（システムプロンプトに注入）
 	// MCPTools は MCP サーバーから取得したツールスキーマ（システムプロンプトに注入）。
 	MCPTools []MCPToolInfo
+	// IsSubAgent が true の場合、SubAgent 用のシステムプロンプトを使用する。
+	// SubAgent は spawn_task / wait / check_task / kill_task を使わない。
+	IsSubAgent bool
 }
 
 // Input は Brain に渡す思考コンテキスト。

@@ -128,7 +128,10 @@ Chat commands:
 
 	// --- SubBrain for SmartSubAgent ---
 	// Defaults to same config as main brain; override with SUBAGENT_MODEL / SUBAGENT_PROVIDER.
+	// IsSubAgent = true により SubAgent 用のシンプルなプロンプトが使われる
+	// （spawn_task 等の無限ループを防ぐ）。
 	subBrainCfg := brainCfg // copy main config
+	subBrainCfg.IsSubAgent = true
 	if model := os.Getenv("SUBAGENT_MODEL"); model != "" {
 		subBrainCfg.Model = model
 	}
@@ -142,6 +145,7 @@ Chat commands:
 		if err == nil {
 			subBrainCfg = reloaded
 			subBrainCfg.ToolNames = toolNames
+			subBrainCfg.IsSubAgent = true
 		}
 	}
 	subBrain, err := brain.New(subBrainCfg)

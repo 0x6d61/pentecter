@@ -38,7 +38,7 @@ func (b *openAIBrain) Think(ctx context.Context, input Input) (*schema.Action, e
 	body := map[string]any{
 		"model": b.cfg.Model,
 		"messages": []map[string]string{
-			{"role": "system", "content": buildSystemPrompt(b.cfg.ToolNames, b.cfg.MCPTools)},
+			{"role": "system", "content": buildSystemPrompt(b.cfg.ToolNames, b.cfg.MCPTools, b.cfg.IsSubAgent)},
 			{"role": "user", "content": prompt},
 		},
 		"max_tokens":  1024,
