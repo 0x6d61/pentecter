@@ -8,6 +8,13 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+const (
+	// foldThreshold はこの行数を超えるツール出力を自動折りたたみする閾値。
+	foldThreshold = 5
+	// foldPreviewLines は折りたたみ時に表示するプレビュー行数。
+	foldPreviewLines = 3
+)
+
 // View implements tea.Model and renders the full Commander Console layout.
 func (m Model) View() string {
 	if !m.ready {
@@ -325,4 +332,17 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// foldToolOutput は長いツール出力を折りたたむ。
+// foldThreshold 行超のメッセージの場合、最初の foldPreviewLines 行 + "⋯ +N Lines (Ctrl+O)" を返す。
+func foldToolOutput(message string) (folded string, wasFolded bool) {
+	lines := strings.Split(message, "\n")
+	if len(lines) <= foldThreshold {
+		return message, false
+	}
+	preview := strings.Join(lines[:foldPreviewLines], "\n")
+	remaining := len(lines) - foldPreviewLines
+	indicator := foldIndicatorStyle.Render(fmt.Sprintf("  ⋯ +%d Lines (Ctrl+O)", remaining))
+	return preview + "\n" + indicator, true
 }

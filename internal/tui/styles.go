@@ -94,3 +94,6 @@ var (
 				Foreground(colorDanger).
 				Bold(true)
 )
+
+// foldIndicatorStyle は折りたたみ行の「⋯ +N Lines (Ctrl+O)」スタイル。
+var foldIndicatorStyle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)

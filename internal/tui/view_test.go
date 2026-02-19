@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"fmt"
 	"testing"
 	"time"
 
@@ -638,5 +639,91 @@ func TestTargetListItem_Description_AllStatuses(t *testing.T) {
 				t.Errorf("expected status %q in description, got %q", status, desc)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// foldToolOutput
+// ---------------------------------------------------------------------------
+
+func TestFoldToolOutput_LongMessage(t *testing.T) {
+	// 10行のメッセージを作成
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	message := strings.Join(lines, "\n")
+
+	result, wasFolded := foldToolOutput(message)
+
+	if !wasFolded {
+		t.Error("expected wasFolded == true for 10-line message")
+	}
+	if !strings.Contains(result, "line 1") {
+		t.Error("expected result to contain 'line 1'")
+	}
+	if !strings.Contains(result, "line 2") {
+		t.Error("expected result to contain 'line 2'")
+	}
+	if !strings.Contains(result, "line 3") {
+		t.Error("expected result to contain 'line 3'")
+	}
+	if strings.Contains(result, "line 4") {
+		t.Error("expected result NOT to contain 'line 4'")
+	}
+	if strings.Contains(result, "line 5") {
+		t.Error("expected result NOT to contain 'line 5'")
+	}
+	if !strings.Contains(result, "+7 Lines (Ctrl+O)") {
+		t.Errorf("expected '+7 Lines (Ctrl+O)' in result, got:\n%s", result)
+	}
+}
+
+func TestFoldToolOutput_ShortMessage(t *testing.T) {
+	message := "line 1\nline 2\nline 3"
+
+	result, wasFolded := foldToolOutput(message)
+
+	if wasFolded {
+		t.Error("expected wasFolded == false for 3-line message")
+	}
+	if result != message {
+		t.Errorf("expected result == original message, got:\n%s", result)
+	}
+}
+
+func TestFoldToolOutput_ExactThreshold(t *testing.T) {
+	// foldThreshold は 5 — ちょうど5行はたたまない
+	lines := make([]string, 5)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	message := strings.Join(lines, "\n")
+
+	result, wasFolded := foldToolOutput(message)
+
+	if wasFolded {
+		t.Error("expected wasFolded == false for exactly 5-line message (threshold)")
+	}
+	if result != message {
+		t.Errorf("expected result == original message, got:\n%s", result)
+	}
+}
+
+func TestFoldToolOutput_SixLines(t *testing.T) {
+	// 6行 = 閾値を1行超過
+	lines := make([]string, 6)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	message := strings.Join(lines, "\n")
+
+	result, wasFolded := foldToolOutput(message)
+
+	if !wasFolded {
+		t.Error("expected wasFolded == true for 6-line message")
+	}
+	if !strings.Contains(result, "+3 Lines (Ctrl+O)") {
+		t.Errorf("expected '+3 Lines (Ctrl+O)' in result, got:\n%s", result)
 	}
 }
