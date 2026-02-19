@@ -140,6 +140,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case FocusInput:
 			switch msg.String() {
+			case "ctrl+enter":
+				// Accumulate current line and clear input for next line
+				if text := m.input.Value(); text != "" {
+					m.multilineBuffer = append(m.multilineBuffer, text)
+					m.input.SetValue("")
+					m.input.Placeholder = fmt.Sprintf("[%d lines] Continue typing or Enter to send...", len(m.multilineBuffer))
+				}
+			case "esc":
+				if len(m.multilineBuffer) > 0 {
+					m.multilineBuffer = nil
+					m.input.Placeholder = "Chat with AI or enter command..."
+				}
 			case "enter":
 				m.submitInput()
 			default:
@@ -210,37 +222,49 @@ func (m *Model) cycleFocus() {
 
 // submitInput sends the current input as a USER log entry and to the Agent.
 func (m *Model) submitInput() {
-	text := strings.TrimSpace(m.input.Value())
-	if text == "" {
+	currentText := m.input.Value()
+
+	// Combine multiline buffer with current input
+	var fullText string
+	if len(m.multilineBuffer) > 0 {
+		allLines := append(m.multilineBuffer, currentText)
+		fullText = strings.TrimSpace(strings.Join(allLines, "\n"))
+		m.multilineBuffer = nil
+		m.input.Placeholder = "Chat with AI or enter command..."
+	} else {
+		fullText = strings.TrimSpace(currentText)
+	}
+
+	if fullText == "" {
 		return
 	}
 	m.input.SetValue("")
 
 	// /approve command — toggle auto-approve
-	if strings.HasPrefix(text, "/approve") {
-		m.handleApproveCommand(text)
+	if strings.HasPrefix(fullText, "/approve") {
+		m.handleApproveCommand(fullText)
 		return
 	}
 
 	// /model command — switch LLM provider/model
-	if strings.HasPrefix(text, "/model") {
-		m.handleModelCommand(text)
+	if strings.HasPrefix(fullText, "/model") {
+		m.handleModelCommand(fullText)
 		return
 	}
 
 	// ターゲット追加: IP アドレスまたは /target <host>
-	if host, ok := parseTargetInput(text); ok && m.team != nil {
+	if host, ok := parseTargetInput(fullText); ok && m.team != nil {
 		m.addTarget(host)
 		return
 	}
 
 	// Natural language IP extraction: "192.168.81.1をスキャンして" → add target + send message
 	if m.team != nil && len(m.targets) == 0 {
-		if ip, msg, ok := extractIPFromText(text); ok {
+		if ip, msg, ok := extractIPFromText(fullText); ok {
 			m.addTarget(ip)
 			// Log the full original input as user message
 			if t := m.activeTarget(); t != nil {
-				t.AddLog(agent.SourceUser, text)
+				t.AddLog(agent.SourceUser, fullText)
 			}
 			// Send remaining message (without IP) to agent for processing
 			if msg != "" {
@@ -260,7 +284,7 @@ func (m *Model) submitInput() {
 	}
 
 	if t := m.activeTarget(); t != nil {
-		t.AddLog(agent.SourceUser, text)
+		t.AddLog(agent.SourceUser, fullText)
 		m.syncListItems()
 		m.rebuildViewport()
 	}
@@ -269,7 +293,7 @@ func (m *Model) submitInput() {
 	if t := m.activeTarget(); t != nil {
 		if ch, ok := m.agentUserMsgMap[t.ID]; ok {
 			select {
-			case ch <- text:
+			case ch <- fullText:
 			default:
 			}
 		}

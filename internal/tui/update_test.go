@@ -744,3 +744,51 @@ func TestUpdate_WindowSizeMsg(t *testing.T) {
 		t.Errorf("expected height=30, got %d", rm.height)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// submitInput — multiline buffer
+// ---------------------------------------------------------------------------
+
+func TestSubmitInput_MultilineBuffer(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// Simulate Ctrl+Enter: accumulate first line
+	m.multilineBuffer = []string{"line 1", "line 2"}
+	m.input.SetValue("line 3")
+
+	m.submitInput()
+
+	// Should have combined all lines
+	lastLog := t1.Logs[len(t1.Logs)-1]
+	if !strings.Contains(lastLog.Message, "line 1") {
+		t.Errorf("expected multiline message to contain 'line 1', got %q", lastLog.Message)
+	}
+	if !strings.Contains(lastLog.Message, "line 3") {
+		t.Errorf("expected multiline message to contain 'line 3', got %q", lastLog.Message)
+	}
+	// Buffer should be cleared
+	if len(m.multilineBuffer) != 0 {
+		t.Error("expected multiline buffer to be cleared after submit")
+	}
+}
+
+func TestSubmitInput_MultilineBuffer_EmptySubmit(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// Accumulate lines then submit with empty current input
+	m.multilineBuffer = []string{"only line"}
+	m.input.SetValue("")
+
+	logsBefore := len(t1.Logs)
+	m.submitInput()
+
+	if len(t1.Logs) != logsBefore+1 {
+		t.Fatalf("expected 1 new log from buffer content, got %d", len(t1.Logs)-logsBefore)
+	}
+}

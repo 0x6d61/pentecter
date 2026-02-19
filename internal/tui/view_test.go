@@ -195,6 +195,23 @@ func TestRenderInputBar_FocusInput(t *testing.T) {
 	}
 }
 
+func TestRenderInputBar_NoDoublePrompt(t *testing.T) {
+	m := NewWithTargets(nil)
+	m.handleResize(120, 40)
+	m.ready = true
+	m.focus = FocusInput
+
+	output := m.renderInputBar()
+
+	// Should contain exactly one "> " prefix, not "> > "
+	if strings.Contains(output, "> >") {
+		t.Error("input bar should not contain double prompt '> >'")
+	}
+	if !strings.Contains(output, ">") {
+		t.Error("input bar should contain prompt '>'")
+	}
+}
+
 func TestRenderInputBar_SelectMode(t *testing.T) {
 	m := NewWithTargets(nil)
 	m.handleResize(120, 40)

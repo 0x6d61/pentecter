@@ -71,6 +71,10 @@ type Model struct {
 	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
 	Runner *tools.CommandRunner
 
+	// multilineBuffer は Ctrl+Enter で蓄積された複数行入力。
+	// Enter 送信時に現在の入力と結合して全テキストを送信する。
+	multilineBuffer []string
+
 	// Select mode fields — used by /model, /approve to show interactive selection.
 	inputMode      InputMode
 	selectOptions  []SelectOption
@@ -149,6 +153,7 @@ func NewWithTargets(targets []*agent.Target) Model {
 		Padding(0, 1)
 
 	ti := textinput.New()
+	ti.Prompt = ""
 	ti.Placeholder = "Chat with AI or enter command..."
 	ti.CharLimit = 500
 	ti.ShowSuggestions = true
