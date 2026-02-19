@@ -87,6 +87,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Global: Ctrl+O toggles log folding (works from any pane).
+		if msg.String() == "ctrl+o" {
+			m.logsExpanded = !m.logsExpanded
+			m.rebuildViewport()
+			return m, nil
+		}
+
 		// Proposal approval keys — handled regardless of which pane is focused,
 		// as long as the active target has a pending proposal.
 		if t := m.activeTarget(); t != nil && t.Proposal != nil {
@@ -141,11 +148,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case FocusViewport:
-			if msg.String() == "ctrl+o" {
-				m.logsExpanded = !m.logsExpanded
-				m.rebuildViewport()
-				return m, nil
-			}
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
 
