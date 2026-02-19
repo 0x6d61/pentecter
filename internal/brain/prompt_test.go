@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
-	prompt := buildSystemPrompt([]string{"nmap", "nikto", "curl"}, nil)
+	prompt := buildSystemPrompt([]string{"nmap", "nikto", "curl"}, nil, false)
 
 	if !strings.Contains(prompt, "Registered tools: nmap, nikto, curl") {
 		t.Error("expected registered tool names in prompt")
@@ -19,7 +19,7 @@ func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_Empty(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil)
+	prompt := buildSystemPrompt(nil, nil, false)
 
 	if strings.Contains(prompt, "Registered tools:") {
 		t.Error("expected no 'Registered tools:' line when tool list is empty")
@@ -57,7 +57,7 @@ func TestBuildPrompt_NoUserMessage_DefaultInstruction(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsUserInteraction(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil)
+	prompt := buildSystemPrompt(nil, nil, false)
 
 	if !strings.Contains(prompt, "USER INTERACTION") {
 		t.Error("system prompt should contain USER INTERACTION section")
@@ -372,7 +372,7 @@ func TestBuildPrompt_MemoryBeforeLastCommand(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil)
+	prompt := buildSystemPrompt(nil, nil, false)
 
 	if !strings.Contains(prompt, "ALWAYS use \"memory\" action to record key findings") {
 		t.Error("system prompt should contain memory recording enforcement")
@@ -386,7 +386,7 @@ func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsLanguageAdaptation(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil)
+	prompt := buildSystemPrompt(nil, nil, false)
 
 	if !strings.Contains(prompt, "LANGUAGE:") {
 		t.Error("system prompt should contain LANGUAGE section")
@@ -462,7 +462,7 @@ func TestBuildSystemPrompt_WithMCPTools(t *testing.T) {
 			Description: "Click an element",
 		},
 	}
-	prompt := buildSystemPrompt(nil, mcpTools)
+	prompt := buildSystemPrompt(nil, mcpTools, false)
 
 	if !strings.Contains(prompt, "MCP TOOLS:") {
 		t.Error("expected MCP TOOLS section in prompt")
@@ -482,7 +482,7 @@ func TestBuildSystemPrompt_WithMCPTools(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_NoMCPTools(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil)
+	prompt := buildSystemPrompt(nil, nil, false)
 	if strings.Contains(prompt, "MCP TOOLS:") {
 		t.Error("should not contain MCP TOOLS section when no MCP tools")
 	}
@@ -510,7 +510,7 @@ func TestParseActionJSON_CallMCP(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil)
+	prompt := buildSystemPrompt(nil, nil, false)
 
 	// 新しいアクションタイプがプロンプトに含まれることを確認
 	for _, keyword := range []string{"spawn_task", "wait", "check_task", "kill_task"} {
@@ -527,6 +527,112 @@ func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
 	// task_kind が含まれることを確認
 	if !strings.Contains(prompt, "task_kind") {
 		t.Error("expected system prompt to contain task_kind")
+	}
+}
+
+// --- SubAgent プロンプト テスト ---
+
+func TestBuildSystemPrompt_SubAgent_ExcludesSpawnTask(t *testing.T) {
+	prompt := buildSystemPrompt([]string{"nmap", "nikto"}, nil, true)
+
+	// SubAgent プロンプトに spawn_task / wait / check_task / kill_task が含まれないこと
+	for _, keyword := range []string{"spawn_task", "wait", "check_task", "kill_task"} {
+		if strings.Contains(prompt, keyword) {
+			t.Errorf("SubAgent prompt should NOT contain %q", keyword)
+		}
+	}
+
+	// PARALLEL EXECUTION セクションが除外されていること
+	if strings.Contains(prompt, "PARALLEL EXECUTION") {
+		t.Error("SubAgent prompt should NOT contain PARALLEL EXECUTION section")
+	}
+
+	// propose, add_target, call_mcp も除外されていること
+	for _, keyword := range []string{"propose", "add_target", "call_mcp"} {
+		if strings.Contains(prompt, keyword) {
+			t.Errorf("SubAgent prompt should NOT contain %q", keyword)
+		}
+	}
+
+	// USER INTERACTION セクションが除外されていること
+	if strings.Contains(prompt, "USER INTERACTION") {
+		t.Error("SubAgent prompt should NOT contain USER INTERACTION section")
+	}
+
+	// MCP TOOLS セクションが除外されていること（mcpTools は無視される）
+	if strings.Contains(prompt, "MCP TOOLS") {
+		t.Error("SubAgent prompt should NOT contain MCP TOOLS section")
+	}
+}
+
+func TestBuildSystemPrompt_SubAgent_IncludesRunMemoryCompleteThink(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, true)
+
+	// SubAgent プロンプトに run, memory, complete, think が含まれること
+	for _, keyword := range []string{"run", "memory", "complete", "think"} {
+		if !strings.Contains(prompt, keyword) {
+			t.Errorf("SubAgent prompt should contain %q", keyword)
+		}
+	}
+
+	// STALL PREVENTION セクションが含まれること
+	if !strings.Contains(prompt, "STALL PREVENTION") {
+		t.Error("SubAgent prompt should contain STALL PREVENTION section")
+	}
+
+	// LANGUAGE セクションが含まれること
+	if !strings.Contains(prompt, "LANGUAGE") {
+		t.Error("SubAgent prompt should contain LANGUAGE section")
+	}
+
+	// SubAgent であることを示す識別子が含まれること
+	if !strings.Contains(prompt, "SubAgent") {
+		t.Error("SubAgent prompt should identify itself as a SubAgent")
+	}
+}
+
+func TestBuildSystemPrompt_MainAgent_IncludesAll(t *testing.T) {
+	prompt := buildSystemPrompt([]string{"nmap"}, nil, false)
+
+	// MainAgent プロンプトには spawn_task が含まれる
+	if !strings.Contains(prompt, "spawn_task") {
+		t.Error("MainAgent prompt should contain spawn_task")
+	}
+
+	// MainAgent プロンプトには PARALLEL EXECUTION が含まれる
+	if !strings.Contains(prompt, "PARALLEL EXECUTION") {
+		t.Error("MainAgent prompt should contain PARALLEL EXECUTION")
+	}
+
+	// MainAgent プロンプトには USER INTERACTION が含まれる
+	if !strings.Contains(prompt, "USER INTERACTION") {
+		t.Error("MainAgent prompt should contain USER INTERACTION")
+	}
+
+	// MainAgent プロンプトには propose, add_target, call_mcp が含まれる
+	for _, keyword := range []string{"propose", "add_target", "call_mcp"} {
+		if !strings.Contains(prompt, keyword) {
+			t.Errorf("MainAgent prompt should contain %q", keyword)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_SubAgent_IgnoresMCPTools(t *testing.T) {
+	mcpTools := []MCPToolInfo{
+		{
+			Server:      "playwright",
+			Name:        "browser_navigate",
+			Description: "Navigate to URL",
+		},
+	}
+	prompt := buildSystemPrompt(nil, mcpTools, true)
+
+	// SubAgent は mcpTools を無視する
+	if strings.Contains(prompt, "MCP TOOLS") {
+		t.Error("SubAgent prompt should NOT contain MCP TOOLS even when mcpTools are provided")
+	}
+	if strings.Contains(prompt, "playwright") {
+		t.Error("SubAgent prompt should NOT contain MCP server names")
 	}
 }
 

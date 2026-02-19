@@ -22,10 +22,10 @@ services:
     init: true
     command: ["sh", "-c", "/bin/services.sh && tail -f /dev/null"]
     ports:
-      - "21221:21"    # FTP  (vsftpd 2.3.4 — バックドア CVE-2011-2523)
-      - "22221:22"    # SSH  (OpenSSH 4.7p1)
-      - "80221:80"    # HTTP (Apache + PHP/CGI 脆弱性)
-      - "33221:3306"  # MySQL (認証なし)
+      - "2121:21"     # FTP  (vsftpd 2.3.4 — バックドア CVE-2011-2523)
+      - "2222:22"     # SSH  (OpenSSH 4.7p1)
+      - "8080:80"     # HTTP (Apache + PHP/CGI 脆弱性)
+      - "3307:3306"   # MySQL (認証なし)
     networks:
       - pentecter-testnet
     deploy:
@@ -43,4 +43,4 @@ services:
 networks:
   pentecter-testnet:
     driver: bridge
-    internal: true  # 外部インターネットへのルーティングを遮断
+    # internal: true  # 手動テスト時はコメントアウト（ホストからアクセス可能にする）
