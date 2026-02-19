@@ -2,7 +2,7 @@
 
 ## プロジェクト概要
 自律型ペネトレーションテストエージェント（TUIベース）。
-詳細は `docs/architecture.md` および `docs/ui-spec.md` を参照。
+詳細は `docs/architecture_design/architecture.md` および `docs/architecture_design/ui-spec.md` を参照。
 
 ---
 
@@ -71,6 +71,17 @@ CI は push ごとに自動実行されるが、**事前にローカルで確認
 - Brain（LLM）は OS を直接操作しない。必ずツールラッパー経由で実行する
 - TUI の goroutine はブロックしない。重い処理は別 goroutine + channel で通信する
 - ターゲットの状態（Logs, Status, Proposal）は `internal/agent.Target` で一元管理する
+
+---
+
+## コマンド実行モデル
+
+- Brain が生成したコマンドは `CommandRunner` が実行する
+- 実行環境は `tools/*.yaml` の設定で決定論的に決まる（AI は関与しない）
+- 登録済み + docker 設定あり → Docker コンテナ / 登録済み + docker なし → ホスト / 未登録 → ホスト
+- 「ホスト」= pentecter が動いている環境（本番: OS、デモ: コンテナ内）
+- グローバル auto-approve（`--auto-approve` / `/approve on`）で全コマンド自動実行可能
+- 詳細: `docs/architecture_design/execution-model.md`
 
 ---
 

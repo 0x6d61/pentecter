@@ -167,6 +167,72 @@ func TestCommandRunner_ParseCommand(t *testing.T) {
 	}
 }
 
+func TestCommandRunner_AutoApprove_OverridesDefault(t *testing.T) {
+	// auto-approve ON → 未登録ツールも自動実行（needsProposal=false）
+	runner := newTestRunner() // empty registry
+	runner.SetAutoApprove(true)
+
+	ctx := context.Background()
+	needsProposal, _, _, err := runner.Run(ctx, "someunknowntool --flag")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if needsProposal {
+		t.Error("expected needsProposal=false with auto-approve ON for unknown tool")
+	}
+}
+
+func TestCommandRunner_AutoApprove_OverridesExplicitTrue(t *testing.T) {
+	// auto-approve ON → proposal_required: true が明示されていても自動実行
+	trueVal := true
+	runner := newTestRunner(&tools.ToolDef{
+		Name:             "msfconsole",
+		ProposalRequired: &trueVal,
+	})
+	runner.SetAutoApprove(true)
+
+	ctx := context.Background()
+	needsProposal, _, _, err := runner.Run(ctx, "msfconsole -r exploit.rc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if needsProposal {
+		t.Error("expected needsProposal=false with auto-approve ON, even for explicit proposal_required: true")
+	}
+}
+
+func TestCommandRunner_AutoApprove_RegisteredToolNoDocker(t *testing.T) {
+	// auto-approve ON + 登録済みツール（Docker なし、proposal_required 未設定）→ 自動実行
+	runner := newTestRunner(&tools.ToolDef{
+		Name: "customtool",
+		// ProposalRequired: nil, Docker: nil → 通常は要承認
+	})
+	runner.SetAutoApprove(true)
+
+	ctx := context.Background()
+	needsProposal, _, _, err := runner.Run(ctx, "customtool --scan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if needsProposal {
+		t.Error("expected needsProposal=false with auto-approve ON for registered tool without explicit true")
+	}
+}
+
+func TestCommandRunner_AutoApprove_Default_Off(t *testing.T) {
+	// デフォルト（SetAutoApprove 未呼び出し）→ 従来通り未登録は要承認
+	runner := newTestRunner()
+
+	ctx := context.Background()
+	needsProposal, _, _, err := runner.Run(ctx, "someunknowntool --flag")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !needsProposal {
+		t.Error("expected needsProposal=true by default for unknown tool")
+	}
+}
+
 func containsSubstring(ss []string, sub string) bool {
 	for _, s := range ss {
 		if strings.Contains(s, sub) {

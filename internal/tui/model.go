@@ -14,6 +14,7 @@ import (
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/tools"
 )
 
 // FocusState tracks which pane has keyboard focus.
@@ -51,6 +52,9 @@ type Model struct {
 
 	// BrainFactory creates a new Brain from a ConfigHint (for /model command).
 	BrainFactory func(brain.ConfigHint) (brain.Brain, error)
+
+	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
+	Runner *tools.CommandRunner
 }
 
 // AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。

@@ -20,9 +20,10 @@ import (
 //   - Docker 設定なし → ホスト直接実行（要承認）
 //   - proposal_required 明示指定 → その値に従う
 type CommandRunner struct {
-	registry  *Registry
-	blacklist *Blacklist
-	store     *LogStore
+	registry    *Registry
+	blacklist   *Blacklist
+	store       *LogStore
+	autoApprove bool // グローバル自動承認（true: 未登録ツールも自動実行）
 }
 
 // NewCommandRunner は CommandRunner を構築する。
@@ -90,8 +91,23 @@ func (r *CommandRunner) resolveDocker(def *ToolDef) (useDocker bool, dockerAvail
 	return false, false
 }
 
+// SetAutoApprove はグローバル自動承認を切り替える。
+// true にすると、proposal_required: true が明示されたツール以外は全て自動実行される。
+func (r *CommandRunner) SetAutoApprove(v bool) {
+	r.autoApprove = v
+}
+
+// AutoApprove は現在のグローバル自動承認設定を返す。
+func (r *CommandRunner) AutoApprove() bool {
+	return r.autoApprove
+}
+
 // needsProposal は承認ゲートが必要かを判定する。
 func (r *CommandRunner) needsProposal(def *ToolDef, useDocker bool, _ bool) bool {
+	// グローバル auto-approve が ON → 全コマンド無条件で自動実行
+	if r.autoApprove {
+		return false
+	}
 	if useDocker {
 		// Docker 実行 = サンドボックス = 自動承認
 		if def != nil && def.ProposalRequired != nil {

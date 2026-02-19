@@ -209,6 +209,12 @@ func (m *Model) submitInput() {
 	}
 	m.input.SetValue("")
 
+	// /approve command — toggle auto-approve
+	if strings.HasPrefix(text, "/approve") {
+		m.handleApproveCommand(text)
+		return
+	}
+
 	// /model command — switch LLM provider/model
 	if strings.HasPrefix(text, "/model") {
 		m.handleModelCommand(text)
@@ -287,6 +293,36 @@ func (m *Model) addTarget(host string) {
 	m.syncListItems()
 	m.list.Select(m.selected)
 	m.rebuildViewport()
+}
+
+// handleApproveCommand processes /approve commands.
+// /approve       → show current auto-approve state
+// /approve on    → enable auto-approve
+// /approve off   → disable auto-approve
+func (m *Model) handleApproveCommand(text string) {
+	if m.Runner == nil {
+		m.logSystem("Auto-approve not available")
+		return
+	}
+
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/approve"))
+
+	switch arg {
+	case "":
+		if m.Runner.AutoApprove() {
+			m.logSystem("Auto-approve: ON")
+		} else {
+			m.logSystem("Auto-approve: OFF")
+		}
+	case "on":
+		m.Runner.SetAutoApprove(true)
+		m.logSystem("Auto-approve: ON — all commands will execute without confirmation")
+	case "off":
+		m.Runner.SetAutoApprove(false)
+		m.logSystem("Auto-approve: OFF — proposals will require confirmation")
+	default:
+		m.logSystem("Usage: /approve [on|off]")
+	}
 }
 
 // handleModelCommand processes /model commands.
