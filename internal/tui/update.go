@@ -305,53 +305,37 @@ func (m *Model) addTarget(host string) {
 }
 
 // handleApproveCommand processes /approve commands.
-// /approve       → show interactive select UI (ON/OFF)
-// /approve on    → enable auto-approve (backward compatible)
-// /approve off   → disable auto-approve (backward compatible)
-func (m *Model) handleApproveCommand(text string) {
+// Always shows interactive select UI (ON/OFF).
+func (m *Model) handleApproveCommand(_ string) {
 	if m.Runner == nil {
 		m.logSystem("Auto-approve not available")
 		return
 	}
 
-	arg := strings.TrimSpace(strings.TrimPrefix(text, "/approve"))
-
-	switch arg {
-	case "":
-		// Show interactive select UI
-		currentStatus := "OFF"
-		if m.Runner.AutoApprove() {
-			currentStatus = "ON"
-		}
-		m.showSelect(
-			fmt.Sprintf("Auto-approve (current: %s):", currentStatus),
-			[]SelectOption{
-				{Label: "ON  -- auto-approve all commands", Value: "on"},
-				{Label: "OFF -- require approval", Value: "off"},
-			},
-			func(m *Model, value string) {
-				if m.Runner == nil {
-					return
-				}
-				switch value {
-				case "on":
-					m.Runner.SetAutoApprove(true)
-					m.logSystem("Auto-approve: ON -- all commands will execute without confirmation")
-				case "off":
-					m.Runner.SetAutoApprove(false)
-					m.logSystem("Auto-approve: OFF -- proposals will require confirmation")
-				}
-			},
-		)
-	case "on":
-		m.Runner.SetAutoApprove(true)
-		m.logSystem("Auto-approve: ON — all commands will execute without confirmation")
-	case "off":
-		m.Runner.SetAutoApprove(false)
-		m.logSystem("Auto-approve: OFF — proposals will require confirmation")
-	default:
-		m.logSystem("Usage: /approve [on|off]")
+	currentStatus := "OFF"
+	if m.Runner.AutoApprove() {
+		currentStatus = "ON"
 	}
+	m.showSelect(
+		fmt.Sprintf("Auto-approve (current: %s):", currentStatus),
+		[]SelectOption{
+			{Label: "ON  -- auto-approve all commands", Value: "on"},
+			{Label: "OFF -- require approval", Value: "off"},
+		},
+		func(m *Model, value string) {
+			if m.Runner == nil {
+				return
+			}
+			switch value {
+			case "on":
+				m.Runner.SetAutoApprove(true)
+				m.logSystem("Auto-approve: ON -- all commands will execute without confirmation")
+			case "off":
+				m.Runner.SetAutoApprove(false)
+				m.logSystem("Auto-approve: OFF -- proposals will require confirmation")
+			}
+		},
+	)
 }
 
 // modelsForProvider はプロバイダーごとの代表的なモデル一覧を返す。
@@ -382,63 +366,41 @@ func modelsForProvider(p brain.Provider) []SelectOption {
 }
 
 // handleModelCommand processes /model commands.
-// /model          → show interactive 2-step select UI (provider → model)
-// /model <p>      → switch to provider with default model (backward compatible)
-// /model <p>/<m>  → switch to provider with specific model (backward compatible)
-func (m *Model) handleModelCommand(text string) {
-	arg := strings.TrimSpace(strings.TrimPrefix(text, "/model"))
-
-	// /model (no args) → show 2-step select UI: provider → model
-	if arg == "" {
-		detected := brain.DetectAvailableProviders()
-		if len(detected) == 0 {
-			m.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
-			return
-		}
-
-		options := make([]SelectOption, len(detected))
-		for i, p := range detected {
-			options[i] = SelectOption{
-				Label: string(p),
-				Value: string(p),
-			}
-		}
-
-		m.showSelect(
-			"Select provider:",
-			options,
-			func(m *Model, providerValue string) {
-				provider := brain.Provider(providerValue)
-				models := modelsForProvider(provider)
-				if len(models) == 0 {
-					// プロバイダーにモデル一覧がない場合はデフォルトモデルで切り替え
-					m.switchModel(provider, "")
-					return
-				}
-				// Step 2: モデル選択
-				m.showSelect(
-					fmt.Sprintf("Select model (%s):", providerValue),
-					models,
-					func(m *Model, modelValue string) {
-						m.switchModel(provider, modelValue)
-					},
-				)
-			},
-		)
+// Always shows interactive 2-step select UI (provider → model).
+func (m *Model) handleModelCommand(_ string) {
+	detected := brain.DetectAvailableProviders()
+	if len(detected) == 0 {
+		m.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
 		return
 	}
 
-	// Parse provider/model (backward compatible direct input)
-	var provider brain.Provider
-	var model string
-	if parts := strings.SplitN(arg, "/", 2); len(parts) == 2 {
-		provider = brain.Provider(parts[0])
-		model = parts[1]
-	} else {
-		provider = brain.Provider(arg)
+	options := make([]SelectOption, len(detected))
+	for i, p := range detected {
+		options[i] = SelectOption{
+			Label: string(p),
+			Value: string(p),
+		}
 	}
 
-	m.switchModel(provider, model)
+	m.showSelect(
+		"Select provider:",
+		options,
+		func(m *Model, providerValue string) {
+			provider := brain.Provider(providerValue)
+			models := modelsForProvider(provider)
+			if len(models) == 0 {
+				m.switchModel(provider, "")
+				return
+			}
+			m.showSelect(
+				fmt.Sprintf("Select model (%s):", providerValue),
+				models,
+				func(m *Model, modelValue string) {
+					m.switchModel(provider, modelValue)
+				},
+			)
+		},
+	)
 }
 
 // switchModel executes the actual model switch via BrainFactory.

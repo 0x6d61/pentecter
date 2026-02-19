@@ -203,21 +203,17 @@ func TestApproveCommand_NoArgs_ShowsSelect(t *testing.T) {
 	}
 }
 
-func TestApproveCommand_WithArgs_StillWorks(t *testing.T) {
+func TestApproveCommand_WithArgs_ShowsSelect(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})
 	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
 	m.Runner = runner
 
-	// /approve on should still work directly (backward compat)
+	// /approve on should still show select UI (no backward compat)
 	m.handleApproveCommand("/approve on")
 
-	if !runner.AutoApprove() {
-		t.Error("expected auto-approve to be enabled via direct text")
-	}
-	// Should NOT enter select mode
-	if m.inputMode == InputSelect {
-		t.Error("/approve on should not enter select mode")
+	if m.inputMode != InputSelect {
+		t.Error("expected select mode even with args")
 	}
 }
 
@@ -367,24 +363,24 @@ func TestModelModels_ReturnsModelsForProvider(t *testing.T) {
 	}
 }
 
-func TestModelCommand_WithArgs_StillWorks(t *testing.T) {
+func TestModelCommand_WithArgs_ShowsSelect(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
 	target := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{target})
-
-	factoryCalled := false
 	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
-		factoryCalled = true
 		return nil, nil
 	}
 
+	// /model openai/gpt-4o should still show select UI (no backward compat)
 	m.handleModelCommand("/model openai/gpt-4o")
 
-	if !factoryCalled {
-		t.Error("expected BrainFactory to be called with direct args")
-	}
-	// Should NOT enter select mode
-	if m.inputMode == InputSelect {
-		t.Error("/model openai/gpt-4o should not enter select mode")
+	if m.inputMode != InputSelect {
+		t.Error("expected select mode even with args")
 	}
 }
 
