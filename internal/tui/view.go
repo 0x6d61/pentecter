@@ -8,13 +8,6 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-const (
-	// foldThreshold はこの行数を超えるツール出力を自動折りたたみする閾値。
-	foldThreshold = 5
-	// foldPreviewLines は折りたたみ時に表示するプレビュー行数。
-	foldPreviewLines = 3
-)
-
 // View implements tea.Model and renders the full Commander Console layout.
 func (m Model) View() string {
 	if !m.ready {
@@ -132,10 +125,6 @@ func (m Model) renderInputBar() string {
 
 	content := prefix + " " + m.input.View()
 	w := m.width - 2
-
-	if m.focus == FocusInput {
-		return inputBarActiveStyle.Width(w).Render(content)
-	}
 	return inputBarStyle.Width(w).Render(content)
 }
 
@@ -260,72 +249,6 @@ func skipVisual(s string, n int) string {
 	return ""
 }
 
-// softWrap wraps plain text at word boundaries to fit within maxWidth (display columns).
-// Uses runewidth for correct CJK/emoji width calculation.
-// If a single word exceeds maxWidth, it is force-broken at maxWidth columns.
-func softWrap(text string, maxWidth int) string {
-	if maxWidth <= 0 || runewidth.StringWidth(text) <= maxWidth {
-		return text
-	}
-
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return text
-	}
-
-	var lines []string
-	currentLine := ""
-	currentWidth := 0
-
-	for _, word := range words {
-		wordWidth := runewidth.StringWidth(word)
-		if currentLine == "" {
-			// Force-break long words that exceed maxWidth
-			for wordWidth > maxWidth {
-				chunk, rest := truncateToWidth(word, maxWidth)
-				lines = append(lines, chunk)
-				word = rest
-				wordWidth = runewidth.StringWidth(word)
-			}
-			currentLine = word
-			currentWidth = wordWidth
-		} else if currentWidth+1+wordWidth <= maxWidth {
-			currentLine += " " + word
-			currentWidth += 1 + wordWidth
-		} else {
-			lines = append(lines, currentLine)
-			// Force-break long words
-			for wordWidth > maxWidth {
-				chunk, rest := truncateToWidth(word, maxWidth)
-				lines = append(lines, chunk)
-				word = rest
-				wordWidth = runewidth.StringWidth(word)
-			}
-			currentLine = word
-			currentWidth = wordWidth
-		}
-	}
-	if currentLine != "" {
-		lines = append(lines, currentLine)
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-// truncateToWidth splits a string at the given display width boundary.
-// Returns (chunk that fits, remaining string). Safe for multi-byte characters.
-func truncateToWidth(s string, maxWidth int) (string, string) {
-	w := 0
-	for i, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if w+rw > maxWidth {
-			return s[:i], s[i:]
-		}
-		w += rw
-	}
-	return s, ""
-}
-
 // max returns the larger of two integers.
 func max(a, b int) int {
 	if a > b {
@@ -334,15 +257,3 @@ func max(a, b int) int {
 	return b
 }
 
-// foldToolOutput は長いツール出力を折りたたむ。
-// foldThreshold 行超のメッセージの場合、最初の foldPreviewLines 行 + "⋯ +N Lines (Ctrl+O)" を返す。
-func foldToolOutput(message string) (folded string, wasFolded bool) {
-	lines := strings.Split(message, "\n")
-	if len(lines) <= foldThreshold {
-		return message, false
-	}
-	preview := strings.Join(lines[:foldPreviewLines], "\n")
-	remaining := len(lines) - foldPreviewLines
-	indicator := foldIndicatorStyle.Render(fmt.Sprintf("  ⋯ +%d Lines (Ctrl+O)", remaining))
-	return preview + "\n" + indicator, true
-}

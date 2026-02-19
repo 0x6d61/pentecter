@@ -5,8 +5,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -65,14 +65,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildViewport()
 		return m, nil
 
-	// Agent ループからのイベントを処理する。
-	case AgentEventMsg:
-		m.handleAgentEvent(agent.Event(msg))
-		// 次のイベントを待つコマンドを再登録（Bubble Tea の非同期ループパターン）
-		if m.agentEvents != nil {
-			return m, AgentEventCmd(m.agentEvents)
+	// スピナーティックメッセージ処理（thinking/subtask アニメーション用）
+	case spinner.TickMsg:
+		if m.spinning {
+			var spinCmd tea.Cmd
+			m.spinner, spinCmd = m.spinner.Update(msg)
+			m.rebuildViewport() // 新しいスピナーフレームで再描画
+			return m, spinCmd
 		}
 		return m, nil
+
+	// Agent ループからのイベントを処理する。
+	case AgentEventMsg:
+		spinnerCmd := m.handleAgentEvent(agent.Event(msg))
+		// 次のイベントを待つコマンドを再登録（Bubble Tea の非同期ループパターン）
+		var batchCmds []tea.Cmd
+		if spinnerCmd != nil {
+			batchCmds = append(batchCmds, spinnerCmd)
+		}
+		if m.agentEvents != nil {
+			batchCmds = append(batchCmds, AgentEventCmd(m.agentEvents))
+		}
+		return m, tea.Batch(batchCmds...)
 
 	case tea.KeyMsg:
 		// Quit confirmation dialog intercepts all keys when active.
@@ -110,7 +124,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t := m.activeTarget(); t != nil && t.Proposal != nil {
 			switch msg.String() {
 			case "y", "Y":
-				t.AddLog(agent.SourceUser, "Approved: "+t.Proposal.Description)
+				t.AddBlock(agent.NewUserInputBlock("Approved: " + t.Proposal.Description))
 				t.Status = agent.StatusRunning
 				t.ClearProposal()
 				m.syncListItems()
@@ -124,7 +138,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "n", "N":
-				t.AddLog(agent.SourceUser, "Rejected: "+t.Proposal.Description)
+				t.AddBlock(agent.NewUserInputBlock("Rejected: " + t.Proposal.Description))
 				t.Status = agent.StatusIdle
 				t.ClearProposal()
 				m.syncListItems()
@@ -183,10 +197,12 @@ func (m *Model) handleResize(w, h int) {
 	m.height = h
 
 	const (
-		statusBarH = 1
-		inputAreaH = 3 // rounded border (1) + content (1) + rounded border (1)
+		statusBarH  = 1
+		inputBorder = 2 // rounded border top + bottom
 		paneVBorder = 2 // top + bottom borders for panes
 	)
+	// input 領域: ボーダー + textarea の最大行数
+	inputAreaH := inputBorder + m.input.MaxHeight
 
 	paneH := h - statusBarH - inputAreaH - paneVBorder
 	if paneH < 4 {
@@ -266,7 +282,7 @@ func (m *Model) submitInput() {
 			m.addTarget(host)
 			// Log the full original input as user message
 			if t := m.activeTarget(); t != nil {
-				t.AddLog(agent.SourceUser, fullText)
+				t.AddBlock(agent.NewUserInputBlock(fullText))
 			}
 			// Send remaining message (without IP) to agent for processing
 			if msg != "" {
@@ -286,7 +302,7 @@ func (m *Model) submitInput() {
 	}
 
 	if t := m.activeTarget(); t != nil {
-		t.AddLog(agent.SourceUser, fullText)
+		t.AddBlock(agent.NewUserInputBlock(fullText))
 		m.syncListItems()
 		m.rebuildViewport()
 	}
@@ -460,10 +476,10 @@ func (m *Model) switchModel(provider brain.Provider, model string) {
 	m.logSystem(msg)
 }
 
-// logSystem adds a system log to the active target or viewport.
+// logSystem adds a system message to the active target as a Block.
 func (m *Model) logSystem(msg string) {
 	if t := m.activeTarget(); t != nil {
-		t.AddLog(agent.SourceSystem, msg)
+		t.AddBlock(agent.NewSystemBlock(msg))
 	}
 	m.syncListItems()
 	m.rebuildViewport()
@@ -479,64 +495,149 @@ func (m *Model) targetByID(id int) *agent.Target {
 	return nil
 }
 
+// hasActiveSpinner は処理中の thinking または subtask ブロックが存在するかチェックする。
+func (m *Model) hasActiveSpinner() bool {
+	t := m.activeTarget()
+	if t == nil {
+		return false
+	}
+	for _, b := range t.Blocks {
+		if b.Type == agent.BlockThinking && !b.ThinkingDone {
+			return true
+		}
+		if b.Type == agent.BlockSubTask && !b.TaskDone {
+			return true
+		}
+	}
+	return false
+}
+
 // handleAgentEvent は Agent ループから届くイベントを処理する。
 // TargetID を使って正しいターゲットのログを更新する。
-func (m *Model) handleAgentEvent(e agent.Event) {
+// スピナーの開始が必要な場合は tea.Cmd を返す。
+func (m *Model) handleAgentEvent(e agent.Event) tea.Cmd {
 	t := m.targetByID(e.TargetID)
 	if t == nil {
 		t = m.activeTarget() // フォールバック
 	}
 	if t == nil {
-		return
+		return nil
 	}
 
 	needsViewportUpdate := t.ID == m.activeTarget().ID // 表示中のターゲットか
 
+	var spinnerCmd tea.Cmd
+
 	switch e.Type {
 	case agent.EventLog:
-		t.AddLog(e.Source, e.Message)
+		// DisplayBlock を追加
+		switch e.Source {
+		case agent.SourceAI:
+			t.AddBlock(agent.NewAIMessageBlock(e.Message))
+		case agent.SourceTool:
+			// 未完了の BlockCommand があれば出力として追記、なければ新しいコマンドブロックを作成
+			if last := t.LastBlock(); last != nil && last.Type == agent.BlockCommand && !last.Completed {
+				last.Output = append(last.Output, e.Message)
+			} else {
+				t.AddBlock(agent.NewCommandBlock(e.Message))
+			}
+		case agent.SourceSystem:
+			t.AddBlock(agent.NewSystemBlock(e.Message))
+		case agent.SourceUser:
+			t.AddBlock(agent.NewUserInputBlock(e.Message))
+		}
+
 	case agent.EventProposal:
 		if e.Proposal != nil {
 			t.SetProposal(e.Proposal)
 		}
+
 	case agent.EventComplete:
-		t.AddLog(agent.SourceSystem, "✅ "+e.Message)
+		t.AddBlock(agent.NewSystemBlock("✅ " + e.Message))
+
 	case agent.EventError:
-		t.AddLog(agent.SourceSystem, "❌ "+e.Message)
+		t.AddBlock(agent.NewSystemBlock("❌ " + e.Message))
+
 	case agent.EventAddTarget:
 		// AI が横展開で新ターゲットを追加
 		if e.NewHost != "" && m.team != nil {
 			m.addTarget(e.NewHost)
 		}
+
 	case agent.EventStalled:
-		t.AddLog(agent.SourceSystem, "⚠ "+e.Message)
-		t.AddLog(agent.SourceSystem, "Type a message to give the agent new direction.")
+		t.AddBlock(agent.NewSystemBlock("⚠ " + e.Message))
+		t.AddBlock(agent.NewSystemBlock("Type a message to give the agent new direction."))
+
 	case agent.EventTurnStart:
-		t.Logs = append(t.Logs, agent.LogEntry{
-			Time:       time.Now(),
-			Source:     agent.SourceSystem,
-			Message:    fmt.Sprintf("Turn %d", e.TurnNumber),
-			Type:       agent.EventTurnStart,
-			TurnNumber: e.TurnNumber,
-		})
-	case agent.EventCommandResult:
-		t.Logs = append(t.Logs, agent.LogEntry{
-			Time:     time.Now(),
-			Source:   agent.SourceTool,
-			Message:  e.Message,
-			Type:     agent.EventCommandResult,
-			ExitCode: e.ExitCode,
-		})
+		// ターン開始はブロックを追加しない（新UIではターンは暗黙的）
+
+	case agent.EventThinkStart:
+		// 新しい ThinkingBlock を追加
+		t.AddBlock(agent.NewThinkingBlock())
+		// スピナーがまだ動いていなければ開始
+		if !m.spinning {
+			m.spinning = true
+			spinnerCmd = m.spinner.Tick
+		}
+
+	case agent.EventThinkDone:
+		// 最後の ThinkingBlock を完了にマーク
+		if last := t.LastBlock(); last != nil && last.Type == agent.BlockThinking && !last.ThinkingDone {
+			last.ThinkingDone = true
+			last.ThinkDuration = e.Duration
+		}
+		// アクティブなスピナーブロックが残っているかチェック
+		m.spinning = m.hasActiveSpinner()
+
+	case agent.EventCmdStart:
+		// 新しい CommandBlock を追加
+		t.AddBlock(agent.NewCommandBlock(e.Message))
+
+	case agent.EventCmdOutput:
+		// 最後の未完了 CommandBlock に出力行を追記
+		if last := t.LastBlock(); last != nil && last.Type == agent.BlockCommand && !last.Completed {
+			last.Output = append(last.Output, e.OutputLine)
+		}
+
+	case agent.EventCmdDone:
+		// 最後の CommandBlock を完了にマーク
+		if last := t.LastBlock(); last != nil && last.Type == agent.BlockCommand {
+			last.Completed = true
+			last.ExitCode = e.ExitCode
+			last.Duration = e.Duration
+		}
+		// アクティブなスピナーブロックが残っているかチェック
+		m.spinning = m.hasActiveSpinner()
+
+	case agent.EventSubTaskStart:
+		// 新しい SubTaskBlock を追加
+		t.AddBlock(agent.NewSubTaskBlock(e.TaskID, e.Message))
+		// スピナーがまだ動いていなければ開始
+		if !m.spinning {
+			m.spinning = true
+			spinnerCmd = m.spinner.Tick
+		}
+
 	case agent.EventSubTaskLog:
-		t.AddLog(e.Source, e.Message)
+		// サブタスクログはブロックを追加しない（内部処理）
+
 	case agent.EventSubTaskComplete:
-		t.AddLog(agent.SourceSystem, "Task completed: "+e.Message)
+		// 対応するサブタスクブロックを完了にマーク
+		for i := len(t.Blocks) - 1; i >= 0; i-- {
+			if t.Blocks[i].Type == agent.BlockSubTask && t.Blocks[i].TaskID == e.TaskID && !t.Blocks[i].TaskDone {
+				t.Blocks[i].TaskDone = true
+				break
+			}
+		}
+		// アクティブなスピナーブロックが残っているかチェック
+		m.spinning = m.hasActiveSpinner()
 	}
 
 	m.syncListItems()
 	if needsViewportUpdate {
 		m.rebuildViewport()
 	}
+	return spinnerCmd
 }
 
 // handleConfirmQuitKey processes key events in the quit confirmation dialog.

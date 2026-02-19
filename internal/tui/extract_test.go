@@ -188,13 +188,13 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 		t.Error("should not show select when no providers are available")
 	}
 	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem {
+	for _, b := range target.Blocks {
+		if b.Type == agent.BlockSystem {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected system log about no providers")
+		t.Error("expected system block about no providers")
 	}
 }
 
@@ -259,12 +259,12 @@ func TestHandleApproveCommand_NilRunner(t *testing.T) {
 	m.handleApproveCommand("/approve")
 
 	found := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceSystem && log.Message == "Auto-approve not available" {
+	for _, b := range target.Blocks {
+		if b.Type == agent.BlockSystem && b.SystemMsg == "Auto-approve not available" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected system log about auto-approve not available")
+		t.Error("expected system block about auto-approve not available")
 	}
 }

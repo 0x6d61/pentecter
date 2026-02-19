@@ -214,15 +214,15 @@ func TestE2E_AgentLoop(t *testing.T) {
 		}
 	}
 
-	// ターゲットにログが記録されていること
-	if len(target.Logs) == 0 {
-		t.Error("expected target to have logs after agent run")
+	// ターゲットにブロックが記録されていること
+	if len(target.Blocks) == 0 {
+		t.Error("expected target to have blocks after agent run")
 	}
 
-	// エンティティが収集されていること（nmap を Brain が実行した場合）
+	// コマンドブロックが存在すること（nmap を Brain が実行した場合）
 	anyRunTool := false
-	for _, log := range target.Logs {
-		if log.Source == agent.SourceTool {
+	for _, b := range target.Blocks {
+		if b.Type == agent.BlockCommand {
 			anyRunTool = true
 			break
 		}
@@ -233,8 +233,8 @@ func TestE2E_AgentLoop(t *testing.T) {
 		return
 	}
 
-	t.Logf("Agent completed. Entities found: %d, Logs: %d",
-		len(target.Entities), len(target.Logs))
+	t.Logf("Agent completed. Entities found: %d, Blocks: %d",
+		len(target.Entities), len(target.Blocks))
 }
 
 // --- ヘルパー ---

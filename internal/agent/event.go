@@ -1,5 +1,7 @@
 package agent
 
+import "time"
+
 // EventType は Agent から TUI へ送るイベントの種別。
 type EventType string
 
@@ -18,12 +20,25 @@ const (
 	EventStalled EventType = "stalled"
 	// EventTurnStart は Brain 思考サイクルの開始を示す。
 	EventTurnStart EventType = "turn_start"
-	// EventCommandResult はコマンド実行結果のサマリー。
-	EventCommandResult EventType = "command_result"
 	// EventSubTaskLog はサブタスクの出力ログ。
 	EventSubTaskLog EventType = "subtask_log"
 	// EventSubTaskComplete はサブタスクの完了通知。
 	EventSubTaskComplete EventType = "subtask_complete"
+
+	// --- Block-based rendering events ---
+
+	// EventThinkStart は Brain.Think() の開始を示す（スピナー開始）。
+	EventThinkStart EventType = "think_start"
+	// EventThinkDone は Brain.Think() の完了を示す（Completed in Xs）。
+	EventThinkDone EventType = "think_done"
+	// EventCmdStart はコマンド実行の開始を示す（コマンド表示）。
+	EventCmdStart EventType = "cmd_start"
+	// EventCmdOutput はコマンド出力の1行を示す（BlockCommand の Output に追記）。
+	EventCmdOutput EventType = "cmd_output"
+	// EventCmdDone はコマンド実行の完了を示す（折りたたみ確定）。
+	EventCmdDone EventType = "cmd_done"
+	// EventSubTaskStart はサブタスク開始を示す（スピナー表示）。
+	EventSubTaskStart EventType = "subtask_start"
 )
 
 // Event は Agent ループから TUI へ送るメッセージ。
@@ -35,6 +50,10 @@ type Event struct {
 	Proposal   *Proposal // EventProposal 時に使用
 	NewHost    string    // EventAddTarget 時に使用
 	TurnNumber int       // EventTurnStart 時のターン番号
-	ExitCode   int       // EventCommandResult 時の exit code
+	ExitCode   int       // EventCmdDone 時の exit code
 	TaskID     string    // SubTask 関連イベント時の taskID
+
+	// Block-based rendering fields
+	Duration   time.Duration // EventThinkDone, EventCmdDone のかかった時間
+	OutputLine string        // EventCmdOutput の出力行
 }
