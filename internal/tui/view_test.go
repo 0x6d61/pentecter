@@ -2,12 +2,9 @@ package tui
 
 import (
 	"strings"
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/0x6d61/pentecter/internal/agent"
-	"github.com/mattn/go-runewidth"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,7 +24,7 @@ func TestView_NotReady(t *testing.T) {
 
 func TestView_ReadyWithTargets(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
-	t1.AddLog(agent.SourceSystem, "Session started")
+	t1.AddBlock(agent.NewSystemBlock("Session started"))
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
@@ -235,185 +232,56 @@ func TestRenderInputBar_SelectMode(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// rebuildViewport — TurnSeparator / CommandResult
+// rebuildViewport — Block-based rendering
 // ---------------------------------------------------------------------------
 
-func TestRebuildViewport_TurnSeparator(t *testing.T) {
+func TestRebuildViewport_SystemBlock(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
-	t1.Logs = append(t1.Logs, agent.LogEntry{
-		Time:       time.Now(),
-		Source:     agent.SourceSystem,
-		Message:    "Turn 3",
-		Type:       agent.EventTurnStart,
-		TurnNumber: 3,
-	})
+	t1.AddBlock(agent.NewSystemBlock("Session started"))
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
 	m.rebuildViewport()
 
 	content := m.viewport.View()
-	if !strings.Contains(content, "Turn 3") {
-		t.Errorf("expected 'Turn 3' in viewport, got: %s", content)
+	if !strings.Contains(content, "Session started") {
+		t.Errorf("expected 'Session started' in viewport, got: %s", content)
 	}
 }
 
-func TestRebuildViewport_CommandResult_Success(t *testing.T) {
+func TestRebuildViewport_CommandBlock_Success(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
-	t1.Logs = append(t1.Logs, agent.LogEntry{
-		Time:     time.Now(),
-		Source:   agent.SourceTool,
-		Message:  "exit 0 (5 lines)",
-		Type:     agent.EventCommandResult,
-		ExitCode: 0,
-	})
+	cmd := agent.NewCommandBlock("nmap -sV 10.0.0.1")
+	cmd.Output = []string{"PORT   STATE SERVICE", "80/tcp open  http"}
+	cmd.Completed = true
+	cmd.ExitCode = 0
+	t1.AddBlock(cmd)
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
 	m.rebuildViewport()
 
 	content := m.viewport.View()
-	if !strings.Contains(content, "exit 0") {
-		t.Errorf("expected 'exit 0' in viewport, got: %s", content)
+	if !strings.Contains(content, "nmap") {
+		t.Errorf("expected 'nmap' in viewport, got: %s", content)
 	}
 }
 
-func TestRebuildViewport_CommandResult_Failure(t *testing.T) {
+func TestRebuildViewport_CommandBlock_Failure(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
-	t1.Logs = append(t1.Logs, agent.LogEntry{
-		Time:     time.Now(),
-		Source:   agent.SourceTool,
-		Message:  "exit 2: SyntaxError: invalid syntax",
-		Type:     agent.EventCommandResult,
-		ExitCode: 2,
-	})
+	cmd := agent.NewCommandBlock("nmap -sV --bad-flag 10.0.0.1")
+	cmd.Output = []string{"Error: bad flag"}
+	cmd.Completed = true
+	cmd.ExitCode = 2
+	t1.AddBlock(cmd)
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
 	m.rebuildViewport()
 
 	content := m.viewport.View()
-	if !strings.Contains(content, "exit 2") {
-		t.Errorf("expected 'exit 2' in viewport, got: %s", content)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// softWrap
-// ---------------------------------------------------------------------------
-
-func TestSoftWrap_ShortText(t *testing.T) {
-	result := softWrap("hello world", 40)
-	if result != "hello world" {
-		t.Errorf("short text should not wrap, got %q", result)
-	}
-}
-
-func TestSoftWrap_LongText(t *testing.T) {
-	result := softWrap("aaa bbb ccc ddd eee", 11)
-	lines := strings.Split(result, "\n")
-	if len(lines) < 2 {
-		t.Errorf("expected wrapping, got single line: %q", result)
-	}
-	for _, line := range lines {
-		if len(line) > 11 {
-			t.Errorf("line exceeds maxWidth: %q (len=%d)", line, len(line))
-		}
-	}
-}
-
-func TestSoftWrap_ZeroWidth(t *testing.T) {
-	result := softWrap("hello", 0)
-	if result != "hello" {
-		t.Errorf("zero width should return original, got %q", result)
-	}
-}
-
-func TestSoftWrap_SingleLongWord(t *testing.T) {
-	result := softWrap("abcdefghijklmnop", 5)
-	// Single long word with no spaces — force-break at width
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
-		if len(line) > 5 {
-			t.Errorf("line exceeds maxWidth after force-break: %q (len=%d)", line, len(line))
-		}
-	}
-}
-
-func TestSoftWrap_EmptyString(t *testing.T) {
-	result := softWrap("", 40)
-	if result != "" {
-		t.Errorf("empty string should return empty, got %q", result)
-	}
-}
-
-func TestSoftWrap_CJKText(t *testing.T) {
-	// Each CJK character takes 2 display columns
-	// "日本語テスト" = 6 chars × 2 columns = 12 columns
-	result := softWrap("日本語テスト データ", 10)
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
-		w := runewidth.StringWidth(line)
-		if w > 10 {
-			t.Errorf("CJK line exceeds maxWidth: %q (display width=%d)", line, w)
-		}
-	}
-	if len(lines) < 2 {
-		t.Errorf("expected CJK text to wrap, got single line: %q", result)
-	}
-}
-
-func TestSoftWrap_CJKSingleLongWord(t *testing.T) {
-	// CJK text without spaces should be force-broken at display width
-	result := softWrap("日本語テストデータ確認中", 8)
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
-		w := runewidth.StringWidth(line)
-		if w > 8 {
-			t.Errorf("CJK line exceeds maxWidth after force-break: %q (display width=%d)", line, w)
-		}
-	}
-	if len(lines) < 2 {
-		t.Errorf("expected CJK long word to be force-broken, got single line: %q", result)
-	}
-}
-
-func TestSoftWrap_MixedASCIICJK(t *testing.T) {
-	// Mixed ASCII and CJK text
-	result := softWrap("ポート80 open HTTP Apache httpd 2.4.49", 20)
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
-		w := runewidth.StringWidth(line)
-		if w > 20 {
-			t.Errorf("mixed line exceeds maxWidth: %q (display width=%d)", line, w)
-		}
-	}
-}
-
-func TestTruncateToWidth(t *testing.T) {
-	tests := []struct {
-		input    string
-		maxWidth int
-		wantLen  int // expected display width of chunk
-	}{
-		{"hello", 3, 3},
-		{"日本語", 4, 4},        // 日本 (2+2=4)
-		{"日本語", 3, 2},        // 日 (2) — can't fit 本 (would be 4)
-		{"abc日本", 5, 5},       // abc日 (1+1+1+2=5)
-	}
-	for _, tt := range tests {
-		chunk, rest := truncateToWidth(tt.input, tt.maxWidth)
-		w := runewidth.StringWidth(chunk)
-		if w > tt.maxWidth {
-			t.Errorf("truncateToWidth(%q, %d): chunk %q has width %d > %d", tt.input, tt.maxWidth, chunk, w, tt.maxWidth)
-		}
-		if w != tt.wantLen {
-			t.Errorf("truncateToWidth(%q, %d): chunk %q has width %d, want %d", tt.input, tt.maxWidth, chunk, w, tt.wantLen)
-		}
-		// chunk + rest should reconstruct original
-		if chunk+rest != tt.input {
-			t.Errorf("truncateToWidth(%q, %d): chunk+rest = %q, want %q", tt.input, tt.maxWidth, chunk+rest, tt.input)
-		}
+	if !strings.Contains(content, "nmap") {
+		t.Errorf("expected 'nmap' in viewport, got: %s", content)
 	}
 }
 
@@ -421,11 +289,11 @@ func TestTruncateToWidth(t *testing.T) {
 // rebuildViewport — Long line wrapping
 // ---------------------------------------------------------------------------
 
-func TestRebuildViewport_LongLineWraps(t *testing.T) {
+func TestRebuildViewport_LongAIMessageWraps(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
-	// Create a message that's longer than a narrow viewport
+	// Create an AI message block with long text that should wrap via glamour
 	longMsg := strings.Repeat("word ", 30) // ~150 chars
-	t1.AddLog(agent.SourceTool, longMsg)
+	t1.AddBlock(agent.NewAIMessageBlock(longMsg))
 
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(60, 40) // narrow viewport
@@ -435,8 +303,7 @@ func TestRebuildViewport_LongLineWraps(t *testing.T) {
 	content := m.viewport.View()
 	lines := strings.Split(content, "\n")
 
-	// The long message should be split across multiple lines
-	// (the original was ~150 chars, viewport is ~24 chars for content after prefix)
+	// The long message should be split across multiple lines by glamour
 	foundWordLine := false
 	for _, line := range lines {
 		if strings.Contains(line, "word") {
@@ -455,7 +322,7 @@ func TestRebuildViewport_LongLineWraps(t *testing.T) {
 		}
 	}
 	if wordLineCount < 2 {
-		t.Errorf("expected long message to wrap across multiple lines, got %d lines with 'word'", wordLineCount)
+		t.Errorf("expected long AI message to wrap across multiple lines, got %d lines with 'word'", wordLineCount)
 	}
 }
 
@@ -642,88 +509,3 @@ func TestTargetListItem_Description_AllStatuses(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// foldToolOutput
-// ---------------------------------------------------------------------------
-
-func TestFoldToolOutput_LongMessage(t *testing.T) {
-	// 10行のメッセージを作成
-	lines := make([]string, 10)
-	for i := range lines {
-		lines[i] = fmt.Sprintf("line %d", i+1)
-	}
-	message := strings.Join(lines, "\n")
-
-	result, wasFolded := foldToolOutput(message)
-
-	if !wasFolded {
-		t.Error("expected wasFolded == true for 10-line message")
-	}
-	if !strings.Contains(result, "line 1") {
-		t.Error("expected result to contain 'line 1'")
-	}
-	if !strings.Contains(result, "line 2") {
-		t.Error("expected result to contain 'line 2'")
-	}
-	if !strings.Contains(result, "line 3") {
-		t.Error("expected result to contain 'line 3'")
-	}
-	if strings.Contains(result, "line 4") {
-		t.Error("expected result NOT to contain 'line 4'")
-	}
-	if strings.Contains(result, "line 5") {
-		t.Error("expected result NOT to contain 'line 5'")
-	}
-	if !strings.Contains(result, "+7 Lines (Ctrl+O)") {
-		t.Errorf("expected '+7 Lines (Ctrl+O)' in result, got:\n%s", result)
-	}
-}
-
-func TestFoldToolOutput_ShortMessage(t *testing.T) {
-	message := "line 1\nline 2\nline 3"
-
-	result, wasFolded := foldToolOutput(message)
-
-	if wasFolded {
-		t.Error("expected wasFolded == false for 3-line message")
-	}
-	if result != message {
-		t.Errorf("expected result == original message, got:\n%s", result)
-	}
-}
-
-func TestFoldToolOutput_ExactThreshold(t *testing.T) {
-	// foldThreshold は 5 — ちょうど5行はたたまない
-	lines := make([]string, 5)
-	for i := range lines {
-		lines[i] = fmt.Sprintf("line %d", i+1)
-	}
-	message := strings.Join(lines, "\n")
-
-	result, wasFolded := foldToolOutput(message)
-
-	if wasFolded {
-		t.Error("expected wasFolded == false for exactly 5-line message (threshold)")
-	}
-	if result != message {
-		t.Errorf("expected result == original message, got:\n%s", result)
-	}
-}
-
-func TestFoldToolOutput_SixLines(t *testing.T) {
-	// 6行 = 閾値を1行超過
-	lines := make([]string, 6)
-	for i := range lines {
-		lines[i] = fmt.Sprintf("line %d", i+1)
-	}
-	message := strings.Join(lines, "\n")
-
-	result, wasFolded := foldToolOutput(message)
-
-	if !wasFolded {
-		t.Error("expected wasFolded == true for 6-line message")
-	}
-	if !strings.Contains(result, "+3 Lines (Ctrl+O)") {
-		t.Errorf("expected '+3 Lines (Ctrl+O)' in result, got:\n%s", result)
-	}
-}

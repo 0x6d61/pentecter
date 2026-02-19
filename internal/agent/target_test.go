@@ -19,30 +19,8 @@ func TestNewTarget_InitialState(t *testing.T) {
 	if tgt.Status != agent.StatusIdle {
 		t.Errorf("Status: got %s, want %s", tgt.Status, agent.StatusIdle)
 	}
-	if len(tgt.Logs) != 0 {
-		t.Errorf("Logs: got %d entries, want 0", len(tgt.Logs))
-	}
 	if tgt.Proposal != nil {
 		t.Errorf("Proposal: got non-nil, want nil")
-	}
-}
-
-func TestTarget_AddLog(t *testing.T) {
-	tgt := agent.NewTarget(1, "10.0.0.1")
-	tgt.AddLog(agent.SourceAI, "Starting recon")
-	tgt.AddLog(agent.SourceTool, "nmap -sV 10.0.0.1")
-
-	if len(tgt.Logs) != 2 {
-		t.Fatalf("Logs count: got %d, want 2", len(tgt.Logs))
-	}
-	if tgt.Logs[0].Source != agent.SourceAI {
-		t.Errorf("Log[0].Source: got %s, want %s", tgt.Logs[0].Source, agent.SourceAI)
-	}
-	if tgt.Logs[0].Message != "Starting recon" {
-		t.Errorf("Log[0].Message: got %s, want Starting recon", tgt.Logs[0].Message)
-	}
-	if tgt.Logs[0].Time.IsZero() {
-		t.Errorf("Log[0].Time: should not be zero")
 	}
 }
 
@@ -267,5 +245,79 @@ func TestTarget_SetProposal_Nil_AfterExistingProposal(t *testing.T) {
 	// Status should remain PAUSED (SetProposal(nil) does not change status)
 	if tgt.Status != agent.StatusPaused {
 		t.Errorf("Status should remain PAUSED after SetProposal(nil), got %s", tgt.Status)
+	}
+}
+
+// --- DisplayBlock integration tests ---
+
+func TestNewTarget_BlocksInitialized(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	if tgt.Blocks == nil {
+		t.Fatal("Blocks: got nil, want empty slice")
+	}
+	if len(tgt.Blocks) != 0 {
+		t.Errorf("Blocks: got %d entries, want 0", len(tgt.Blocks))
+	}
+}
+
+func TestTarget_AddBlock(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	b1 := agent.NewCommandBlock("nmap -sV 10.0.0.1")
+	b2 := agent.NewAIMessageBlock("Starting scan")
+
+	tgt.AddBlock(b1)
+	tgt.AddBlock(b2)
+
+	if len(tgt.Blocks) != 2 {
+		t.Fatalf("Blocks count: got %d, want 2", len(tgt.Blocks))
+	}
+	if tgt.Blocks[0].Type != agent.BlockCommand {
+		t.Errorf("Blocks[0].Type: got %d, want %d (BlockCommand)", tgt.Blocks[0].Type, agent.BlockCommand)
+	}
+	if tgt.Blocks[0].Command != "nmap -sV 10.0.0.1" {
+		t.Errorf("Blocks[0].Command: got %q, want %q", tgt.Blocks[0].Command, "nmap -sV 10.0.0.1")
+	}
+	if tgt.Blocks[1].Type != agent.BlockAIMessage {
+		t.Errorf("Blocks[1].Type: got %d, want %d (BlockAIMessage)", tgt.Blocks[1].Type, agent.BlockAIMessage)
+	}
+}
+
+func TestTarget_LastBlock_Empty(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	if got := tgt.LastBlock(); got != nil {
+		t.Errorf("LastBlock on empty: got %v, want nil", got)
+	}
+}
+
+func TestTarget_LastBlock_ReturnsLast(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	tgt.AddBlock(agent.NewCommandBlock("first"))
+	tgt.AddBlock(agent.NewSystemBlock("second"))
+	tgt.AddBlock(agent.NewAIMessageBlock("third"))
+
+	last := tgt.LastBlock()
+	if last == nil {
+		t.Fatal("LastBlock: got nil, want non-nil")
+	}
+	if last.Type != agent.BlockAIMessage {
+		t.Errorf("LastBlock.Type: got %d, want %d (BlockAIMessage)", last.Type, agent.BlockAIMessage)
+	}
+	if last.Message != "third" {
+		t.Errorf("LastBlock.Message: got %q, want %q", last.Message, "third")
+	}
+}
+
+func TestTarget_AddBlock_Multiple(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	tgt.AddBlock(agent.NewAIMessageBlock("message 1"))
+	tgt.AddBlock(agent.NewSystemBlock("message 2"))
+
+	if len(tgt.Blocks) != 2 {
+		t.Errorf("Blocks count: got %d, want 2", len(tgt.Blocks))
 	}
 }

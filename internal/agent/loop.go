@@ -64,6 +64,9 @@ type Loop struct {
 	// ユーザーメッセージ即時処理用
 	pendingUserMsg string // post-drain で取得したユーザーメッセージ
 	turnCount      int    // 現在のターン番号
+
+	// コマンド実行時間計測用
+	cmdStartTime time.Time
 }
 
 // NewLoop は Loop を構築する。
@@ -147,7 +150,9 @@ func (l *Loop) Run(ctx context.Context) {
 		}
 
 		l.emit(Event{Type: EventTurnStart, TurnNumber: l.turnCount})
-		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Thinking..."})
+		l.emit(Event{Type: EventThinkStart})
+
+		thinkStartTime := time.Now()
 
 		var action *schema.Action
 		var brainErr error
@@ -180,6 +185,9 @@ func (l *Loop) Run(ctx context.Context) {
 			l.target.Status = StatusFailed
 			return
 		}
+
+		thinkDuration := time.Since(thinkStartTime)
+		l.emit(Event{Type: EventThinkDone, Duration: thinkDuration})
 
 		// Post-think drain: Brain.Think() 中に届いたユーザーメッセージを回収
 		if msg := l.drainUserMsg(); msg != "" {
@@ -256,7 +264,8 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	}
 
 	l.lastCommand = command
-	l.emit(Event{Type: EventLog, Source: SourceTool, Message: command})
+	l.cmdStartTime = time.Now()
+	l.emit(Event{Type: EventCmdStart, Message: command})
 	l.target.Status = StatusRunning
 
 	needsProposal, linesCh, resultCh, err := l.runner.Run(ctx, command)
@@ -355,7 +364,8 @@ func (l *Loop) callMCP(ctx context.Context, action *schema.Action) {
 
 	toolLabel := fmt.Sprintf("[MCP] %s.%s", action.MCPServer, action.MCPTool)
 	l.lastCommand = toolLabel
-	l.emit(Event{Type: EventLog, Source: SourceTool, Message: toolLabel})
+	l.cmdStartTime = time.Now()
+	l.emit(Event{Type: EventCmdStart, Message: toolLabel})
 	l.target.Status = StatusRunning
 
 	result, err := l.mcpMgr.CallTool(ctx, action.MCPServer, action.MCPTool, action.MCPArgs)
@@ -389,17 +399,21 @@ func (l *Loop) callMCP(ctx context.Context, action *schema.Action) {
 	l.lastToolOutput = output
 	l.target.Status = StatusScanning
 
-	// TUI にツール出力を表示
+	// TUI にツール出力を表示（Block-based: EventCmdOutput で行単位送信）
 	if output != "" {
-		l.emit(Event{Type: EventLog, Source: SourceTool, Message: output})
+		for _, line := range strings.Split(output, "\n") {
+			if line != "" {
+				l.emit(Event{Type: EventCmdOutput, OutputLine: line})
+			}
+		}
 	}
 
 	// コマンド結果サマリー
 	l.emit(Event{
-		Type:     EventCommandResult,
-		Source:   SourceTool,
-		Message:  buildCommandSummary(l.lastExitCode, output),
+		Type:     EventCmdDone,
 		ExitCode: l.lastExitCode,
+		Duration: time.Since(l.cmdStartTime),
+		Message:  buildCommandSummary(l.lastExitCode, output),
 	})
 
 	// Post-exec drain
@@ -609,7 +623,7 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 		if line.Content == "" {
 			continue
 		}
-		l.emit(Event{Type: EventLog, Source: SourceTool, Message: line.Content})
+		l.emit(Event{Type: EventCmdOutput, OutputLine: line.Content})
 	}
 
 	result := <-resultCh
@@ -639,11 +653,12 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 	}
 	l.lastExitCode = result.ExitCode
 
+	// Block-based rendering event
 	l.emit(Event{
-		Type:     EventCommandResult,
-		Source:   SourceTool,
-		Message:  buildCommandSummary(result.ExitCode, result.Truncated),
+		Type:     EventCmdDone,
 		ExitCode: result.ExitCode,
+		Duration: time.Since(l.cmdStartTime),
+		Message:  buildCommandSummary(result.ExitCode, result.Truncated),
 	})
 
 	l.target.Status = StatusScanning

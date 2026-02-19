@@ -45,6 +45,13 @@ func (l *Loop) handleSpawnTask(ctx context.Context, action *schema.Action) {
 		return
 	}
 
+	// Block-based rendering event
+	l.emit(Event{
+		Type:    EventSubTaskStart,
+		TaskID:  taskID,
+		Message: req.Goal,
+	})
+
 	msg := fmt.Sprintf("Task spawned: %s (kind=%s, goal=%s)", taskID, req.Kind, req.Goal)
 	l.emit(Event{Type: EventLog, Source: SourceSystem, Message: msg})
 	l.lastToolOutput = msg

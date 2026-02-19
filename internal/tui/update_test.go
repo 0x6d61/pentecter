@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -325,11 +326,11 @@ func TestSubmitInput_EmptyInput(t *testing.T) {
 	m := NewWithTargets([]*agent.Target{t1})
 	m.input.SetValue("")
 
-	logsBefore := len(t1.Logs)
+	blocksBefore := len(t1.Blocks)
 	m.submitInput()
 
-	if len(t1.Logs) != logsBefore {
-		t.Error("empty input should not add any log entry")
+	if len(t1.Blocks) != blocksBefore {
+		t.Error("empty input should not add any block")
 	}
 }
 
@@ -338,11 +339,11 @@ func TestSubmitInput_WhitespaceOnly(t *testing.T) {
 	m := NewWithTargets([]*agent.Target{t1})
 	m.input.SetValue("   ")
 
-	logsBefore := len(t1.Logs)
+	blocksBefore := len(t1.Blocks)
 	m.submitInput()
 
-	if len(t1.Logs) != logsBefore {
-		t.Error("whitespace-only input should not add any log entry")
+	if len(t1.Blocks) != blocksBefore {
+		t.Error("whitespace-only input should not add any block")
 	}
 }
 
@@ -353,18 +354,18 @@ func TestSubmitInput_NormalText(t *testing.T) {
 	m.ready = true
 	m.input.SetValue("scan the target")
 
-	logsBefore := len(t1.Logs)
+	blocksBefore := len(t1.Blocks)
 	m.submitInput()
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log, got %d", len(t1.Logs)-logsBefore)
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block, got %d", len(t1.Blocks)-blocksBefore)
 	}
-	lastLog := t1.Logs[len(t1.Logs)-1]
-	if lastLog.Source != agent.SourceUser {
-		t.Errorf("expected SourceUser, got %q", lastLog.Source)
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if lastBlock.Type != agent.BlockUserInput {
+		t.Errorf("expected BlockUserInput, got %d", lastBlock.Type)
 	}
-	if lastLog.Message != "scan the target" {
-		t.Errorf("expected message 'scan the target', got %q", lastLog.Message)
+	if lastBlock.UserText != "scan the target" {
+		t.Errorf("expected UserText 'scan the target', got %q", lastBlock.UserText)
 	}
 	// Input should be cleared
 	if m.input.Value() != "" {
@@ -431,22 +432,23 @@ func TestHandleAgentEvent_EventLog(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
+	blocksBefore := len(t1.Blocks)
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventLog,
 		Source:   agent.SourceAI,
 		Message:  "Found open port 80",
 	})
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log, got %d", len(t1.Logs)-logsBefore)
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block, got %d", len(t1.Blocks)-blocksBefore)
 	}
-	if t1.Logs[len(t1.Logs)-1].Message != "Found open port 80" {
-		t.Errorf("unexpected message: %q", t1.Logs[len(t1.Logs)-1].Message)
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if lastBlock.Type != agent.BlockAIMessage {
+		t.Errorf("expected BlockAIMessage, got %d", lastBlock.Type)
 	}
-	if t1.Logs[len(t1.Logs)-1].Source != agent.SourceAI {
-		t.Errorf("expected SourceAI, got %q", t1.Logs[len(t1.Logs)-1].Source)
+	if lastBlock.Message != "Found open port 80" {
+		t.Errorf("unexpected message: %q", lastBlock.Message)
 	}
 }
 
@@ -461,7 +463,7 @@ func TestHandleAgentEvent_EventProposal(t *testing.T) {
 		Tool:        "nmap",
 		Args:        []string{"-sV", "10.0.0.1"},
 	}
-	m.handleAgentEvent(agent.Event{
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventProposal,
 		Proposal: proposal,
@@ -484,8 +486,8 @@ func TestHandleAgentEvent_EventProposal_NilProposal(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
+	blocksBefore := len(t1.Blocks)
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventProposal,
 		Proposal: nil,
@@ -495,9 +497,9 @@ func TestHandleAgentEvent_EventProposal_NilProposal(t *testing.T) {
 	if t1.Proposal != nil {
 		t.Error("expected proposal to remain nil")
 	}
-	// No log should be added for nil proposal
-	if len(t1.Logs) != logsBefore {
-		t.Errorf("expected no new logs for nil proposal, got %d new", len(t1.Logs)-logsBefore)
+	// No block should be added for nil proposal
+	if len(t1.Blocks) != blocksBefore {
+		t.Errorf("expected no new blocks for nil proposal, got %d new", len(t1.Blocks)-blocksBefore)
 	}
 }
 
@@ -507,18 +509,19 @@ func TestHandleAgentEvent_EventComplete(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
+	blocksBefore := len(t1.Blocks)
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventComplete,
 		Message:  "Assessment complete",
 	})
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log, got %d", len(t1.Logs)-logsBefore)
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block, got %d", len(t1.Blocks)-blocksBefore)
 	}
-	if !strings.HasPrefix(t1.Logs[len(t1.Logs)-1].Message, "✅") {
-		t.Errorf("expected complete message to start with checkmark, got %q", t1.Logs[len(t1.Logs)-1].Message)
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if !strings.HasPrefix(lastBlock.SystemMsg, "\u2705") {
+		t.Errorf("expected complete message to start with checkmark, got %q", lastBlock.SystemMsg)
 	}
 }
 
@@ -528,22 +531,19 @@ func TestHandleAgentEvent_EventError(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
+	blocksBefore := len(t1.Blocks)
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventError,
 		Message:  "Connection refused",
 	})
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log, got %d", len(t1.Logs)-logsBefore)
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block, got %d", len(t1.Blocks)-blocksBefore)
 	}
-	lastMsg := t1.Logs[len(t1.Logs)-1].Message
-	if !strings.Contains(lastMsg, "Connection refused") {
-		t.Errorf("expected error message to contain 'Connection refused', got %q", lastMsg)
-	}
-	if !strings.HasPrefix(lastMsg, "❌") {
-		t.Errorf("expected error message to start with X mark, got %q", lastMsg)
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if !strings.Contains(lastBlock.SystemMsg, "Connection refused") {
+		t.Errorf("expected error message to contain 'Connection refused', got %q", lastBlock.SystemMsg)
 	}
 }
 
@@ -555,7 +555,7 @@ func TestHandleAgentEvent_EventAddTarget_NoTeam(t *testing.T) {
 	// team is nil
 
 	targetsBefore := len(m.targets)
-	m.handleAgentEvent(agent.Event{
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventAddTarget,
 		NewHost:  "10.0.0.2",
@@ -573,22 +573,22 @@ func TestHandleAgentEvent_EventStalled(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
+	blocksBefore := len(t1.Blocks)
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventStalled,
 		Message:  "Agent stuck",
 	})
 
-	// EventStalled adds 2 log entries
-	if len(t1.Logs) != logsBefore+2 {
-		t.Fatalf("expected 2 new logs for stalled event, got %d", len(t1.Logs)-logsBefore)
+	// EventStalled adds 2 blocks
+	if len(t1.Blocks) != blocksBefore+2 {
+		t.Fatalf("expected 2 new blocks for stalled event, got %d", len(t1.Blocks)-blocksBefore)
 	}
-	if !strings.HasPrefix(t1.Logs[logsBefore].Message, "⚠") {
-		t.Errorf("expected stalled message to start with warning, got %q", t1.Logs[logsBefore].Message)
+	if !strings.HasPrefix(t1.Blocks[blocksBefore].SystemMsg, "\u26a0") {
+		t.Errorf("expected stalled message to start with warning, got %q", t1.Blocks[blocksBefore].SystemMsg)
 	}
-	if !strings.Contains(t1.Logs[logsBefore+1].Message, "Type a message") {
-		t.Errorf("expected guidance message, got %q", t1.Logs[logsBefore+1].Message)
+	if !strings.Contains(t1.Blocks[blocksBefore+1].SystemMsg, "Type a message") {
+		t.Errorf("expected guidance message, got %q", t1.Blocks[blocksBefore+1].SystemMsg)
 	}
 }
 
@@ -598,20 +598,21 @@ func TestHandleAgentEvent_FallbackToActiveTarget(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
+	blocksBefore := len(t1.Blocks)
 	// Send event for non-existent target ID — should fall back to active target
-	m.handleAgentEvent(agent.Event{
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 999,
 		Type:     agent.EventLog,
 		Source:   agent.SourceSystem,
 		Message:  "Fallback test",
 	})
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log via fallback, got %d", len(t1.Logs)-logsBefore)
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block via fallback, got %d", len(t1.Blocks)-blocksBefore)
 	}
-	if t1.Logs[len(t1.Logs)-1].Message != "Fallback test" {
-		t.Errorf("unexpected message: %q", t1.Logs[len(t1.Logs)-1].Message)
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if lastBlock.SystemMsg != "Fallback test" {
+		t.Errorf("unexpected message: %q", lastBlock.SystemMsg)
 	}
 }
 
@@ -621,7 +622,7 @@ func TestHandleAgentEvent_NoTargets_NoOp(t *testing.T) {
 	m.ready = true
 
 	// Should not panic when no targets exist
-	m.handleAgentEvent(agent.Event{
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 1,
 		Type:     agent.EventLog,
 		Source:   agent.SourceSystem,
@@ -637,29 +638,29 @@ func TestHandleAgentEvent_EventLog_CorrectTarget(t *testing.T) {
 	m.ready = true
 	m.selected = 0 // t1 is active
 
-	logs1Before := len(t1.Logs)
-	logs2Before := len(t2.Logs)
+	blocks1Before := len(t1.Blocks)
+	blocks2Before := len(t2.Blocks)
 
 	// Send event for t2 (not the active target)
-	m.handleAgentEvent(agent.Event{
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID: 2,
 		Type:     agent.EventLog,
 		Source:   agent.SourceAI,
 		Message:  "Target 2 message",
 	})
 
-	// t2 should receive the log
-	if len(t2.Logs) != logs2Before+1 {
-		t.Errorf("expected 1 new log on t2, got %d", len(t2.Logs)-logs2Before)
+	// t2 should receive the block
+	if len(t2.Blocks) != blocks2Before+1 {
+		t.Errorf("expected 1 new block on t2, got %d", len(t2.Blocks)-blocks2Before)
 	}
-	// t1 should NOT receive the log
-	if len(t1.Logs) != logs1Before {
-		t.Errorf("expected no new logs on t1, got %d", len(t1.Logs)-logs1Before)
+	// t1 should NOT receive the block
+	if len(t1.Blocks) != blocks1Before {
+		t.Errorf("expected no new blocks on t1, got %d", len(t1.Blocks)-blocks1Before)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// handleAgentEvent — EventTurnStart / EventCommandResult
+// handleAgentEvent — EventTurnStart
 // ---------------------------------------------------------------------------
 
 func TestHandleAgentEvent_EventTurnStart(t *testing.T) {
@@ -668,48 +669,16 @@ func TestHandleAgentEvent_EventTurnStart(t *testing.T) {
 	m.handleResize(120, 40)
 	m.ready = true
 
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
+	blocksBefore := len(t1.Blocks)
+	_ = m.handleAgentEvent(agent.Event{
 		TargetID:   1,
 		Type:       agent.EventTurnStart,
 		TurnNumber: 3,
 	})
 
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log for turn start, got %d", len(t1.Logs)-logsBefore)
-	}
-	lastLog := t1.Logs[len(t1.Logs)-1]
-	if lastLog.Type != agent.EventTurnStart {
-		t.Errorf("expected Type EventTurnStart, got %q", lastLog.Type)
-	}
-	if lastLog.TurnNumber != 3 {
-		t.Errorf("expected TurnNumber 3, got %d", lastLog.TurnNumber)
-	}
-}
-
-func TestHandleAgentEvent_EventCommandResult(t *testing.T) {
-	t1 := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{t1})
-	m.handleResize(120, 40)
-	m.ready = true
-
-	logsBefore := len(t1.Logs)
-	m.handleAgentEvent(agent.Event{
-		TargetID: 1,
-		Type:     agent.EventCommandResult,
-		Message:  "exit 0 (5 lines)",
-		ExitCode: 0,
-	})
-
-	if len(t1.Logs) != logsBefore+1 {
-		t.Fatalf("expected 1 new log for command result, got %d", len(t1.Logs)-logsBefore)
-	}
-	lastLog := t1.Logs[len(t1.Logs)-1]
-	if lastLog.Type != agent.EventCommandResult {
-		t.Errorf("expected Type EventCommandResult, got %q", lastLog.Type)
-	}
-	if lastLog.ExitCode != 0 {
-		t.Errorf("expected ExitCode 0, got %d", lastLog.ExitCode)
+	// EventTurnStart does not add blocks in new UI
+	if len(t1.Blocks) != blocksBefore {
+		t.Errorf("expected no new blocks for turn start, got %d", len(t1.Blocks)-blocksBefore)
 	}
 }
 
@@ -897,13 +866,13 @@ func TestSubmitInput_MultilineViaTextarea(t *testing.T) {
 
 	m.submitInput()
 
-	// Should have submitted all lines as a single message
-	lastLog := t1.Logs[len(t1.Logs)-1]
-	if !strings.Contains(lastLog.Message, "line 1") {
-		t.Errorf("expected multiline message to contain 'line 1', got %q", lastLog.Message)
+	// Should have submitted all lines as a single block
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if !strings.Contains(lastBlock.UserText, "line 1") {
+		t.Errorf("expected multiline message to contain 'line 1', got %q", lastBlock.UserText)
 	}
-	if !strings.Contains(lastLog.Message, "line 3") {
-		t.Errorf("expected multiline message to contain 'line 3', got %q", lastLog.Message)
+	if !strings.Contains(lastBlock.UserText, "line 3") {
+		t.Errorf("expected multiline message to contain 'line 3', got %q", lastBlock.UserText)
 	}
 	// Input should be cleared after submit
 	if m.input.Value() != "" {
@@ -923,5 +892,609 @@ func TestSubmitInput_TextareaReset(t *testing.T) {
 	// After submit, textarea should be reset (empty)
 	if m.input.Value() != "" {
 		t.Errorf("expected textarea to be reset after submit, got %q", m.input.Value())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleAgentEvent — Block-based events
+// ---------------------------------------------------------------------------
+
+func TestHandleAgentEvent_EventThinkStart(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	blocksBefore := len(t1.Blocks)
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+
+	// Should add a ThinkingBlock
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block for ThinkStart, got %d", len(t1.Blocks)-blocksBefore)
+	}
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if lastBlock.Type != agent.BlockThinking {
+		t.Errorf("expected BlockThinking, got %d", lastBlock.Type)
+	}
+	if lastBlock.ThinkingDone {
+		t.Error("ThinkingDone should be false on new ThinkStart block")
+	}
+}
+
+func TestHandleAgentEvent_EventThinkDone(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// First add a thinking block
+	t1.AddBlock(agent.NewThinkingBlock())
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkDone,
+		Duration: 2500 * time.Millisecond,
+	})
+
+	// The last thinking block should be marked done
+	lastBlock := t1.LastBlock()
+	if lastBlock == nil {
+		t.Fatal("expected a block to exist")
+	}
+	if !lastBlock.ThinkingDone {
+		t.Error("expected ThinkingDone to be true after EventThinkDone")
+	}
+	if lastBlock.ThinkDuration != 2500*time.Millisecond {
+		t.Errorf("expected ThinkDuration 2.5s, got %v", lastBlock.ThinkDuration)
+	}
+}
+
+func TestHandleAgentEvent_EventThinkDone_NoBlock(t *testing.T) {
+	// ThinkDone with no blocks should not panic
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkDone,
+		Duration: 1 * time.Second,
+	})
+	// Should not panic — no assertions needed beyond not crashing
+}
+
+func TestHandleAgentEvent_EventCmdStart(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	blocksBefore := len(t1.Blocks)
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdStart,
+		Message:  "nmap -sV 10.0.0.1",
+	})
+
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block for CmdStart, got %d", len(t1.Blocks)-blocksBefore)
+	}
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if lastBlock.Type != agent.BlockCommand {
+		t.Errorf("expected BlockCommand, got %d", lastBlock.Type)
+	}
+	if lastBlock.Command != "nmap -sV 10.0.0.1" {
+		t.Errorf("expected Command 'nmap -sV 10.0.0.1', got %q", lastBlock.Command)
+	}
+	if lastBlock.Completed {
+		t.Error("Completed should be false on new CmdStart block")
+	}
+}
+
+func TestHandleAgentEvent_EventCmdOutput(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// First add an incomplete command block
+	t1.AddBlock(agent.NewCommandBlock("nmap -sV 10.0.0.1"))
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "PORT   STATE SERVICE",
+	})
+
+	lastBlock := t1.LastBlock()
+	if len(lastBlock.Output) != 1 {
+		t.Fatalf("expected 1 output line, got %d", len(lastBlock.Output))
+	}
+	if lastBlock.Output[0] != "PORT   STATE SERVICE" {
+		t.Errorf("expected output line 'PORT   STATE SERVICE', got %q", lastBlock.Output[0])
+	}
+}
+
+func TestHandleAgentEvent_EventCmdOutput_MultipleLines(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	t1.AddBlock(agent.NewCommandBlock("nmap -sV 10.0.0.1"))
+
+	_ = m.handleAgentEvent(agent.Event{TargetID: 1, Type: agent.EventCmdOutput, OutputLine: "line 1"})
+	_ = m.handleAgentEvent(agent.Event{TargetID: 1, Type: agent.EventCmdOutput, OutputLine: "line 2"})
+	_ = m.handleAgentEvent(agent.Event{TargetID: 1, Type: agent.EventCmdOutput, OutputLine: "line 3"})
+
+	lastBlock := t1.LastBlock()
+	if len(lastBlock.Output) != 3 {
+		t.Fatalf("expected 3 output lines, got %d", len(lastBlock.Output))
+	}
+}
+
+func TestHandleAgentEvent_EventCmdOutput_NoBlock(t *testing.T) {
+	// CmdOutput with no blocks should not panic
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "orphan output",
+	})
+	// Should not panic
+}
+
+func TestHandleAgentEvent_EventCmdOutput_CompletedBlock(t *testing.T) {
+	// CmdOutput should not append to a completed block
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	block := agent.NewCommandBlock("echo test")
+	block.Completed = true
+	t1.AddBlock(block)
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "should not append",
+	})
+
+	if len(block.Output) != 0 {
+		t.Errorf("expected no output on completed block, got %d lines", len(block.Output))
+	}
+}
+
+func TestHandleAgentEvent_EventCmdDone(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	t1.AddBlock(agent.NewCommandBlock("echo done-test"))
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdDone,
+		ExitCode: 0,
+		Duration: 1500 * time.Millisecond,
+	})
+
+	lastBlock := t1.LastBlock()
+	if !lastBlock.Completed {
+		t.Error("expected Completed to be true after EventCmdDone")
+	}
+	if lastBlock.ExitCode != 0 {
+		t.Errorf("expected ExitCode 0, got %d", lastBlock.ExitCode)
+	}
+	if lastBlock.Duration != 1500*time.Millisecond {
+		t.Errorf("expected Duration 1.5s, got %v", lastBlock.Duration)
+	}
+}
+
+func TestHandleAgentEvent_EventCmdDone_NoBlock(t *testing.T) {
+	// CmdDone with no blocks should not panic
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdDone,
+		ExitCode: 1,
+		Duration: 500 * time.Millisecond,
+	})
+	// Should not panic
+}
+
+func TestHandleAgentEvent_EventCmdDone_NonZeroExit(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	t1.AddBlock(agent.NewCommandBlock("false"))
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdDone,
+		ExitCode: 1,
+		Duration: 200 * time.Millisecond,
+	})
+
+	lastBlock := t1.LastBlock()
+	if !lastBlock.Completed {
+		t.Error("expected Completed to be true")
+	}
+	if lastBlock.ExitCode != 1 {
+		t.Errorf("expected ExitCode 1, got %d", lastBlock.ExitCode)
+	}
+}
+
+func TestHandleAgentEvent_EventSubTaskStart(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	blocksBefore := len(t1.Blocks)
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventSubTaskStart,
+		TaskID:   "task-1",
+		Message:  "Enumerate SMB shares",
+	})
+
+	if len(t1.Blocks) != blocksBefore+1 {
+		t.Fatalf("expected 1 new block for SubTaskStart, got %d", len(t1.Blocks)-blocksBefore)
+	}
+	lastBlock := t1.Blocks[len(t1.Blocks)-1]
+	if lastBlock.Type != agent.BlockSubTask {
+		t.Errorf("expected BlockSubTask, got %d", lastBlock.Type)
+	}
+	if lastBlock.TaskID != "task-1" {
+		t.Errorf("expected TaskID 'task-1', got %q", lastBlock.TaskID)
+	}
+	if lastBlock.TaskGoal != "Enumerate SMB shares" {
+		t.Errorf("expected TaskGoal 'Enumerate SMB shares', got %q", lastBlock.TaskGoal)
+	}
+	if lastBlock.TaskDone {
+		t.Error("TaskDone should be false on new SubTaskStart block")
+	}
+}
+
+func TestHandleAgentEvent_EventCmdStart_CmdOutput_CmdDone_FullFlow(t *testing.T) {
+	// Test the full flow: CmdStart -> CmdOutput -> CmdDone
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// CmdStart creates the block
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdStart,
+		Message:  "echo hello",
+	})
+
+	// CmdOutput appends to it
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "hello",
+	})
+
+	// CmdDone completes it
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdDone,
+		ExitCode: 0,
+		Duration: 100 * time.Millisecond,
+	})
+
+	if len(t1.Blocks) != 1 {
+		t.Fatalf("expected 1 block for full CmdStart/Output/Done flow, got %d", len(t1.Blocks))
+	}
+	block := t1.Blocks[0]
+	if block.Command != "echo hello" {
+		t.Errorf("expected Command 'echo hello', got %q", block.Command)
+	}
+	if len(block.Output) != 1 || block.Output[0] != "hello" {
+		t.Errorf("expected Output ['hello'], got %v", block.Output)
+	}
+	if !block.Completed {
+		t.Error("expected Completed=true")
+	}
+	if block.ExitCode != 0 {
+		t.Errorf("expected ExitCode 0, got %d", block.ExitCode)
+	}
+	if block.Duration != 100*time.Millisecond {
+		t.Errorf("expected Duration 100ms, got %v", block.Duration)
+	}
+}
+
+func TestHandleAgentEvent_ThinkStart_ThinkDone_FullFlow(t *testing.T) {
+	// Test the full flow: ThinkStart -> ThinkDone
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// ThinkStart creates a thinking block
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+
+	// ThinkDone marks it complete
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkDone,
+		Duration: 3 * time.Second,
+	})
+
+	if len(t1.Blocks) != 1 {
+		t.Fatalf("expected 1 block for ThinkStart/Done flow, got %d", len(t1.Blocks))
+	}
+	block := t1.Blocks[0]
+	if block.Type != agent.BlockThinking {
+		t.Errorf("expected BlockThinking, got %d", block.Type)
+	}
+	if !block.ThinkingDone {
+		t.Error("expected ThinkingDone=true")
+	}
+	if block.ThinkDuration != 3*time.Second {
+		t.Errorf("expected ThinkDuration 3s, got %v", block.ThinkDuration)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Spinner integration tests
+// ---------------------------------------------------------------------------
+
+func TestHasActiveSpinner_NoTargets(t *testing.T) {
+	m := NewWithTargets(nil)
+	if m.hasActiveSpinner() {
+		t.Error("expected false when no targets")
+	}
+}
+
+func TestHasActiveSpinner_NoActiveBlocks(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+
+	b := agent.NewThinkingBlock()
+	b.ThinkingDone = true
+	t1.AddBlock(b)
+
+	if m.hasActiveSpinner() {
+		t.Error("expected false when all thinking blocks are done")
+	}
+}
+
+func TestHasActiveSpinner_ActiveThinking(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+
+	t1.AddBlock(agent.NewThinkingBlock())
+
+	if !m.hasActiveSpinner() {
+		t.Error("expected true when there is an active thinking block")
+	}
+}
+
+func TestHasActiveSpinner_ActiveSubTask(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+
+	t1.AddBlock(agent.NewSubTaskBlock("task-1", "Scan ports"))
+
+	if !m.hasActiveSpinner() {
+		t.Error("expected true when there is an active subtask block")
+	}
+}
+
+func TestHasActiveSpinner_CompletedSubTask(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+
+	b := agent.NewSubTaskBlock("task-1", "Scan ports")
+	b.TaskDone = true
+	t1.AddBlock(b)
+
+	if m.hasActiveSpinner() {
+		t.Error("expected false when all subtask blocks are done")
+	}
+}
+
+func TestHasActiveSpinner_MixedBlocks(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+
+	done := agent.NewThinkingBlock()
+	done.ThinkingDone = true
+	t1.AddBlock(done)
+	t1.AddBlock(agent.NewSubTaskBlock("task-1", "Active task"))
+
+	if !m.hasActiveSpinner() {
+		t.Error("expected true when at least one subtask is active")
+	}
+}
+
+func TestHandleAgentEvent_ThinkStart_StartsSpinner(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	cmd := m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+
+	if !m.spinning {
+		t.Error("expected spinning=true after EventThinkStart")
+	}
+	if cmd == nil {
+		t.Error("expected non-nil tea.Cmd (spinner.Tick) from EventThinkStart")
+	}
+}
+
+func TestHandleAgentEvent_ThinkDone_StopsSpinner(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkDone,
+		Duration: 2 * time.Second,
+	})
+
+	if m.spinning {
+		t.Error("expected spinning=false after EventThinkDone with no remaining active blocks")
+	}
+}
+
+func TestHandleAgentEvent_ThinkDone_KeepsSpinning_WhenOtherActive(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventSubTaskStart,
+		TaskID:   "task-1",
+		Message:  "Running exploit",
+	})
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkDone,
+		Duration: 1 * time.Second,
+	})
+
+	if !m.spinning {
+		t.Error("expected spinning=true because subtask is still active")
+	}
+}
+
+func TestHandleAgentEvent_SubTaskStart_StartsSpinner(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	cmd := m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventSubTaskStart,
+		TaskID:   "task-1",
+		Message:  "Enumerate shares",
+	})
+
+	if !m.spinning {
+		t.Error("expected spinning=true after EventSubTaskStart")
+	}
+	if cmd == nil {
+		t.Error("expected non-nil tea.Cmd (spinner.Tick) from EventSubTaskStart")
+	}
+}
+
+func TestHandleAgentEvent_SubTaskComplete_StopsSpinner(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventSubTaskStart,
+		TaskID:   "task-1",
+		Message:  "Scan ports",
+	})
+
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventSubTaskComplete,
+		TaskID:   "task-1",
+		Message:  "Scan completed",
+	})
+
+	if m.spinning {
+		t.Error("expected spinning=false after EventSubTaskComplete with no remaining active blocks")
+	}
+}
+
+func TestHandleAgentEvent_ThinkStart_AlreadySpinning_NoExtraCmd(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// First ThinkStart — returns spinner.Tick
+	cmd1 := m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+	if cmd1 == nil {
+		t.Fatal("first ThinkStart should return spinner.Tick")
+	}
+
+	// Second ThinkStart while already spinning — should NOT return extra tick
+	cmd2 := m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventThinkStart,
+	})
+	if cmd2 != nil {
+		t.Error("expected nil cmd when spinner is already running")
+	}
+}
+
+func TestHandleAgentEvent_CmdDone_ChecksSpinnerState(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	// spinning manually set (e.g. thinking block active)
+	t1.AddBlock(agent.NewThinkingBlock())
+	m.spinning = true
+
+	// CmdDone should not stop spinner if thinking block is still active
+	t1.AddBlock(agent.NewCommandBlock("echo test"))
+	_ = m.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdDone,
+		ExitCode: 0,
+		Duration: 100 * time.Millisecond,
+	})
+
+	if !m.spinning {
+		t.Error("expected spinning=true because thinking block is still active after CmdDone")
 	}
 }

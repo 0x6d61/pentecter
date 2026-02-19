@@ -97,3 +97,10 @@ var (
 
 // foldIndicatorStyle は折りたたみ行の「⋯ +N Lines (Ctrl+O)」スタイル。
 var foldIndicatorStyle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
+
+// User input block style — ハイライト背景でユーザー入力を目立たせる
+var userInputBlockStyle = lipgloss.NewStyle().
+	Background(lipgloss.Color("#1A1A2E")).
+	Foreground(colorSuccess).
+	Bold(true).
+	Padding(0, 1)

@@ -2,8 +2,6 @@
 package agent
 
 import (
-	"time"
-
 	"github.com/0x6d61/pentecter/internal/tools"
 )
 
@@ -49,16 +47,6 @@ const (
 	SourceUser   LogSource = "USER"
 )
 
-// LogEntry is a single timestamped message in a target's session log.
-type LogEntry struct {
-	Time       time.Time
-	Source     LogSource
-	Message    string
-	Type       EventType // "turn_start", "command_result", or "" (通常ログ)
-	TurnNumber int       // EventTurnStart 時のターン番号
-	ExitCode   int       // EventCommandResult 時の exit code
-}
-
 // Proposal is a pending action queued by the Brain and awaiting user approval.
 type Proposal struct {
 	Description string
@@ -72,7 +60,7 @@ type Target struct {
 	ID     int
 	Host   string // IP アドレスまたはドメイン名
 	Status Status
-	Logs     []LogEntry
+	Blocks   []*DisplayBlock // grouped display blocks
 	Proposal *Proposal
 	// Entities はツール出力から抽出された発見済みエンティティ（ナレッジグラフ）。
 	// Brain のスナップショット生成に使われる。
@@ -101,17 +89,21 @@ func NewTarget(id int, host string) *Target {
 		ID:     id,
 		Host:   host,
 		Status: StatusIdle,
-		Logs:   make([]LogEntry, 0),
+		Blocks: make([]*DisplayBlock, 0),
 	}
 }
 
-// AddLog appends a timestamped entry to this target's session log.
-func (t *Target) AddLog(source LogSource, message string) {
-	t.Logs = append(t.Logs, LogEntry{
-		Time:    time.Now(),
-		Source:  source,
-		Message: message,
-	})
+// AddBlock appends a display block to this target's block list.
+func (t *Target) AddBlock(b *DisplayBlock) {
+	t.Blocks = append(t.Blocks, b)
+}
+
+// LastBlock returns the most recent display block, or nil.
+func (t *Target) LastBlock() *DisplayBlock {
+	if len(t.Blocks) == 0 {
+		return nil
+	}
+	return t.Blocks[len(t.Blocks)-1]
 }
 
 // SetProposal queues a pending action and transitions status to PAUSED.

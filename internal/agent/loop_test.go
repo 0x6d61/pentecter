@@ -641,9 +641,9 @@ func TestLoop_Run_PendingUserMsg_DeliveredNextTurn(t *testing.T) {
 	for {
 		select {
 		case e := <-events:
-			// When we see the tool output from echo, send a user message
+			// When we see the command output from echo, send a user message
 			// so it gets picked up by post-exec drain
-			if e.Type == agent.EventLog && e.Source == agent.SourceTool && !sentMsg {
+			if e.Type == agent.EventCmdOutput && !sentMsg {
 				// Send user message while command is running / just after
 				select {
 				case userMsg <- "change approach please":
@@ -1012,5 +1012,331 @@ func TestLoop_Run_SpawnTask_NoManager(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timeout waiting for EventComplete")
 		}
+	}
+}
+
+// --- Phase 3: Block-based event tests ---
+
+// collectEvents はチャネルから EventComplete まで全イベントを収集する。
+func collectEvents(t *testing.T, events <-chan agent.Event, timeout time.Duration) []agent.Event {
+	t.Helper()
+	var collected []agent.Event
+	deadline := time.After(timeout)
+	for {
+		select {
+		case e := <-events:
+			collected = append(collected, e)
+			if e.Type == agent.EventComplete || e.Type == agent.EventError {
+				return collected
+			}
+		case <-deadline:
+			t.Fatalf("timeout collecting events (got %d events)", len(collected))
+			return collected
+		}
+	}
+}
+
+// hasEventType は指定した EventType のイベントが含まれるか判定する。
+func hasEventType(events []agent.Event, typ agent.EventType) bool {
+	for _, e := range events {
+		if e.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// findEvent は最初に見つかった指定 EventType のイベントを返す。
+func findEvent(events []agent.Event, typ agent.EventType) (agent.Event, bool) {
+	for _, e := range events {
+		if e.Type == typ {
+			return e, true
+		}
+	}
+	return agent.Event{}, false
+}
+
+func TestLoop_Emit_ThinkStart_BeforeThink(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "analyzing", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	if !hasEventType(collected, agent.EventThinkStart) {
+		t.Error("expected EventThinkStart to be emitted")
+	}
+
+	// EventThinkStart should come after EventTurnStart
+	turnIdx := -1
+	thinkStartIdx := -1
+	for i, e := range collected {
+		if e.Type == agent.EventTurnStart && turnIdx == -1 {
+			turnIdx = i
+		}
+		if e.Type == agent.EventThinkStart && thinkStartIdx == -1 {
+			thinkStartIdx = i
+		}
+	}
+	if turnIdx >= 0 && thinkStartIdx >= 0 && thinkStartIdx <= turnIdx {
+		t.Errorf("EventThinkStart (idx=%d) should come after EventTurnStart (idx=%d)", thinkStartIdx, turnIdx)
+	}
+}
+
+func TestLoop_Emit_ThinkDone_AfterThink(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "analyzing", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	if !hasEventType(collected, agent.EventThinkDone) {
+		t.Error("expected EventThinkDone to be emitted")
+	}
+
+	// EventThinkDone should have a non-negative Duration
+	e, ok := findEvent(collected, agent.EventThinkDone)
+	if ok && e.Duration < 0 {
+		t.Errorf("EventThinkDone Duration should be >= 0, got %v", e.Duration)
+	}
+
+	// EventThinkDone should come after EventThinkStart
+	thinkStartIdx := -1
+	thinkDoneIdx := -1
+	for i, e := range collected {
+		if e.Type == agent.EventThinkStart && thinkStartIdx == -1 {
+			thinkStartIdx = i
+		}
+		if e.Type == agent.EventThinkDone && thinkDoneIdx == -1 {
+			thinkDoneIdx = i
+		}
+	}
+	if thinkStartIdx >= 0 && thinkDoneIdx >= 0 && thinkDoneIdx <= thinkStartIdx {
+		t.Errorf("EventThinkDone (idx=%d) should come after EventThinkStart (idx=%d)", thinkDoneIdx, thinkStartIdx)
+	}
+}
+
+func TestLoop_Emit_CmdStart_BeforeExec(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run scan", Action: schema.ActionRun, Command: "echo hello-cmd"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	e, ok := findEvent(collected, agent.EventCmdStart)
+	if !ok {
+		t.Fatal("expected EventCmdStart to be emitted")
+	}
+	if e.Message != "echo hello-cmd" {
+		t.Errorf("EventCmdStart Message: got %q, want %q", e.Message, "echo hello-cmd")
+	}
+}
+
+func TestLoop_Emit_CmdOutput_DuringExec(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run echo", Action: schema.ActionRun, Command: "echo cmd-output-test"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	if !hasEventType(collected, agent.EventCmdOutput) {
+		t.Error("expected EventCmdOutput to be emitted")
+	}
+
+	// Verify OutputLine is set on CmdOutput events
+	for _, e := range collected {
+		if e.Type == agent.EventCmdOutput {
+			if e.OutputLine == "" {
+				t.Error("EventCmdOutput should have non-empty OutputLine")
+			}
+		}
+	}
+}
+
+func TestLoop_Emit_CmdDone_AfterExec(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run echo", Action: schema.ActionRun, Command: "echo done-test"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	e, ok := findEvent(collected, agent.EventCmdDone)
+	if !ok {
+		t.Fatal("expected EventCmdDone to be emitted")
+	}
+
+	// ExitCode should be 0 for successful echo
+	if e.ExitCode != 0 {
+		t.Errorf("EventCmdDone ExitCode: got %d, want 0", e.ExitCode)
+	}
+
+	// Duration should be > 0
+	if e.Duration <= 0 {
+		t.Errorf("EventCmdDone Duration should be > 0, got %v", e.Duration)
+	}
+
+	// CmdDone should come after CmdStart
+	cmdStartIdx := -1
+	cmdDoneIdx := -1
+	for i, ev := range collected {
+		if ev.Type == agent.EventCmdStart && cmdStartIdx == -1 {
+			cmdStartIdx = i
+		}
+		if ev.Type == agent.EventCmdDone && cmdDoneIdx == -1 {
+			cmdDoneIdx = i
+		}
+	}
+	if cmdStartIdx >= 0 && cmdDoneIdx >= 0 && cmdDoneIdx <= cmdStartIdx {
+		t.Errorf("EventCmdDone (idx=%d) should come after EventCmdStart (idx=%d)", cmdDoneIdx, cmdStartIdx)
+	}
+}
+
+func TestLoop_Emit_EventOrder_ThinkThenCmd(t *testing.T) {
+	// 1ターン目で Think → 2ターン目で Run → Complete
+	// イベント順: TurnStart, ThinkStart, ThinkDone, ..., TurnStart, ThinkStart, ThinkDone, CmdStart, CmdOutput, CmdDone, ...
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "thinking first", Action: schema.ActionThink},
+			{Thought: "now running", Action: schema.ActionRun, Command: "echo order-test"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	// Both ThinkStart and CmdStart should exist
+	if !hasEventType(collected, agent.EventThinkStart) {
+		t.Error("expected EventThinkStart")
+	}
+	if !hasEventType(collected, agent.EventCmdStart) {
+		t.Error("expected EventCmdStart")
+	}
+
+	// Block-based EventCmdDone should be emitted
+	if !hasEventType(collected, agent.EventCmdDone) {
+		t.Error("expected EventCmdDone to be emitted")
+	}
+}
+
+func TestLoop_Emit_BlockEvents_ForCommand(t *testing.T) {
+	// Verify that block-based events are emitted for command execution
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "scan", Action: schema.ActionRun, Command: "echo block-test"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	// Block-based EventCmdStart should be present with the command text
+	cmdStartFound := false
+	for _, e := range collected {
+		if e.Type == agent.EventCmdStart && e.Message == "echo block-test" {
+			cmdStartFound = true
+			break
+		}
+	}
+	if !cmdStartFound {
+		t.Error("expected EventCmdStart with command text to be emitted")
+	}
+
+	// Block-based EventCmdDone should be present
+	if !hasEventType(collected, agent.EventCmdDone) {
+		t.Error("expected EventCmdDone to be emitted")
+	}
+
+	// Legacy "Thinking..." EventLog should NOT be present (replaced by ThinkStart)
+	for _, e := range collected {
+		if e.Type == agent.EventLog && e.Message == "Thinking..." {
+			t.Error("legacy 'Thinking...' EventLog should be removed (replaced by EventThinkStart)")
+		}
+	}
+}
+
+func TestLoop_Emit_SubTaskStart(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "spawn subtask", Action: schema.ActionSpawnTask,
+				TaskKind: "runner", Command: "echo subtask-start-test", TaskGoal: "test subtask start"},
+			{Thought: "waiting", Action: schema.ActionWait},
+		},
+	}
+
+	loop, _, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 8*time.Second)
+
+	e, ok := findEvent(collected, agent.EventSubTaskStart)
+	if !ok {
+		t.Fatal("expected EventSubTaskStart to be emitted")
+	}
+	if e.TaskID == "" {
+		t.Error("EventSubTaskStart should have non-empty TaskID")
+	}
+	if e.Message != "test subtask start" {
+		t.Errorf("EventSubTaskStart Message: got %q, want %q", e.Message, "test subtask start")
 	}
 }

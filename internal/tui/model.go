@@ -4,9 +4,9 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,7 +15,6 @@ import (
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
 	"github.com/0x6d61/pentecter/internal/tools"
-	"github.com/mattn/go-runewidth"
 )
 
 // FocusState tracks which pane has keyboard focus.
@@ -71,6 +70,10 @@ type Model struct {
 
 	// Runner is the CommandRunner used for /approve command (auto-approve toggle).
 	Runner *tools.CommandRunner
+
+	// spinner はアニメーション付きスピナー（Thinking / SubTask ブロック用）。
+	spinner  spinner.Model
+	spinning bool // true の場合、アクティブな thinking/subtask ブロックが存在する
 
 	// logsExpanded が true の場合、すべてのログ内容を折りたたまずに表示する。
 	logsExpanded bool
@@ -154,19 +157,27 @@ func NewWithTargets(targets []*agent.Target) Model {
 
 	ta := textarea.New()
 	ta.Prompt = ""
-	ta.Placeholder = "Chat with AI or enter command..."
+	ta.Placeholder = "Type here... [Enter] send  [Alt+Enter] newline"
 	ta.CharLimit = 2000
-	ta.MaxHeight = 5       // 最大5行まで拡張
+	ta.SetHeight(1)        // 初期高さ 1 行
+	ta.MaxHeight = 3       // Ctrl+Enter で最大 3 行まで拡張
 	ta.ShowLineNumbers = false
 	ta.Focus()
-	// Enter で送信（Update() で処理）、Ctrl+Enter/Alt+Enter で改行
-	ta.KeyMap.InsertNewline.SetKeys("ctrl+enter", "alt+enter")
+	// Enter で送信（Update() で処理）、Alt+Enter で改行
+	// 注意: bubbletea v1 は Ctrl 修飾キーを検出できないため Ctrl+Enter は使用不可
+	ta.KeyMap.InsertNewline.SetKeys("alt+enter")
+
+	// スピナー初期化（Braille dots: ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏）
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(colorSecondary)
 
 	return Model{
 		targets:         targets,
 		selected:        0,
 		list:            l,
 		input:           ta,
+		spinner:         sp,
 		focus:           FocusInput,
 		agentApproveMap: make(map[int]chan<- bool),
 		agentUserMsgMap: make(map[int]chan<- string),
@@ -208,6 +219,7 @@ func (m *Model) activeTarget() *agent.Target {
 
 // rebuildViewport regenerates the viewport content for the active target,
 // including any pending proposal at the bottom.
+// ユーザーが上にスクロールしている場合はスクロール位置を維持する（auto-scroll は底にいるときだけ）。
 func (m *Model) rebuildViewport() {
 	t := m.activeTarget()
 	if t == nil {
@@ -215,136 +227,61 @@ func (m *Model) rebuildViewport() {
 		return
 	}
 
-	var sb strings.Builder
-
 	vpWidth := m.viewport.Width
 	if vpWidth <= 0 {
 		vpWidth = 80 // fallback
 	}
 
-	header := lipgloss.NewStyle().
-		Foreground(colorPrimary).
-		Bold(true).
-		Render(fmt.Sprintf("═══ Session: %s [%s] ═══", t.Host, t.Status))
-	sb.WriteString(header + "\n\n")
+	// auto-scroll 判定: 現在底付近にいるかチェック（SetContent 前に取得）
+	atBottom := m.viewport.AtBottom()
 
-	for _, entry := range t.Logs {
-		// ターン区切り
-		if entry.Type == agent.EventTurnStart {
-			separator := turnSeparatorStyle.Render(fmt.Sprintf("─── Turn %d ───", entry.TurnNumber))
-			sb.WriteString("\n" + separator + "\n")
-			continue
-		}
+	// ブロックベースレンダリング（スピナーフレームを渡す）
+	content := renderBlocks(t.Blocks, vpWidth, m.logsExpanded, m.spinner.View())
 
-		// コマンド結果サマリー
-		if entry.Type == agent.EventCommandResult {
-			const resultPrefix = "  → "
-			resultPrefixW := len(resultPrefix) // ASCII only, len is fine
-			msgMaxW := vpWidth - resultPrefixW
-			if msgMaxW < 20 {
-				msgMaxW = 20
-			}
-
-			wrapped := softWrap(entry.Message, msgMaxW)
-			wrapLines := strings.Split(wrapped, "\n")
-			indent := strings.Repeat(" ", resultPrefixW)
-
-			for i, line := range wrapLines {
-				text := indent + line
-				if i == 0 {
-					text = resultPrefix + line
-				}
-				if entry.ExitCode == 0 {
-					sb.WriteString(commandSuccessStyle.Render(text) + "\n")
-				} else {
-					sb.WriteString(commandFailStyle.Render(text) + "\n")
-				}
-			}
-			continue
-		}
-
-		// 通常のログエントリ
-		ts := entry.Time.Format("15:04:05")
-		styledTs := lipgloss.NewStyle().Foreground(colorMuted).Render(ts)
-
-		var srcLabel string
-		switch entry.Source {
-		case agent.SourceAI:
-			srcLabel = sourceAIStyle.Render("[AI  ]")
-		case agent.SourceTool:
-			srcLabel = sourceToolStyle.Render("[TOOL]")
-		case agent.SourceSystem:
-			srcLabel = sourceSysStyle.Render("[SYS ]")
-		case agent.SourceUser:
-			srcLabel = sourceUserStyle.Render("[USER]")
-		default:
-			srcLabel = fmt.Sprintf("[%s]", entry.Source)
-		}
-
-		// Prefix visual width: "15:04:05 [TOOL]  " = 8 + 1 + 6 + 2 = 17
-		const logPrefixW = 17
-		msgMaxW := vpWidth - logPrefixW
-		if msgMaxW < 20 {
-			msgMaxW = 20
-		}
-
-		// ツール出力の折りたたみ
-		msg := entry.Message
-		if entry.Source == agent.SourceTool && !m.logsExpanded {
-			folded, wasFolded := foldToolOutput(msg)
-			if wasFolded {
-				msg = folded
-			}
-		}
-		if runewidth.StringWidth(msg) <= msgMaxW {
-			fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, msg)
-		} else {
-			wrapped := softWrap(msg, msgMaxW)
-			wrapLines := strings.Split(wrapped, "\n")
-			indent := strings.Repeat(" ", logPrefixW)
-			for i, line := range wrapLines {
-				if i == 0 {
-					fmt.Fprintf(&sb, "%s %s  %s\n", styledTs, srcLabel, line)
-				} else {
-					sb.WriteString(indent + line + "\n")
-				}
-			}
-		}
-	}
-
-	// Render pending proposal at the bottom of the session log.
+	// プロポーザルをビューポートの末尾に追加
 	if p := t.Proposal; p != nil {
-		sb.WriteString("\n")
-
-		proposalTitle := lipgloss.NewStyle().
-			Foreground(colorWarning).
-			Bold(true).
-			Render("⚠  PROPOSAL — Awaiting approval")
-
-		proposalBody := fmt.Sprintf(
-			"%s\n  Tool: %s %s",
-			p.Description,
-			p.Tool,
-			strings.Join(p.Args, " "),
-		)
-
-		proposalControls := lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Render("  [y] Approve  [n] Reject  [e] Edit")
-
-		boxWidth := m.viewport.Width - 2
-		if boxWidth < 10 {
-			boxWidth = 10
-		}
-
-		box := proposalBoxStyle.Width(boxWidth).Render(
-			proposalTitle + "\n\n  " + proposalBody + "\n\n" + proposalControls,
-		)
-		sb.WriteString(box + "\n")
+		content += m.renderProposal(p)
 	}
 
-	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	m.viewport.SetContent(content)
+	// ユーザーが底にいるときだけ auto-scroll（上にスクロール中は位置を維持）
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+// renderProposal はプロポーザルボックスをレンダリングする。
+func (m *Model) renderProposal(p *agent.Proposal) string {
+	var sb strings.Builder
+	sb.WriteString("\n")
+
+	proposalTitle := lipgloss.NewStyle().
+		Foreground(colorWarning).
+		Bold(true).
+		Render("⚠  PROPOSAL — Awaiting approval")
+
+	proposalBody := fmt.Sprintf(
+		"%s\n  Tool: %s %s",
+		p.Description,
+		p.Tool,
+		strings.Join(p.Args, " "),
+	)
+
+	proposalControls := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render("  [y] Approve  [n] Reject  [e] Edit")
+
+	boxWidth := m.viewport.Width - 2
+	if boxWidth < 10 {
+		boxWidth = 10
+	}
+
+	box := proposalBoxStyle.Width(boxWidth).Render(
+		proposalTitle + "\n\n  " + proposalBody + "\n\n" + proposalControls,
+	)
+	sb.WriteString(box + "\n")
+
+	return sb.String()
 }
 
 // syncListItems refreshes list items to reflect the current target states.
@@ -366,27 +303,33 @@ func (m *Model) showSelect(title string, options []SelectOption, callback func(m
 	m.selectCallback = callback
 }
 
-// buildDemoTargets creates representative demo targets for Phase 1 display.
+// buildDemoTargets creates representative demo targets for display.
 func buildDemoTargets() []*agent.Target {
 	t1 := agent.NewTarget(1, "10.0.0.5")
 	t1.Status = agent.StatusScanning
-	t1.AddLog(agent.SourceSystem, "Session started")
-	t1.AddLog(agent.SourceAI, "Starting recon on 10.0.0.5")
-	t1.AddLog(agent.SourceTool, "nmap -sV -p- 10.0.0.5")
-	t1.AddLog(agent.SourceTool, "PORT     STATE  SERVICE  VERSION")
-	t1.AddLog(agent.SourceTool, "22/tcp   open   ssh      OpenSSH 8.0")
-	t1.AddLog(agent.SourceTool, "80/tcp   open   http     Apache httpd 2.4.49")
-	t1.AddLog(agent.SourceAI, "Detected Apache 2.4.49 — possible CVE-2021-41773 (Path Traversal)")
+	t1.AddBlock(agent.NewSystemBlock("Session started"))
+	t1.AddBlock(agent.NewAIMessageBlock("Starting recon on 10.0.0.5"))
+	cmd := agent.NewCommandBlock("nmap -sV -p- 10.0.0.5")
+	cmd.Output = []string{
+		"PORT     STATE  SERVICE  VERSION",
+		"22/tcp   open   ssh      OpenSSH 8.0",
+		"80/tcp   open   http     Apache httpd 2.4.49",
+	}
+	cmd.Completed = true
+	cmd.ExitCode = 0
+	t1.AddBlock(cmd)
+	t1.AddBlock(agent.NewAIMessageBlock("Detected Apache 2.4.49 — possible CVE-2021-41773 (Path Traversal)"))
 
 	t2 := agent.NewTarget(2, "10.0.0.8")
-	t2.AddLog(agent.SourceSystem, "Session started")
-	t2.AddLog(agent.SourceAI, "Starting recon on 10.0.0.8")
-	t2.AddLog(agent.SourceTool, "nmap -sV 10.0.0.8")
-	t2.AddLog(agent.SourceTool, "80/tcp open http Apache httpd 2.4.49")
-	t2.AddLog(agent.SourceAI, "Port 80 (Apache 2.4.49) — vulnerable to CVE-2021-41773")
-	t2.AddLog(agent.SourceAI, "Planning exploit with Metasploit module...")
-	// Simulate AI proposing an exploit
-	t2.Logs[len(t2.Logs)-1].Time = time.Now()
+	t2.AddBlock(agent.NewSystemBlock("Session started"))
+	t2.AddBlock(agent.NewAIMessageBlock("Starting recon on 10.0.0.8"))
+	cmd2 := agent.NewCommandBlock("nmap -sV 10.0.0.8")
+	cmd2.Output = []string{"80/tcp open http Apache httpd 2.4.49"}
+	cmd2.Completed = true
+	cmd2.ExitCode = 0
+	t2.AddBlock(cmd2)
+	t2.AddBlock(agent.NewAIMessageBlock("Port 80 (Apache 2.4.49) — vulnerable to CVE-2021-41773"))
+	t2.AddBlock(agent.NewAIMessageBlock("Planning exploit with Metasploit module..."))
 	t2.SetProposal(&agent.Proposal{
 		Description: "Exploit Apache 2.4.49 Path Traversal (CVE-2021-41773)",
 		Tool:        "metasploit",
@@ -394,7 +337,7 @@ func buildDemoTargets() []*agent.Target {
 	})
 
 	t3 := agent.NewTarget(3, "10.0.0.12")
-	t3.AddLog(agent.SourceSystem, "Session started")
+	t3.AddBlock(agent.NewSystemBlock("Session started"))
 
 	return []*agent.Target{t1, t2, t3}
 }
