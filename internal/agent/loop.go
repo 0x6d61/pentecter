@@ -134,7 +134,7 @@ func (l *Loop) SetBrain(br brain.Brain) {
 func (l *Loop) Run(ctx context.Context) {
 	l.emit(Event{Type: EventLog, Source: SourceSystem,
 		Message: fmt.Sprintf("Agent started: %s", l.target.Host)})
-	l.target.Status = StatusScanning
+	l.target.SetStatusSafe(StatusScanning)
 
 	for {
 		select {
@@ -157,7 +157,7 @@ func (l *Loop) Run(ctx context.Context) {
 		if l.consecutiveFailures >= maxConsecutiveFailures {
 			l.emit(Event{Type: EventStalled,
 				Message: fmt.Sprintf("Stalled after %d consecutive failures. Waiting for direction.", l.consecutiveFailures)})
-			l.target.Status = StatusPaused
+			l.target.SetStatusSafe(StatusPaused)
 
 			// Wait for user input before continuing
 			userMsg = l.waitForUserMsg(ctx)
@@ -165,7 +165,7 @@ func (l *Loop) Run(ctx context.Context) {
 				return // context cancelled
 			}
 			l.consecutiveFailures = 0
-			l.target.Status = StatusScanning
+			l.target.SetStatusSafe(StatusScanning)
 		}
 
 		l.emit(Event{Type: EventTurnStart, TurnNumber: l.turnCount})
@@ -214,7 +214,7 @@ func (l *Loop) Run(ctx context.Context) {
 		}
 		if brainErr != nil {
 			l.emit(Event{Type: EventError, Message: fmt.Sprintf("Brain error after %d retries: %v", maxBrainRetries, brainErr)})
-			l.target.Status = StatusFailed
+			l.target.SetStatusSafe(StatusFailed)
 			return
 		}
 
@@ -273,7 +273,7 @@ func (l *Loop) Run(ctx context.Context) {
 			// 思考のみ
 
 		case schema.ActionComplete:
-			l.target.Status = StatusPwned
+			l.target.SetStatusSafe(StatusPwned)
 			l.emit(Event{Type: EventComplete, Message: "Assessment complete — waiting for further instructions (report, cleanup, etc.)"})
 			// PWNED 後もユーザー指示を待ち続ける
 			userMsg = l.waitForUserMsg(ctx)
@@ -301,20 +301,20 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	l.lastCommand = command
 	l.cmdStartTime = time.Now()
 	l.emit(Event{Type: EventCmdStart, Message: command})
-	l.target.Status = StatusRunning
+	l.target.SetStatusSafe(StatusRunning)
 
 	needsProposal, linesCh, resultCh, err := l.runner.Run(ctx, command)
 	if err != nil {
 		errMsg := fmt.Sprintf("Execution error: %v", err)
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: errMsg})
 		l.lastToolOutput = "Error: " + err.Error()
-		l.target.Status = StatusScanning
+		l.target.SetStatusSafe(StatusScanning)
 		return
 	}
 
 	if needsProposal {
 		// Brain が run を使ったが要承認ツール → 安全ネットとして propose に格上げ
-		l.target.Status = StatusScanning
+		l.target.SetStatusSafe(StatusScanning)
 		l.handlePropose(ctx, command, "Approval required: direct host execution")
 		return
 	}
@@ -336,7 +336,7 @@ func (l *Loop) handlePropose(ctx context.Context, command, description string) b
 	if l.runner.AutoApprove() {
 		l.emit(Event{Type: EventLog, Source: SourceSystem,
 			Message: fmt.Sprintf("Auto-approved: %s", command)})
-		l.target.Status = StatusRunning
+		l.target.SetStatusSafe(StatusRunning)
 		linesCh, resultCh := l.runner.ForceRun(ctx, command)
 		l.streamAndCollect(ctx, linesCh, resultCh)
 		return true
@@ -354,12 +354,12 @@ func (l *Loop) handlePropose(ctx context.Context, command, description string) b
 	case approved := <-l.approve:
 		l.target.ClearProposal()
 		if approved {
-			l.target.Status = StatusRunning
+			l.target.SetStatusSafe(StatusRunning)
 			linesCh, resultCh := l.runner.ForceRun(ctx, command)
 			l.streamAndCollect(ctx, linesCh, resultCh)
 		} else {
 			l.lastToolOutput = "User rejected: " + description
-			l.target.Status = StatusScanning
+			l.target.SetStatusSafe(StatusScanning)
 		}
 		return true
 	case <-ctx.Done():
@@ -413,7 +413,7 @@ func (l *Loop) callMCP(ctx context.Context, action *schema.Action) {
 	l.lastCommand = toolLabel
 	l.cmdStartTime = time.Now()
 	l.emit(Event{Type: EventCmdStart, Message: toolLabel})
-	l.target.Status = StatusRunning
+	l.target.SetStatusSafe(StatusRunning)
 
 	result, err := l.mcpMgr.CallTool(ctx, action.MCPServer, action.MCPTool, action.MCPArgs)
 	if err != nil {
@@ -421,7 +421,7 @@ func (l *Loop) callMCP(ctx context.Context, action *schema.Action) {
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: errMsg})
 		l.lastToolOutput = "Error: " + err.Error()
 		l.lastExitCode = 1
-		l.target.Status = StatusScanning
+		l.target.SetStatusSafe(StatusScanning)
 		return
 	}
 
@@ -444,7 +444,7 @@ func (l *Loop) callMCP(ctx context.Context, action *schema.Action) {
 	}
 
 	l.lastToolOutput = output
-	l.target.Status = StatusScanning
+	l.target.SetStatusSafe(StatusScanning)
 
 	// TUI にツール出力を表示（Block-based: EventCmdOutput で行単位送信）
 	if output != "" {
@@ -655,7 +655,7 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 		Message:  buildCommandSummary(result.ExitCode, result.Truncated),
 	})
 
-	l.target.Status = StatusScanning
+	l.target.SetStatusSafe(StatusScanning)
 }
 
 // drainUserMsg はユーザーメッセージを取得し、スキル呼び出し（/skill-name）なら展開する。
@@ -706,14 +706,15 @@ func (l *Loop) buildMemory() string {
 }
 
 func (l *Loop) buildSnapshot() string {
+	entities := l.target.SnapshotEntities()
 	entityMap := map[string][]string{}
-	for _, e := range l.target.Entities {
+	for _, e := range entities {
 		t := string(e.Type)
 		entityMap[t] = append(entityMap[t], e.Value)
 	}
 	snapshot := map[string]any{
 		"host":     l.target.Host,
-		"status":   string(l.target.Status),
+		"status":   string(l.target.GetStatus()),
 		"entities": entityMap,
 	}
 

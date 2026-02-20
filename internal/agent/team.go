@@ -126,11 +126,14 @@ func (t *Team) SetBrain(br brain.Brain) {
 	}
 }
 
-// Loops は管理している全 Loop を返す（TUI のターゲットリスト表示用）。
+// Loops は管理している全 Loop のコピーを返す（TUI のターゲットリスト表示用）。
+// 返されるスライスは呼び出し元で安全にイテレートできる。
 func (t *Team) Loops() []*Loop {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.loops
+	cp := make([]*Loop, len(t.loops))
+	copy(cp, t.loops)
+	return cp
 }
 
 // TaskManager は TaskManager を返す（TUI からアクセス用）。

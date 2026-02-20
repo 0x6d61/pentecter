@@ -99,9 +99,10 @@ type targetListItem struct {
 }
 
 func (i targetListItem) Title() string {
-	icon := i.t.Status.Icon()
+	status := i.t.GetStatus()
+	icon := status.Icon()
 	var coloredIcon string
-	switch i.t.Status {
+	switch status {
 	case agent.StatusPwned:
 		coloredIcon = statusPwnedStyle.Render(icon)
 	case agent.StatusRunning:
@@ -119,11 +120,12 @@ func (i targetListItem) Title() string {
 }
 
 func (i targetListItem) Description() string {
+	status := i.t.GetStatus()
 	extra := ""
-	if i.t.Proposal != nil {
+	if i.t.GetProposal() != nil {
 		extra = lipgloss.NewStyle().Foreground(colorWarning).Render(" ⚠ APPROVAL")
 	}
-	return fmt.Sprintf("[%s]%s", i.t.Status, extra)
+	return fmt.Sprintf("[%s]%s", status, extra)
 }
 
 func (i targetListItem) FilterValue() string { return i.t.Host }
@@ -239,7 +241,7 @@ func (m *Model) rebuildViewport() {
 	content := renderBlocks(t.Blocks, vpWidth, m.logsExpanded, m.spinner.View())
 
 	// プロポーザルをビューポートの末尾に追加
-	if p := t.Proposal; p != nil {
+	if p := t.GetProposal(); p != nil {
 		content += m.renderProposal(p)
 	}
 

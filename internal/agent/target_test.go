@@ -1,6 +1,8 @@
 package agent_test
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/0x6d61/pentecter/internal/agent"
@@ -320,4 +322,209 @@ func TestTarget_AddBlock_Multiple(t *testing.T) {
 	if len(tgt.Blocks) != 2 {
 		t.Errorf("Blocks count: got %d, want 2", len(tgt.Blocks))
 	}
+}
+
+// --- Thread-safe accessor tests ---
+
+func TestTarget_GetStatus_ReturnsCurrentStatus(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	if got := tgt.GetStatus(); got != agent.StatusIdle {
+		t.Errorf("GetStatus: got %s, want %s", got, agent.StatusIdle)
+	}
+
+	tgt.SetStatusSafe(agent.StatusScanning)
+	if got := tgt.GetStatus(); got != agent.StatusScanning {
+		t.Errorf("GetStatus after SetStatusSafe: got %s, want %s", got, agent.StatusScanning)
+	}
+}
+
+func TestTarget_SetStatusSafe(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	statuses := []agent.Status{
+		agent.StatusScanning,
+		agent.StatusRunning,
+		agent.StatusPaused,
+		agent.StatusPwned,
+		agent.StatusFailed,
+		agent.StatusIdle,
+	}
+
+	for _, s := range statuses {
+		tgt.SetStatusSafe(s)
+		if got := tgt.GetStatus(); got != s {
+			t.Errorf("SetStatusSafe(%s): GetStatus returned %s", s, got)
+		}
+	}
+}
+
+func TestTarget_GetProposal_ReturnsCurrentProposal(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	// Initially nil
+	if got := tgt.GetProposal(); got != nil {
+		t.Errorf("GetProposal on new target: got %v, want nil", got)
+	}
+
+	// After SetProposal
+	p := &agent.Proposal{Description: "test", Tool: "nmap"}
+	tgt.SetProposal(p)
+	got := tgt.GetProposal()
+	if got == nil {
+		t.Fatal("GetProposal after SetProposal: got nil, want non-nil")
+	}
+	if got.Description != "test" || got.Tool != "nmap" {
+		t.Errorf("GetProposal: got %v, want %v", got, p)
+	}
+
+	// After ClearProposal
+	tgt.ClearProposal()
+	if got := tgt.GetProposal(); got != nil {
+		t.Errorf("GetProposal after ClearProposal: got %v, want nil", got)
+	}
+}
+
+func TestTarget_SnapshotEntities_ReturnsIndependentCopy(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+	tgt.AddEntities([]tools.Entity{
+		{Type: tools.EntityPort, Value: "80/tcp"},
+		{Type: tools.EntityPort, Value: "443/tcp"},
+	})
+
+	snapshot := tgt.SnapshotEntities()
+
+	// Verify contents match
+	if len(snapshot) != 2 {
+		t.Fatalf("SnapshotEntities count: got %d, want 2", len(snapshot))
+	}
+	if snapshot[0].Value != "80/tcp" || snapshot[1].Value != "443/tcp" {
+		t.Errorf("SnapshotEntities: unexpected values %v", snapshot)
+	}
+
+	// Verify independence: modifying snapshot should not affect target
+	snapshot[0].Value = "MODIFIED"
+	original := tgt.SnapshotEntities()
+	if original[0].Value == "MODIFIED" {
+		t.Error("SnapshotEntities should return independent copy, but modification leaked back")
+	}
+}
+
+func TestTarget_SnapshotEntities_Empty(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	snapshot := tgt.SnapshotEntities()
+	if snapshot == nil {
+		t.Fatal("SnapshotEntities on empty: got nil, want empty slice")
+	}
+	if len(snapshot) != 0 {
+		t.Errorf("SnapshotEntities on empty: got %d entries, want 0", len(snapshot))
+	}
+}
+
+// --- Concurrent access tests ---
+
+func TestTarget_ConcurrentStatusAccess(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	var wg sync.WaitGroup
+	statuses := []agent.Status{
+		agent.StatusScanning, agent.StatusRunning,
+		agent.StatusPaused, agent.StatusPwned,
+		agent.StatusFailed, agent.StatusIdle,
+	}
+
+	// Writer goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				tgt.SetStatusSafe(statuses[(i+j)%len(statuses)])
+			}
+		}(i)
+	}
+
+	// Reader goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = tgt.GetStatus()
+			}
+		}()
+	}
+
+	wg.Wait()
+	// If we get here without race detector panic, the test passes
+}
+
+func TestTarget_ConcurrentProposalAccess(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	var wg sync.WaitGroup
+
+	// Writer goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				if j%2 == 0 {
+					tgt.SetProposal(&agent.Proposal{
+						Description: "test",
+						Tool:        "nmap",
+					})
+				} else {
+					tgt.ClearProposal()
+				}
+			}
+		}(i)
+	}
+
+	// Reader goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = tgt.GetProposal()
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestTarget_ConcurrentEntityAccess(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	var wg sync.WaitGroup
+
+	// Writer goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				tgt.AddEntities([]tools.Entity{
+					{Type: tools.EntityPort, Value: fmt.Sprintf("%d/tcp", i*100+j)},
+				})
+			}
+		}(i)
+	}
+
+	// Reader goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = tgt.SnapshotEntities()
+			}
+		}()
+	}
+
+	wg.Wait()
 }
