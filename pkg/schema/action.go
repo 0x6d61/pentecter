@@ -36,9 +36,6 @@ const (
 	// ActionWait は実行中の SubTask の完了を待つ。
 	ActionWait ActionType = "wait"
 
-	// ActionCheckTask は実行中の SubTask の部分出力を取得する。
-	ActionCheckTask ActionType = "check_task"
-
 	// ActionKillTask は実行中の SubTask をキャンセルする。
 	ActionKillTask ActionType = "kill_task"
 
@@ -77,8 +74,7 @@ type Action struct {
 	KnowledgePath  string `json:"knowledge_path,omitempty"`  // read_knowledge 用
 
 	// SubTask 関連フィールド
-	TaskID       string `json:"task_id,omitempty"`        // wait/check_task/kill_task: 対象タスクID
-	TaskKind     string `json:"task_kind,omitempty"`      // spawn_task: "runner" or "smart"
+	TaskID       string `json:"task_id,omitempty"`        // wait/kill_task: 対象タスクID
 	TaskGoal     string `json:"task_goal,omitempty"`      // spawn_task: タスクの目的
 	TaskMaxTurns int    `json:"task_max_turns,omitempty"` // spawn_task (smart): 最大ターン数
 	TaskPort     int    `json:"task_port,omitempty"`      // spawn_task: メタデータ - ポート

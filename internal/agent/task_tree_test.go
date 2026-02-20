@@ -8,16 +8,16 @@ import (
 
 func TestBuildTaskTree_GroupByPort(t *testing.T) {
 	// 4つのサブタスクを作成
-	task1 := agent.NewSubTask("task-1", agent.TaskKindRunner, "ssh scan")
+	task1 := agent.NewSubTask("task-1", agent.TaskKindSmart, "ssh scan")
 	task1.Metadata = agent.TaskMetadata{Port: 22, Service: "ssh", Phase: "recon"}
 
-	task2 := agent.NewSubTask("task-2", agent.TaskKindRunner, "http scan")
+	task2 := agent.NewSubTask("task-2", agent.TaskKindSmart, "http scan")
 	task2.Metadata = agent.TaskMetadata{Port: 80, Service: "http", Phase: "recon"}
 
 	task3 := agent.NewSubTask("task-3", agent.TaskKindSmart, "http enum")
 	task3.Metadata = agent.TaskMetadata{Port: 80, Service: "http", Phase: "enum"}
 
-	task4 := agent.NewSubTask("task-4", agent.TaskKindRunner, "general recon")
+	task4 := agent.NewSubTask("task-4", agent.TaskKindSmart, "general recon")
 	// task4: port=0 (no port metadata)
 
 	tasks := []*agent.SubTask{task1, task2, task3, task4}
@@ -68,9 +68,9 @@ func TestBuildTaskTree_EmptyTasks(t *testing.T) {
 }
 
 func TestBuildTaskTree_AllGeneral(t *testing.T) {
-	task1 := agent.NewSubTask("task-1", agent.TaskKindRunner, "general scan 1")
+	task1 := agent.NewSubTask("task-1", agent.TaskKindSmart, "general scan 1")
 	// port=0 (default)
-	task2 := agent.NewSubTask("task-2", agent.TaskKindRunner, "general scan 2")
+	task2 := agent.NewSubTask("task-2", agent.TaskKindSmart, "general scan 2")
 	// port=0 (default)
 
 	tasks := []*agent.SubTask{task1, task2}

@@ -15,8 +15,6 @@ import (
 type TaskKind string
 
 const (
-	// TaskKindRunner は単一コマンドを実行するタスク。
-	TaskKindRunner TaskKind = "runner"
 	// TaskKindSmart は Brain を使った自律型サブエージェントタスク。
 	TaskKindSmart TaskKind = "smart"
 )

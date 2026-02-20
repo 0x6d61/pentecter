@@ -9,7 +9,7 @@ import (
 )
 
 func TestSubTask_AppendOutput_ReadNewOutput(t *testing.T) {
-	st := agent.NewSubTask("task-1", agent.TaskKindRunner, "scan target")
+	st := agent.NewSubTask("task-1", agent.TaskKindSmart, "scan target")
 
 	st.AppendOutput("line1")
 	st.AppendOutput("line2")
@@ -31,7 +31,7 @@ func TestSubTask_AppendOutput_ReadNewOutput(t *testing.T) {
 }
 
 func TestSubTask_AdvanceReadCursor(t *testing.T) {
-	st := agent.NewSubTask("task-1", agent.TaskKindRunner, "scan target")
+	st := agent.NewSubTask("task-1", agent.TaskKindSmart, "scan target")
 
 	st.AppendOutput("line1")
 	st.AppendOutput("line2")
@@ -58,7 +58,7 @@ func TestSubTask_AdvanceReadCursor(t *testing.T) {
 }
 
 func TestSubTask_FullOutput(t *testing.T) {
-	st := agent.NewSubTask("task-1", agent.TaskKindRunner, "scan target")
+	st := agent.NewSubTask("task-1", agent.TaskKindSmart, "scan target")
 
 	st.AppendOutput("line1")
 	st.AppendOutput("line2")
@@ -72,7 +72,7 @@ func TestSubTask_FullOutput(t *testing.T) {
 }
 
 func TestSubTask_Summary_Runner(t *testing.T) {
-	st := agent.NewSubTask("task-1", agent.TaskKindRunner, "scan target")
+	st := agent.NewSubTask("task-1", agent.TaskKindSmart, "scan target")
 	st.Status = agent.TaskStatusRunning
 
 	st.AppendOutput("line1")
@@ -126,7 +126,7 @@ func TestSubTask_Summary_Smart(t *testing.T) {
 }
 
 func TestSubTask_ConcurrentAccess(t *testing.T) {
-	st := agent.NewSubTask("task-1", agent.TaskKindRunner, "concurrent test")
+	st := agent.NewSubTask("task-1", agent.TaskKindSmart, "concurrent test")
 
 	var wg sync.WaitGroup
 	// Multiple writers
@@ -163,7 +163,7 @@ func TestSubTask_ConcurrentAccess(t *testing.T) {
 }
 
 func TestSubTask_Done_Channel(t *testing.T) {
-	st := agent.NewSubTask("task-1", agent.TaskKindRunner, "test done")
+	st := agent.NewSubTask("task-1", agent.TaskKindSmart, "test done")
 
 	// done channel should not be closed initially
 	select {

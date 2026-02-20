@@ -63,14 +63,6 @@ var confirmQuitBoxStyle = lipgloss.NewStyle().
 	BorderForeground(colorDanger).
 	Padding(0, 2)
 
-// Log source label styles
-var (
-	sourceAIStyle   = lipgloss.NewStyle().Foreground(colorSecondary).Bold(true)
-	sourceToolStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
-	sourceSysStyle  = lipgloss.NewStyle().Foreground(colorMuted)
-	sourceUserStyle = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
-)
-
 // Status icon color styles
 var (
 	statusIdleStyle     = lipgloss.NewStyle().Foreground(colorMuted)
@@ -79,20 +71,6 @@ var (
 	statusPausedStyle   = lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
 	statusPwnedStyle    = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
 	statusFailedStyle   = lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
-)
-
-// Turn separator and command result styles
-var (
-	turnSeparatorStyle = lipgloss.NewStyle().
-				Foreground(colorMuted).
-				Bold(true)
-
-	commandSuccessStyle = lipgloss.NewStyle().
-				Foreground(colorSuccess)
-
-	commandFailStyle = lipgloss.NewStyle().
-				Foreground(colorDanger).
-				Bold(true)
 )
 
 // foldIndicatorStyle は折りたたみ行の「⋯ +N Lines (Ctrl+O)」スタイル。
