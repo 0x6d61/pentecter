@@ -54,3 +54,10 @@ blacklist:
 #   Use 1 for stealth, 2-3 for normal, 4+ for aggressive.
 recon:
   max_parallel: 2
+
+  # initial_scans: Commands to run automatically when a target is added.
+  # Use {target} as placeholder for the target host/IP.
+  # If omitted, the agent decides which scans to run.
+  # initial_scans:
+  #   - "nmap -p- -sV -Pn -oX - {target}"
+  #   - "nmap -sU --top-ports 1000 -sV -Pn -oX - {target}"

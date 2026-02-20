@@ -19,7 +19,8 @@ type KnowledgeEntry struct {
 
 // ReconConfig は偵察ツリーの動作設定
 type ReconConfig struct {
-	MaxParallel int `yaml:"max_parallel"`
+	MaxParallel  int      `yaml:"max_parallel"`
+	InitialScans []string `yaml:"initial_scans"`
 }
 
 // AppConfig は config/config.yaml の統合設定構造
