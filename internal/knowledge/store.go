@@ -47,7 +47,8 @@ func NewStore(basePath string) *Store {
 }
 
 // Search はクエリに一致するファイル・セクションを返す。
-// - クエリをスペースで分割 → 全キーワードを含む行をマッチ（case-insensitive）
+// - クエリをスペースで分割 → 全キーワードがファイル内のどこかに存在すればマッチ（file-level AND, case-insensitive）
+// - スニペットは最初にキーワードが出現した行の前後コンテキスト
 // - マッチ行の近くの H2/H3 ヘッダーをセクション名として抽出
 // - ファイルごとにグルーピング → マッチ数で降順ソート
 // - maxResults で結果数を制限
@@ -106,9 +107,12 @@ func (s *Store) Search(query string, maxResults int) []SearchResult {
 			title          string
 			currentSection string
 			matchSection   string
-			matchLines     []int
+			firstMatchLine int = -1
 			matchCount     int
 		)
+
+		// キーワードごとのファイル内出現フラグ
+		keywordFound := make([]bool, len(keywords))
 
 		scanner := bufio.NewScanner(f)
 		lineNum := 0
@@ -128,19 +132,20 @@ func (s *Store) Search(query string, maxResults int) []SearchResult {
 				currentSection = strings.TrimSpace(trimmed)
 			}
 
-			// 全キーワードが行に含まれるかチェック（case-insensitive）
+			// 各キーワードの出現をチェック（file-level AND）
 			lowerLine := strings.ToLower(line)
-			allMatch := true
-			for _, kw := range keywords {
-				if !strings.Contains(lowerLine, kw) {
-					allMatch = false
-					break
+			lineHasMatch := false
+			for ki, kw := range keywords {
+				if strings.Contains(lowerLine, kw) {
+					keywordFound[ki] = true
+					matchCount++
+					lineHasMatch = true
 				}
 			}
 
-			if allMatch {
-				matchCount++
-				matchLines = append(matchLines, lineNum)
+			// 最初のマッチ行を記録（スニペット用）
+			if lineHasMatch && firstMatchLine < 0 {
+				firstMatchLine = lineNum
 				if currentSection != "" {
 					matchSection = currentSection
 				}
@@ -149,7 +154,20 @@ func (s *Store) Search(query string, maxResults int) []SearchResult {
 			lineNum++
 		}
 
-		if matchCount > 0 {
+		// 全キーワードがファイル内に存在する場合のみマッチ
+		allFound := true
+		for _, found := range keywordFound {
+			if !found {
+				allFound = false
+				break
+			}
+		}
+
+		if allFound && matchCount > 0 {
+			matchLines := []int{}
+			if firstMatchLine >= 0 {
+				matchLines = append(matchLines, firstMatchLine)
+			}
 			results = append(results, fileMatch{
 				relPath:    relPath,
 				title:      title,
