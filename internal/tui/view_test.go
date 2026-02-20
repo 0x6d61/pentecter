@@ -97,76 +97,8 @@ func TestRenderStatusBar_NoTarget(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// renderFocusIndicator
-// ---------------------------------------------------------------------------
-
-func TestRenderFocusIndicator_List(t *testing.T) {
-	m := NewWithTargets(nil)
-	m.focus = FocusList
-
-	output := m.renderFocusIndicator()
-
-	if !strings.Contains(output, "[LIST]") {
-		t.Error("expected [LIST] in focus indicator")
-	}
-	if !strings.Contains(output, "[LOG]") {
-		t.Error("expected [LOG] in focus indicator")
-	}
-	if !strings.Contains(output, "[INPUT]") {
-		t.Error("expected [INPUT] in focus indicator")
-	}
-}
-
-func TestRenderFocusIndicator_Viewport(t *testing.T) {
-	m := NewWithTargets(nil)
-	m.focus = FocusViewport
-
-	output := m.renderFocusIndicator()
-
-	if !strings.Contains(output, "[LIST]") {
-		t.Error("expected [LIST] in focus indicator")
-	}
-	if !strings.Contains(output, "[LOG]") {
-		t.Error("expected [LOG] in focus indicator")
-	}
-	if !strings.Contains(output, "[INPUT]") {
-		t.Error("expected [INPUT] in focus indicator")
-	}
-}
-
-func TestRenderFocusIndicator_Input(t *testing.T) {
-	m := NewWithTargets(nil)
-	m.focus = FocusInput
-
-	output := m.renderFocusIndicator()
-
-	if !strings.Contains(output, "[LIST]") {
-		t.Error("expected [LIST] in focus indicator")
-	}
-	if !strings.Contains(output, "[LOG]") {
-		t.Error("expected [LOG] in focus indicator")
-	}
-	if !strings.Contains(output, "[INPUT]") {
-		t.Error("expected [INPUT] in focus indicator")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // renderInputBar
 // ---------------------------------------------------------------------------
-
-func TestRenderInputBar_FocusList(t *testing.T) {
-	m := NewWithTargets(nil)
-	m.handleResize(120, 40)
-	m.ready = true
-	m.focus = FocusList
-
-	output := m.renderInputBar()
-
-	if !strings.Contains(output, "Select target") {
-		t.Errorf("expected '[List]' hint in input bar, got %q", output)
-	}
-}
 
 func TestRenderInputBar_FocusViewport(t *testing.T) {
 	m := NewWithTargets(nil)
@@ -366,91 +298,6 @@ func TestMax_Zero(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// targetListItem — Title, Description, FilterValue
-// ---------------------------------------------------------------------------
-
-func TestTargetListItem_Title_AllStatuses(t *testing.T) {
-	statuses := []struct {
-		status agent.Status
-		icon   string
-	}{
-		{agent.StatusIdle, "○"},
-		{agent.StatusScanning, "◎"},
-		{agent.StatusRunning, "▶"},
-		{agent.StatusPaused, "⏸"},
-		{agent.StatusPwned, "⚡"},
-		{agent.StatusFailed, "✗"},
-	}
-
-	for _, tt := range statuses {
-		t.Run(string(tt.status), func(t *testing.T) {
-			target := agent.NewTarget(1, "10.0.0.1")
-			target.Status = tt.status
-			item := targetListItem{t: target}
-
-			title := item.Title()
-			if !strings.Contains(title, tt.icon) {
-				t.Errorf("expected icon %q in title for status %s, got %q", tt.icon, tt.status, title)
-			}
-			if !strings.Contains(title, "10.0.0.1") {
-				t.Errorf("expected host in title, got %q", title)
-			}
-		})
-	}
-}
-
-func TestTargetListItem_Description_NoProposal(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.1")
-	target.Status = agent.StatusScanning
-	item := targetListItem{t: target}
-
-	desc := item.Description()
-	if !strings.Contains(desc, "SCANNING") {
-		t.Errorf("expected SCANNING in description, got %q", desc)
-	}
-	if strings.Contains(desc, "APPROVAL") {
-		t.Error("should not contain APPROVAL without a proposal")
-	}
-}
-
-func TestTargetListItem_Description_WithProposal(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.1")
-	target.SetProposal(&agent.Proposal{
-		Description: "Run nmap",
-		Tool:        "nmap",
-		Args:        []string{"-sV"},
-	})
-	item := targetListItem{t: target}
-
-	desc := item.Description()
-	if !strings.Contains(desc, "APPROVAL") {
-		t.Errorf("expected APPROVAL in description when proposal is set, got %q", desc)
-	}
-}
-
-func TestTargetListItem_FilterValue(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.5")
-	item := targetListItem{t: target}
-
-	fv := item.FilterValue()
-	if fv != "10.0.0.5" {
-		t.Errorf("expected filter value '10.0.0.5', got %q", fv)
-	}
-}
-
-func TestTargetListItem_Title_UnknownStatus(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.1")
-	target.Status = agent.Status("UNKNOWN")
-	item := targetListItem{t: target}
-
-	title := item.Title()
-	// Unknown status should use the default (idle) style
-	if !strings.Contains(title, "10.0.0.1") {
-		t.Errorf("expected host in title for unknown status, got %q", title)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // renderConfirmQuit overlay
 // ---------------------------------------------------------------------------
 
@@ -485,27 +332,4 @@ func TestRenderConfirmQuit_Content(t *testing.T) {
 	}
 }
 
-func TestTargetListItem_Description_AllStatuses(t *testing.T) {
-	statuses := []agent.Status{
-		agent.StatusIdle,
-		agent.StatusScanning,
-		agent.StatusRunning,
-		agent.StatusPaused,
-		agent.StatusPwned,
-		agent.StatusFailed,
-	}
-
-	for _, status := range statuses {
-		t.Run(string(status), func(t *testing.T) {
-			target := agent.NewTarget(1, "10.0.0.1")
-			target.Status = status
-			item := targetListItem{t: target}
-
-			desc := item.Description()
-			if !strings.Contains(desc, string(status)) {
-				t.Errorf("expected status %q in description, got %q", status, desc)
-			}
-		})
-	}
-}
 

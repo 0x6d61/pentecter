@@ -128,7 +128,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					t.AddBlock(agent.NewUserInputBlock("Approved: " + prop.Description))
 					t.SetStatusSafe(agent.StatusRunning)
 					t.ClearProposal()
-					m.syncListItems()
 					m.rebuildViewport()
 					// 対象ターゲットの Agent ループに承認を通知
 					if ch, ok := m.agentApproveMap[t.ID]; ok {
@@ -142,7 +141,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					t.AddBlock(agent.NewUserInputBlock("Rejected: " + prop.Description))
 					t.SetStatusSafe(agent.StatusIdle)
 					t.ClearProposal()
-					m.syncListItems()
 					m.rebuildViewport()
 					// 対象ターゲットの Agent ループに拒否を通知
 					if ch, ok := m.agentApproveMap[t.ID]; ok {
@@ -164,16 +162,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Focus-specific key handling.
 		switch m.focus {
-		case FocusList:
-			prevIdx := m.list.Index()
-			m.list, cmd = m.list.Update(msg)
-			cmds = append(cmds, cmd)
-			// When selection changes, reload viewport for the newly selected target.
-			if m.list.Index() != prevIdx {
-				m.selected = m.list.Index()
-				m.rebuildViewport()
-			}
-
 		case FocusViewport:
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
@@ -203,7 +191,6 @@ func (m *Model) handleResize(w, h int) {
 		inputBorder = 2 // rounded border top + bottom
 		paneVBorder = 2 // top + bottom borders for panes
 	)
-	// input 領域: ボーダー + textarea の最大行数
 	inputAreaH := inputBorder + m.input.MaxHeight
 
 	paneH := h - statusBarH - inputAreaH - paneVBorder
@@ -211,16 +198,9 @@ func (m *Model) handleResize(w, h int) {
 		paneH = 4
 	}
 
-	// Left pane: list
-	listContentW := leftPaneOuterWidth - 4 // subtract 2 borders + 2 internal margins
-	listContentH := paneH - 2              // subtract top + bottom borders
-	m.list.SetWidth(listContentW)
-	m.list.SetHeight(listContentH)
-
-	// Right pane: viewport
-	rightOuterW := w - leftPaneOuterWidth
-	vpW := rightOuterW - 4 // subtract 2 borders + 2 side margins
-	vpH := paneH - 2       // subtract top + bottom borders
+	// Main pane: viewport (full width)
+	vpW := w - 4 // subtract 2 borders + 2 side margins
+	vpH := paneH - 2
 	if vpW < 10 {
 		vpW = 10
 	}
@@ -232,21 +212,17 @@ func (m *Model) handleResize(w, h int) {
 		m.viewport.Height = vpH
 	}
 
-	// Input bar: spans full width minus borders.
-	m.input.SetWidth(w - 6) // subtract 2 borders + 2 side margins + 2 for prompt prefix
+	m.input.SetWidth(w - 6)
 }
 
-// cycleFocus advances focus to the next pane in order: List → Viewport → Input → List.
+// cycleFocus toggles focus between Viewport and Input.
 func (m *Model) cycleFocus() {
 	switch m.focus {
-	case FocusList:
-		m.focus = FocusViewport
-		m.input.Blur()
 	case FocusViewport:
 		m.focus = FocusInput
 		m.input.Focus()
 	case FocusInput:
-		m.focus = FocusList
+		m.focus = FocusViewport
 		m.input.Blur()
 	}
 }
@@ -269,6 +245,12 @@ func (m *Model) submitInput() {
 	// /model command — switch LLM provider/model
 	if strings.HasPrefix(fullText, "/model") {
 		m.handleModelCommand(fullText)
+		return
+	}
+
+	// /targets command — show target list for selection
+	if fullText == "/targets" {
+		m.handleTargetsCommand()
 		return
 	}
 
@@ -297,7 +279,6 @@ func (m *Model) submitInput() {
 					}
 				}
 			}
-			m.syncListItems()
 			m.rebuildViewport()
 			return
 		}
@@ -305,7 +286,6 @@ func (m *Model) submitInput() {
 
 	if t := m.activeTarget(); t != nil {
 		t.AddBlock(agent.NewUserInputBlock(fullText))
-		m.syncListItems()
 		m.rebuildViewport()
 	}
 
@@ -355,8 +335,6 @@ func (m *Model) addTarget(host string) {
 	m.agentUserMsgMap[target.ID] = userMsgCh
 	// 新しいターゲットを選択状態にする
 	m.selected = len(m.targets) - 1
-	m.syncListItems()
-	m.list.Select(m.selected)
 	m.rebuildViewport()
 }
 
@@ -487,6 +465,41 @@ func (m *Model) switchModel(provider brain.Provider, model string) {
 	m.logSystem(msg)
 }
 
+// handleTargetsCommand shows an interactive target list using the select UI.
+func (m *Model) handleTargetsCommand() {
+	if len(m.targets) == 0 {
+		m.logSystem("No targets. Add one with /target <host>")
+		return
+	}
+
+	options := make([]SelectOption, len(m.targets))
+	for i, t := range m.targets {
+		status := t.GetStatus()
+		icon := status.Icon()
+		label := fmt.Sprintf("%s %s [%s]", icon, t.Host, status)
+		options[i] = SelectOption{
+			Label: label,
+			Value: fmt.Sprintf("%d", i),
+		}
+	}
+
+	m.showSelect(
+		"Select target:",
+		options,
+		func(m *Model, value string) {
+			var idx int
+			if _, err := fmt.Sscanf(value, "%d", &idx); err != nil {
+				return
+			}
+			if idx >= 0 && idx < len(m.targets) {
+				m.selected = idx
+				m.rebuildViewport()
+				m.logSystem(fmt.Sprintf("Switched to target: %s", m.targets[idx].Host))
+			}
+		},
+	)
+}
+
 // logSystem adds a system message to the active target as a Block.
 func (m *Model) logSystem(msg string) {
 	if t := m.activeTarget(); t != nil {
@@ -494,7 +507,6 @@ func (m *Model) logSystem(msg string) {
 	} else {
 		m.globalLogs = append(m.globalLogs, msg)
 	}
-	m.syncListItems()
 	m.rebuildViewport()
 }
 
@@ -646,7 +658,6 @@ func (m *Model) handleAgentEvent(e agent.Event) tea.Cmd {
 		m.spinning = m.hasActiveSpinner()
 	}
 
-	m.syncListItems()
 	if needsViewportUpdate {
 		m.rebuildViewport()
 	}
