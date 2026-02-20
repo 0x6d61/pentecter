@@ -102,6 +102,23 @@ func TestReconRunner_BuildWebReconPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "-of json") {
 		t.Error("prompt should require json output format")
 	}
+
+	// Phase 2: VALUE FUZZING セクションの確認
+	if !strings.Contains(prompt, "VALUE FUZZING") {
+		t.Error("prompt should contain VALUE FUZZING section")
+	}
+	if !strings.Contains(prompt, "MANDATORY") {
+		t.Error("prompt should mark value fuzzing as MANDATORY")
+	}
+	if !strings.Contains(prompt, "baseline") {
+		t.Error("prompt should mention baseline request")
+	}
+	// 全カテゴリ名が含まれていること
+	for _, cat := range MinFuzzCategories {
+		if !strings.Contains(prompt, cat.Name) {
+			t.Errorf("prompt missing fuzz category %q", cat.Name)
+		}
+	}
 }
 
 func TestReconRunner_RunInitialScans_ContextCancel(t *testing.T) {
@@ -204,3 +221,56 @@ func TestBuildWebReconPrompt_NonStandardPort(t *testing.T) {
 		t.Error("prompt for port 8080 should use http scheme with port")
 	}
 }
+
+func TestBuildWebReconPrompt_ContainsAllFuzzCategories(t *testing.T) {
+	prompt := buildWebReconPrompt("10.10.11.100", 80)
+	for _, cat := range MinFuzzCategories {
+		if !strings.Contains(prompt, cat.Name) {
+			t.Errorf("prompt missing category %q", cat.Name)
+		}
+		if !strings.Contains(prompt, cat.Description) {
+			t.Errorf("prompt missing description for %q", cat.Name)
+		}
+	}
+}
+
+func TestBuildWebReconPrompt_Phase2Instructions(t *testing.T) {
+	prompt := buildWebReconPrompt("10.10.11.100", 80)
+
+	// curl -w フォーマット文字列の確認
+	if !strings.Contains(prompt, "http_code") {
+		t.Error("prompt should contain curl -w format with http_code")
+	}
+	if !strings.Contains(prompt, "size_download") {
+		t.Error("prompt should contain curl -w format with size_download")
+	}
+	if !strings.Contains(prompt, "time_total") {
+		t.Error("prompt should contain curl -w format with time_total")
+	}
+
+	// ステータスコード比較の言及
+	if !strings.Contains(prompt, "Status code") {
+		t.Error("prompt should mention status code comparison")
+	}
+
+	// Content-length/size 比較の言及
+	if !strings.Contains(prompt, "Content-length") || !strings.Contains(prompt, "10%") {
+		t.Error("prompt should mention content-length comparison with threshold")
+	}
+
+	// レスポンスタイム比較の言及
+	if !strings.Contains(prompt, "Response time") || !strings.Contains(prompt, "5x") {
+		t.Error("prompt should mention response time comparison with 5x threshold")
+	}
+
+	// memory アクションでの報告
+	if !strings.Contains(prompt, `"memory" action`) {
+		t.Error("prompt should mention reporting with memory action")
+	}
+
+	// severity レベルの言及
+	if !strings.Contains(prompt, "severity") {
+		t.Error("prompt should mention severity levels for reporting")
+	}
+}
+

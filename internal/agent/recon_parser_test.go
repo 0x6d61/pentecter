@@ -270,3 +270,176 @@ func TestDetectAndParse_Unknown(t *testing.T) {
 		t.Errorf("unknown command should not error, got: %v", err)
 	}
 }
+
+// --- CurlMetrics パーサー テスト ---
+
+func TestParseCurlMetrics_Valid(t *testing.T) {
+	m := ParseCurlMetrics("200 1234 0.050")
+	if m == nil {
+		t.Fatal("expected non-nil CurlMetrics")
+	}
+	if m.StatusCode != 200 {
+		t.Errorf("StatusCode = %d, want 200", m.StatusCode)
+	}
+	if m.ContentSize != 1234 {
+		t.Errorf("ContentSize = %d, want 1234", m.ContentSize)
+	}
+	if m.ResponseTime != 0.050 {
+		t.Errorf("ResponseTime = %f, want 0.050", m.ResponseTime)
+	}
+}
+
+func TestParseCurlMetrics_WithBody(t *testing.T) {
+	output := "<html><body>Hello World</body></html>\n200 1234 0.050"
+	m := ParseCurlMetrics(output)
+	if m == nil {
+		t.Fatal("expected non-nil CurlMetrics")
+	}
+	if m.StatusCode != 200 {
+		t.Errorf("StatusCode = %d, want 200", m.StatusCode)
+	}
+	if m.ContentSize != 1234 {
+		t.Errorf("ContentSize = %d, want 1234", m.ContentSize)
+	}
+	if m.ResponseTime != 0.050 {
+		t.Errorf("ResponseTime = %f, want 0.050", m.ResponseTime)
+	}
+}
+
+func TestParseCurlMetrics_Invalid(t *testing.T) {
+	m := ParseCurlMetrics("this is not metrics data")
+	if m != nil {
+		t.Errorf("expected nil for invalid input, got %+v", m)
+	}
+}
+
+func TestParseCurlMetrics_EmptyString(t *testing.T) {
+	m := ParseCurlMetrics("")
+	if m != nil {
+		t.Errorf("expected nil for empty input, got %+v", m)
+	}
+}
+
+func TestParseCurlMetrics_TrailingNewline(t *testing.T) {
+	output := "200 5678 0.123\n"
+	m := ParseCurlMetrics(output)
+	if m == nil {
+		t.Fatal("expected non-nil CurlMetrics")
+	}
+	if m.StatusCode != 200 {
+		t.Errorf("StatusCode = %d, want 200", m.StatusCode)
+	}
+	if m.ContentSize != 5678 {
+		t.Errorf("ContentSize = %d, want 5678", m.ContentSize)
+	}
+	if m.ResponseTime != 0.123 {
+		t.Errorf("ResponseTime = %f, want 0.123", m.ResponseTime)
+	}
+}
+
+// --- CompareBaseline テスト ---
+
+func TestCompareBaseline_NoAnomaly(t *testing.T) {
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.050}
+	fuzzed := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.055}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 0 {
+		t.Errorf("expected no anomalies, got %d: %+v", len(anomalies), anomalies)
+	}
+}
+
+func TestCompareBaseline_StatusChange(t *testing.T) {
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.050}
+	fuzzed := &CurlMetrics{StatusCode: 500, ContentSize: 1000, ResponseTime: 0.050}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 1 {
+		t.Fatalf("expected 1 anomaly, got %d: %+v", len(anomalies), anomalies)
+	}
+	if anomalies[0].Type != "status_change" {
+		t.Errorf("Type = %q, want status_change", anomalies[0].Type)
+	}
+	if anomalies[0].Severity != "high" {
+		t.Errorf("Severity = %q, want high", anomalies[0].Severity)
+	}
+}
+
+func TestCompareBaseline_SizeChange(t *testing.T) {
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.050}
+	fuzzed := &CurlMetrics{StatusCode: 200, ContentSize: 1200, ResponseTime: 0.050}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 1 {
+		t.Fatalf("expected 1 anomaly, got %d: %+v", len(anomalies), anomalies)
+	}
+	if anomalies[0].Type != "size_change" {
+		t.Errorf("Type = %q, want size_change", anomalies[0].Type)
+	}
+	if anomalies[0].Severity != "medium" {
+		t.Errorf("Severity = %q, want medium", anomalies[0].Severity)
+	}
+}
+
+func TestCompareBaseline_SizeWithinThreshold(t *testing.T) {
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.050}
+	// 5% difference → within 10% threshold
+	fuzzed := &CurlMetrics{StatusCode: 200, ContentSize: 1050, ResponseTime: 0.050}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 0 {
+		t.Errorf("expected no anomalies for 5%% size diff, got %d: %+v", len(anomalies), anomalies)
+	}
+}
+
+func TestCompareBaseline_TimeChange(t *testing.T) {
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.050}
+	fuzzed := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.300}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 1 {
+		t.Fatalf("expected 1 anomaly, got %d: %+v", len(anomalies), anomalies)
+	}
+	if anomalies[0].Type != "time_change" {
+		t.Errorf("Type = %q, want time_change", anomalies[0].Type)
+	}
+	if anomalies[0].Severity != "medium" {
+		t.Errorf("Severity = %q, want medium", anomalies[0].Severity)
+	}
+}
+
+func TestCompareBaseline_TimeFastBaseline(t *testing.T) {
+	// ベースラインが 0.005s（< 0.01s）→ 誤検知防止のため time anomaly なし
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.005}
+	fuzzed := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.030}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 0 {
+		t.Errorf("expected no anomalies for fast baseline, got %d: %+v", len(anomalies), anomalies)
+	}
+}
+
+func TestCompareBaseline_MultipleAnomalies(t *testing.T) {
+	baseline := &CurlMetrics{StatusCode: 200, ContentSize: 1000, ResponseTime: 0.050}
+	fuzzed := &CurlMetrics{StatusCode: 500, ContentSize: 2000, ResponseTime: 0.500}
+
+	anomalies := CompareBaseline(baseline, fuzzed)
+	if len(anomalies) != 3 {
+		t.Fatalf("expected 3 anomalies, got %d: %+v", len(anomalies), anomalies)
+	}
+
+	// 各タイプが存在することを確認
+	types := make(map[string]bool)
+	for _, a := range anomalies {
+		types[a.Type] = true
+	}
+	if !types["status_change"] {
+		t.Error("missing status_change anomaly")
+	}
+	if !types["size_change"] {
+		t.Error("missing size_change anomaly")
+	}
+	if !types["time_change"] {
+		t.Error("missing time_change anomaly")
+	}
+}

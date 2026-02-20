@@ -410,3 +410,150 @@ func TestRenderQueue_UnlockedNoForceMessage(t *testing.T) {
 		t.Errorf("unlocked RenderQueue should NOT contain MANDATORY, got:\n%s", output)
 	}
 }
+
+func TestAddFinding(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	f := Finding{
+		Param:    "id",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error on single quote",
+		Severity: "high",
+	}
+	tree.AddFinding("10.10.11.100", 80, "/api", f)
+
+	node := tree.findNode("10.10.11.100", 80, "/api")
+	if node == nil {
+		t.Fatal("node not found")
+	}
+	if len(node.Findings) != 1 {
+		t.Fatalf("Findings count = %d, want 1", len(node.Findings))
+	}
+	got := node.Findings[0]
+	if got.Param != "id" {
+		t.Errorf("Param = %q, want %q", got.Param, "id")
+	}
+	if got.Category != "sqli" {
+		t.Errorf("Category = %q, want %q", got.Category, "sqli")
+	}
+	if got.Evidence != "500 + MySQL syntax error on single quote" {
+		t.Errorf("Evidence = %q", got.Evidence)
+	}
+	if got.Severity != "high" {
+		t.Errorf("Severity = %q, want %q", got.Severity, "high")
+	}
+}
+
+func TestAddFinding_MultipleFindings(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	findings := []Finding{
+		{Param: "id", Category: "sqli", Evidence: "500 + MySQL syntax error", Severity: "high"},
+		{Param: "name", Category: "xss", Evidence: "reflected <script> in response", Severity: "medium"},
+		{Param: "file", Category: "lfi", Evidence: "/etc/passwd content in response", Severity: "high"},
+	}
+	for _, f := range findings {
+		tree.AddFinding("10.10.11.100", 80, "/api", f)
+	}
+
+	node := tree.findNode("10.10.11.100", 80, "/api")
+	if node == nil {
+		t.Fatal("node not found")
+	}
+	if len(node.Findings) != 3 {
+		t.Fatalf("Findings count = %d, want 3", len(node.Findings))
+	}
+	// 順序が保持されること
+	if node.Findings[0].Param != "id" {
+		t.Errorf("Findings[0].Param = %q, want %q", node.Findings[0].Param, "id")
+	}
+	if node.Findings[1].Param != "name" {
+		t.Errorf("Findings[1].Param = %q, want %q", node.Findings[1].Param, "name")
+	}
+	if node.Findings[2].Param != "file" {
+		t.Errorf("Findings[2].Param = %q, want %q", node.Findings[2].Param, "file")
+	}
+}
+
+func TestAddFinding_NonExistentNode(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	// 存在しないパスに追加 — パニックしないこと
+	f := Finding{Param: "id", Category: "sqli", Evidence: "error", Severity: "high"}
+	tree.AddFinding("10.10.11.100", 80, "/nonexistent", f)
+
+	// ポートノードに finding が追加されていないこと
+	node := tree.Ports[0]
+	if len(node.Findings) != 0 {
+		t.Errorf("Findings count = %d, want 0 (should not add to wrong node)", len(node.Findings))
+	}
+}
+
+func TestCountFindings(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+
+	// 空のツリーは 0
+	if got := tree.CountFindings(); got != 0 {
+		t.Errorf("CountFindings = %d, want 0", got)
+	}
+
+	// /api に2つ追加
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param: "id", Category: "sqli", Evidence: "error", Severity: "high",
+	})
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param: "name", Category: "xss", Evidence: "reflected", Severity: "medium",
+	})
+	// /login に1つ追加
+	tree.AddFinding("10.10.11.100", 80, "/login", Finding{
+		Param: "user", Category: "sqli", Evidence: "blind", Severity: "high",
+	})
+
+	if got := tree.CountFindings(); got != 3 {
+		t.Errorf("CountFindings = %d, want 3", got)
+	}
+}
+
+func TestRenderTree_WithFindings(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param:    "id",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error",
+		Severity: "high",
+	})
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param:    "name",
+		Category: "xss",
+		Evidence: "reflected script tag",
+		Severity: "medium",
+	})
+
+	output := tree.RenderTree()
+
+	// finding 行が含まれること
+	checks := []string{
+		`finding: param "id"`,
+		"sqli",
+		"500 + MySQL syntax error",
+		`finding: param "name"`,
+		"xss",
+		"reflected script tag",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}

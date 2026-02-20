@@ -318,3 +318,98 @@ func portFromURL(u *url.URL) int {
 	}
 	return 80
 }
+
+// --- curl メトリクス パーサー ---
+
+// CurlMetrics は curl -w 出力からパースしたレスポンスメトリクス
+type CurlMetrics struct {
+	StatusCode   int
+	ContentSize  int
+	ResponseTime float64 // seconds
+}
+
+// ParseCurlMetrics は curl -w "%{http_code} %{size_download} %{time_total}" の出力から
+// メトリクスを抽出する。最終行からパースを試みる。
+// パースできない場合は nil を返す。
+func ParseCurlMetrics(output string) *CurlMetrics {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil
+	}
+
+	// 最終行を取得
+	lines := strings.Split(output, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if lastLine == "" {
+		return nil
+	}
+
+	var status, size int
+	var responseTime float64
+	n, err := fmt.Sscanf(lastLine, "%d %d %f", &status, &size, &responseTime)
+	if err != nil || n != 3 {
+		return nil
+	}
+
+	return &CurlMetrics{
+		StatusCode:   status,
+		ContentSize:  size,
+		ResponseTime: responseTime,
+	}
+}
+
+// --- ベースライン比較 ---
+
+// Anomaly はベースライン比較で検出された異常
+type Anomaly struct {
+	Type     string // "status_change", "size_change", "time_change"
+	Detail   string // 人間可読な説明
+	Severity string // "high", "medium", "low"
+}
+
+// CompareBaseline はファジングレスポンスをベースラインと比較し、異常を検出する。
+// 検出基準:
+//   - ステータスコード変化 → high
+//   - コンテンツ長 ±10% 以上 → medium
+//   - レスポンス時間 5x 以上遅延 → medium (time-based injection)
+func CompareBaseline(baseline, fuzzed *CurlMetrics) []Anomaly {
+	var anomalies []Anomaly
+
+	// ステータスコード変化
+	if baseline.StatusCode != fuzzed.StatusCode {
+		anomalies = append(anomalies, Anomaly{
+			Type:     "status_change",
+			Detail:   fmt.Sprintf("status changed from %d to %d", baseline.StatusCode, fuzzed.StatusCode),
+			Severity: "high",
+		})
+	}
+
+	// コンテンツサイズ変化（±10%）
+	if baseline.ContentSize > 0 {
+		diff := fuzzed.ContentSize - baseline.ContentSize
+		if diff < 0 {
+			diff = -diff
+		}
+		threshold := float64(baseline.ContentSize) * 0.10
+		if float64(diff) > threshold {
+			pct := float64(diff) / float64(baseline.ContentSize) * 100
+			anomalies = append(anomalies, Anomaly{
+				Type:     "size_change",
+				Detail:   fmt.Sprintf("size changed from %d to %d (%.0f%%)", baseline.ContentSize, fuzzed.ContentSize, pct),
+				Severity: "medium",
+			})
+		}
+	}
+
+	// レスポンス時間変化（5x 以上、ベースライン > 0.01s）
+	if baseline.ResponseTime > 0.01 && fuzzed.ResponseTime > baseline.ResponseTime*5 {
+		ratio := fuzzed.ResponseTime / baseline.ResponseTime
+		anomalies = append(anomalies, Anomaly{
+			Type:     "time_change",
+			Detail:   fmt.Sprintf("response time %.3fs vs baseline %.3fs (%.1fx slower)", fuzzed.ResponseTime, baseline.ResponseTime, ratio),
+			Severity: "medium",
+		})
+	}
+
+	return anomalies
+}

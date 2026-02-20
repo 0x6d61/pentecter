@@ -44,6 +44,14 @@ func (t ReconTaskType) String() string {
 	}
 }
 
+// Finding はバリューファジングで発見された脆弱性の疑い
+type Finding struct {
+	Param    string // パラメーター名 (e.g. "id")
+	Category string // ファジングカテゴリ (e.g. "sqli")
+	Evidence string // 証拠 (e.g. "500 + MySQL syntax error on single quote")
+	Severity string // 深刻度: "high", "medium", "low", "info"
+}
+
 // ReconNode はツリーの各ノード
 type ReconNode struct {
 	Host    string // "10.10.11.100" or "dev.example.com" (vhost)
@@ -57,6 +65,8 @@ type ReconNode struct {
 	ParamFuzz    ReconStatus
 	Profiling    ReconStatus
 	VhostDiscov  ReconStatus
+
+	Findings []Finding
 
 	Children []*ReconNode
 }
@@ -405,6 +415,25 @@ func statusIcon(s ReconStatus) string {
 	}
 }
 
+// AddFinding はエンドポイントノードに finding を追加する。
+// ノードが見つからない場合は何もしない。
+func (t *ReconTree) AddFinding(host string, port int, path string, finding Finding) {
+	node := t.findNode(host, port, path)
+	if node == nil {
+		return
+	}
+	node.Findings = append(node.Findings, finding)
+}
+
+// CountFindings は全ノードの finding 数を返す
+func (t *ReconTree) CountFindings() int {
+	count := 0
+	for _, node := range t.allNodes() {
+		count += len(node.Findings)
+	}
+	return count
+}
+
 // RenderTree は ASCII ツリーを返す（/recontree 用）
 func (t *ReconTree) RenderTree() string {
 	var sb strings.Builder
@@ -505,8 +534,23 @@ func renderEndpointNode(sb *strings.Builder, node *ReconNode, prefix, childPrefi
 		statusIcon(node.Profiling))
 	fmt.Fprintf(sb, "%s%s %s\n", prefix, node.Path, status)
 
-	for j, child := range node.Children {
-		isLast := j == len(node.Children)-1
+	// findings + children の合計で最終要素を判定
+	totalItems := len(node.Findings) + len(node.Children)
+	itemIdx := 0
+
+	for _, f := range node.Findings {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		fp := childPrefix + "|-- "
+		if isLast {
+			fp = childPrefix + "+-- "
+		}
+		fmt.Fprintf(sb, "%sfinding: param \"%s\" \u2014 %s (%s)\n", fp, f.Param, f.Category, f.Evidence)
+	}
+
+	for _, child := range node.Children {
+		itemIdx++
+		isLast := itemIdx == totalItems
 		cp := childPrefix + "|-- "
 		ccp := childPrefix + "|   "
 		if isLast {
