@@ -23,6 +23,7 @@ type TeamConfig struct {
 	SubBrain       brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
 	KnowledgeStore *knowledge.Store   // ナレッジベース検索（nil = 無効）
 	MaxParallelRecon int             // ReconTree の並列数（0 = デフォルト 2）
+	InitialScans     []string           // 自動実行する初期スキャンコマンド
 }
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
@@ -40,6 +41,7 @@ type Team struct {
 	subBrain         brain.Brain
 	knowledgeStore   *knowledge.Store
 	maxParallelRecon int
+	initialScans     []string
 	nextID           int
 	ctx         context.Context // Start() で保存
 	mu          sync.Mutex
@@ -57,6 +59,7 @@ func NewTeam(cfg TeamConfig) *Team {
 		subBrain:         cfg.SubBrain,
 		knowledgeStore:   cfg.KnowledgeStore,
 		maxParallelRecon: cfg.MaxParallelRecon,
+		initialScans:     cfg.InitialScans,
 	}
 	// TaskManager を作成（全 Loop で共有）
 	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain)
@@ -92,7 +95,8 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 		WithMCP(t.mcpMgr).
 		WithTaskManager(t.taskMgr).
 		WithKnowledge(t.knowledgeStore).
-		WithReconTree(reconTree)
+		WithReconTree(reconTree).
+		WithInitialScans(t.initialScans)
 
 	t.loops = append(t.loops, loop)
 

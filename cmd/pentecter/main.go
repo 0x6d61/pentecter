@@ -219,6 +219,7 @@ Chat commands:
 		MCPManager:       mcpMgr,
 		KnowledgeStore:   knowledgeStore,
 		MaxParallelRecon: appCfg.Recon.MaxParallel,
+		InitialScans:     appCfg.Recon.InitialScans,
 	})
 
 	// CLI ターゲットを事前追加

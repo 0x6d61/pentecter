@@ -52,6 +52,7 @@ type Loop struct {
 	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
 	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
 	reconTree      *ReconTree       // 構造的偵察制御（nil = 無効）
+	initialScans   []string           // 自動実行する初期スキャンコマンド
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -129,6 +130,12 @@ func (l *Loop) WithReconTree(rt *ReconTree) *Loop {
 	return l
 }
 
+// WithInitialScans は初期スキャンコマンドをセットする（メソッドチェーン用）。
+func (l *Loop) WithInitialScans(scans []string) *Loop {
+	l.initialScans = scans
+	return l
+}
+
 // SetBrain は実行中の Loop の Brain を差し替える（/model コマンド対応）。
 // TUI goroutine から呼ばれるため mutex で保護。
 func (l *Loop) SetBrain(br brain.Brain) {
@@ -142,6 +149,29 @@ func (l *Loop) Run(ctx context.Context) {
 	l.emit(Event{Type: EventLog, Source: SourceSystem,
 		Message: fmt.Sprintf("Agent started: %s", l.target.Host)})
 	l.target.SetStatusSafe(StatusScanning)
+
+	// Phase 0+1: ReconRunner による自動偵察
+	if l.reconTree != nil && len(l.initialScans) > 0 {
+		memDir := ""
+		if l.memoryStore != nil {
+			memDir = l.memoryStore.BaseDir()
+		}
+		rr := NewReconRunner(ReconRunnerConfig{
+			Tree:         l.reconTree,
+			TaskMgr:      l.taskMgr,
+			Events:       l.events,
+			InitialScans: l.initialScans,
+			TargetHost:   l.target.Host,
+			TargetID:     l.target.ID,
+			MemDir:       memDir,
+		})
+		// Phase 0: nmap 自動実行（ブロッキング）
+		rr.RunInitialScans(ctx)
+		// Phase 1: web recon SubAgent（非ブロッキング、メイン LLM と並列）
+		go rr.SpawnWebRecon(ctx)
+		// Target に ReconTree を反映
+		l.target.SetReconTree(l.reconTree)
+	}
 
 	for {
 		select {
