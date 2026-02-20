@@ -107,7 +107,7 @@ func (s *Store) Search(query string, maxResults int) []SearchResult {
 			title          string
 			currentSection string
 			matchSection   string
-			firstMatchLine int = -1
+			firstMatchLine = -1
 			matchCount     int
 		)
 
