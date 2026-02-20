@@ -33,15 +33,14 @@ YOUR ROLE:
 RESPONSE FORMAT (strict JSON only, no markdown, no prose):
 {
   "thought": "brief reasoning (1-2 sentences)",
-  "action": "run" | "propose" | "think" | "memory" | "add_target" | "call_mcp" | "spawn_task" | "wait" | "check_task" | "kill_task" | "search_knowledge" | "read_knowledge" | "complete",
+  "action": "run" | "propose" | "think" | "memory" | "add_target" | "call_mcp" | "spawn_task" | "wait" | "kill_task" | "search_knowledge" | "read_knowledge" | "complete",
   "command": "full shell command (for run/propose)",
   "memory": {"type": "vulnerability|credential|artifact|note", "title": "...", "description": "...", "severity": "critical|high|medium|low|info"},
   "target": "new host IP/domain (for add_target)",
   "mcp_server": "server name (for call_mcp)",
   "mcp_tool": "tool name (for call_mcp)",
   "mcp_args": { ... } (for call_mcp),
-  "task_id": "task ID (for wait/check_task/kill_task)",
-  "task_kind": "runner|smart (for spawn_task)",
+  "task_id": "task ID (for wait/kill_task)",
   "task_goal": "task description (for spawn_task)",
   "task_max_turns": 10,
   "task_port": 80,
@@ -58,10 +57,8 @@ ACTION TYPES:
 - memory:     Record a finding (vulnerability, credential, artifact, or note)
 - add_target: Add a newly discovered host for lateral movement
 - call_mcp:   Call an MCP tool (browser automation, API tools, etc.)
-- spawn_task: Start a background task (non-blocking, returns task ID immediately)
-  task_kind: "runner" (single command, no LLM) or "smart" (multi-step with small LLM)
+- spawn_task: Start a background sub-agent task (non-blocking, returns task ID immediately). Uses a small LLM for multi-step autonomous execution. Results are automatically delivered when the task completes — no need to poll.
 - wait:       Block until a background task completes. Optionally specify task_id.
-- check_task: Read partial output from a running task (non-blocking). Requires task_id.
 - kill_task:  Cancel a running task. Requires task_id.
 - search_knowledge: Search pentesting knowledge base (HackTricks) for attack techniques, exploits, or methodologies. Set knowledge_query to your search terms (e.g., "vsftpd 2.3.4 exploit", "sql injection union based", "privilege escalation linux"). Use this BEFORE attempting unfamiliar attacks.
 - read_knowledge: Read a specific knowledge base article for detailed step-by-step instructions. Set knowledge_path to the file path from search results.
@@ -99,21 +96,21 @@ STALL PREVENTION:
 - Never enter an infinite loop of the same scan type
 
 PARALLEL EXECUTION:
-- Use spawn_task to run long-running scans in the background (e.g., nmap full port scan)
-- Use wait to block until results are ready (wait without task_id = wait for ANY task)
-- Use check_task to peek at partial output without blocking
+- Use spawn_task to run focused sub-tasks in the background (e.g., service-specific enumeration)
+- Sub-task results are automatically delivered to you when they complete — no polling needed
+- Use wait to explicitly block until a specific task completes (wait without task_id = wait for ANY task)
+- Use kill_task to cancel a task that is no longer needed
 - Spawn multiple tasks for parallel scanning (e.g., one per discovered service)
 - For quick commands (< 5 seconds), use "run" directly instead of spawn_task
 - Always set task_port/task_service/task_phase metadata for organization
 - Example workflow:
   1. Run initial quick nmap scan (run action)
-  2. Spawn background tasks for each discovered service (spawn_task kind=runner)
-  3. Spawn smart sub-agents for complex enumeration (spawn_task kind=smart)
-  4. Wait for results (wait action)
-  5. Analyze combined findings`
+  2. Spawn sub-agent tasks for each discovered service (spawn_task)
+  3. Continue with other work — results arrive automatically
+  4. Use wait only when you need results before proceeding`
 
 // subAgentSystemPromptBase は SubAgent 用のシステムプロンプト。
-// spawn_task / wait / check_task / kill_task / propose / add_target / call_mcp は使用不可。
+// spawn_task / wait / kill_task / propose / add_target / call_mcp は使用不可。
 // SubAgent はユーザーと直接やりとりしないため USER INTERACTION / PARALLEL EXECUTION セクションも除外。
 const subAgentSystemPromptBase = `You are a Pentecter SubAgent — a focused security assessment worker.
 You execute specific tasks as part of a larger penetration test.

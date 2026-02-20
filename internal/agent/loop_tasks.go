@@ -5,10 +5,28 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
+
+// drainCompletedTasks は完了済みサブタスクの結果を取り出し、テキストとして返す。
+// Brain.Think() の直前に呼ばれ、結果が lastToolOutput に注入される。
+func (l *Loop) drainCompletedTasks() string {
+	if l.taskMgr == nil {
+		return ""
+	}
+	completed := l.taskMgr.DrainCompleted()
+	if len(completed) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, task := range completed {
+		fmt.Fprintf(&sb, "=== SubTask Completed: %s ===\n", task.ID)
+		sb.WriteString(l.buildTaskResult(task))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
 
 // handleSpawnTask は spawn_task アクションを処理する。
 func (l *Loop) handleSpawnTask(ctx context.Context, action *schema.Action) {
@@ -19,13 +37,8 @@ func (l *Loop) handleSpawnTask(ctx context.Context, action *schema.Action) {
 		return
 	}
 
-	kind := TaskKind(action.TaskKind)
-	if kind == "" {
-		kind = TaskKindRunner
-	}
-
 	req := SpawnTaskRequest{
-		Kind:       kind,
+		Kind:       TaskKindSmart,
 		Goal:       action.TaskGoal,
 		Command:    action.Command,
 		TargetHost: l.target.Host,
@@ -53,7 +66,7 @@ func (l *Loop) handleSpawnTask(ctx context.Context, action *schema.Action) {
 		Message: req.Goal,
 	})
 
-	msg := fmt.Sprintf("Task spawned: %s (kind=%s, goal=%s)", taskID, req.Kind, req.Goal)
+	msg := fmt.Sprintf("Task spawned: %s (goal=%s)", taskID, req.Goal)
 	l.emit(Event{Type: EventLog, Source: SourceSystem, Message: msg})
 	l.lastToolOutput = msg
 }
@@ -93,63 +106,6 @@ func (l *Loop) handleWait(ctx context.Context, action *schema.Action) {
 	if msg := l.drainUserMsg(); msg != "" {
 		l.pendingUserMsg = msg
 	}
-}
-
-// checkTaskCooldown は新しい出力がないときの check_task クールダウン時間。
-// 自律ループが高速ポーリングするのを防ぐ。
-const checkTaskCooldown = 10 * time.Second
-
-// handleCheckTask は check_task アクションを処理する。タスクの部分出力を取得する。
-// 新しい出力がなくタスクがまだ実行中の場合、クールダウン（10秒）を入れてから返す。
-func (l *Loop) handleCheckTask(ctx context.Context, action *schema.Action) {
-	if l.taskMgr == nil {
-		l.lastToolOutput = "Error: TaskManager not configured"
-		return
-	}
-
-	task, ok := l.taskMgr.GetTask(action.TaskID)
-	if !ok {
-		l.lastToolOutput = fmt.Sprintf("Error: task %s not found", action.TaskID)
-		return
-	}
-
-	// 新しい出力を取得してカーソルを進める
-	newLines := task.ReadNewOutput()
-	task.AdvanceReadCursor()
-
-	// 新しい出力がなくまだ実行中 → クールダウンしてから再取得
-	if len(newLines) == 0 && task.Status == TaskStatusRunning {
-		cooldown := l.CheckTaskCooldown
-		if cooldown == 0 {
-			cooldown = checkTaskCooldown
-		}
-		l.emit(Event{Type: EventLog, Source: SourceSystem,
-			Message: fmt.Sprintf("Task %s still running, waiting %s for new output...", action.TaskID, cooldown)})
-		select {
-		case <-time.After(cooldown):
-		case <-ctx.Done():
-			l.lastToolOutput = "Error: check_task cancelled"
-			return
-		}
-		// クールダウン後に再取得
-		newLines = task.ReadNewOutput()
-		task.AdvanceReadCursor()
-	}
-
-	var sb strings.Builder
-	sb.WriteString(task.Summary())
-	sb.WriteString("\n")
-	if len(newLines) > 0 {
-		sb.WriteString("--- new output ---\n")
-		for _, line := range newLines {
-			sb.WriteString(line)
-			sb.WriteString("\n")
-		}
-	} else {
-		sb.WriteString("(no new output)\n")
-	}
-
-	l.lastToolOutput = sb.String()
 }
 
 // handleKillTask は kill_task アクションを処理する。

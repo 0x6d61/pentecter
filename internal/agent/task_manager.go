@@ -65,39 +65,21 @@ func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (str
 	tm.tasks[id] = task
 	tm.mu.Unlock()
 
-	switch req.Kind {
-	case TaskKindRunner:
-		tr := NewTaskRunner(tm.runner, tm.mcpMgr, tm.events)
-		go func() {
-			tr.Run(taskCtx, task)
-			select {
-			case tm.doneCh <- id:
-			default:
-			}
-		}()
-	case TaskKindSmart:
-		if tm.subBrain == nil {
-			task.Status = TaskStatusFailed
-			task.Error = "sub-brain is not configured"
-			task.Complete()
-			cancel()
-			return id, fmt.Errorf("sub-brain is not configured for smart tasks")
-		}
-		sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events)
-		go func() {
-			sa.Run(taskCtx, task, req.TargetHost)
-			select {
-			case tm.doneCh <- id:
-			default:
-			}
-		}()
-	default:
+	if tm.subBrain == nil {
 		task.Status = TaskStatusFailed
-		task.Error = fmt.Sprintf("unknown task kind: %s", req.Kind)
+		task.Error = "sub-brain is not configured"
 		task.Complete()
 		cancel()
-		return id, fmt.Errorf("unknown task kind: %s", req.Kind)
+		return id, fmt.Errorf("sub-brain is not configured for smart tasks")
 	}
+	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events)
+	go func() {
+		sa.Run(taskCtx, task, req.TargetHost)
+		select {
+		case tm.doneCh <- id:
+		default:
+		}
+	}()
 
 	return id, nil
 }
@@ -115,6 +97,11 @@ func (tm *TaskManager) InjectTask(id string, task *SubTask) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.tasks[id] = task
+}
+
+// InjectDone はテスト用に完了通知を doneCh に送信する。
+func (tm *TaskManager) InjectDone(id string) {
+	tm.doneCh <- id
 }
 
 // WaitAny は完了したサブタスクの ID を1つ返す。
@@ -186,6 +173,24 @@ func (tm *TaskManager) AllTasks(targetID int) []*SubTask {
 		}
 	}
 	return all
+}
+
+// DrainCompleted は完了済みタスクを非ブロッキングですべて取り出して返す。
+// 取り出されたタスクは次回の DrainCompleted では返されない。
+func (tm *TaskManager) DrainCompleted() []*SubTask {
+	var completed []*SubTask
+	for {
+		select {
+		case id := <-tm.doneCh:
+			tm.mu.RLock()
+			if task, ok := tm.tasks[id]; ok {
+				completed = append(completed, task)
+			}
+			tm.mu.RUnlock()
+		default:
+			return completed
+		}
+	}
 }
 
 // DoneCh は完了通知チャネルを返す（外部の select 用）。

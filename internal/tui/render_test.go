@@ -95,8 +95,7 @@ func TestRenderCommandBlock_ExpandedShowsAll(t *testing.T) {
 
 	// All lines should be visible
 	for i := 1; i <= 10; i++ {
-		expected := "line" + strings.Repeat("", 0) // force string concat
-		expected = "line" + string(rune('0'+i))
+		expected := "line" + string(rune('0'+i))
 		if i == 10 {
 			expected = "line10"
 		}

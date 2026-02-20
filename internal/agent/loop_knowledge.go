@@ -39,19 +39,19 @@ func (l *Loop) handleSearchKnowledge(action *schema.Action) {
 
 	// 結果をテキストフォーマットで組み立て
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d results for %q:\n\n", len(results), query))
+	fmt.Fprintf(&sb, "Found %d results for %q:\n\n", len(results), query)
 	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, r.File))
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, r.File)
 		if r.Title != "" {
-			sb.WriteString(fmt.Sprintf("    Title: %s\n", r.Title))
+			fmt.Fprintf(&sb, "    Title: %s\n", r.Title)
 		}
 		if r.Section != "" {
-			sb.WriteString(fmt.Sprintf("    Section: %s\n", r.Section))
+			fmt.Fprintf(&sb, "    Section: %s\n", r.Section)
 		}
 		if r.Snippet != "" {
-			sb.WriteString(fmt.Sprintf("    Snippet: %s\n", r.Snippet))
+			fmt.Fprintf(&sb, "    Snippet: %s\n", r.Snippet)
 		}
-		sb.WriteString(fmt.Sprintf("    Matches: %d\n\n", r.MatchCount))
+		fmt.Fprintf(&sb, "    Matches: %d\n\n", r.MatchCount)
 	}
 	sb.WriteString("Use read_knowledge with the file path to read full article.")
 	l.lastToolOutput = sb.String()

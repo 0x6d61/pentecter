@@ -751,6 +751,7 @@ func TestLoop_Run_CallMCP_NoManager(t *testing.T) {
 // --- SubTask integration tests ---
 
 // newTestLoopWithTaskManager はテスト用の Loop + TaskManager を構築する。
+// すべてのサブタスクが Smart になったため、デフォルトの mockBrain を TaskManager に渡す。
 func newTestLoopWithTaskManager(target *agent.Target, mb *mockBrain) (*agent.Loop, *agent.TaskManager, chan agent.Event, chan bool, chan string) {
 	falseVal := false
 	reg := tools.NewRegistry()
@@ -770,7 +771,14 @@ func newTestLoopWithTaskManager(target *agent.Target, mb *mockBrain) (*agent.Loo
 	approve := make(chan bool, 1)
 	userMsg := make(chan string, 1)
 
-	taskMgr := agent.NewTaskManager(runner, nil, events, nil)
+	// Smart サブタスク用のデフォルト mockBrain
+	subBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo subtask-output"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+	taskMgr := agent.NewTaskManager(runner, nil, events, subBrain)
 
 	loop := agent.NewLoop(target, mb, runner, events, approve, userMsg).
 		WithTaskManager(taskMgr)
@@ -783,7 +791,7 @@ func TestLoop_Run_SpawnTask_Wait(t *testing.T) {
 		actions: []*schema.Action{
 			// 1st: spawn_task
 			{Thought: "spawning bg task", Action: schema.ActionSpawnTask,
-				TaskKind: "runner", Command: "echo spawn-test", TaskGoal: "test spawn"},
+				Command: "echo spawn-test", TaskGoal: "test spawn"},
 			// 2nd: wait (no task_id = wait any)
 			{Thought: "waiting for task", Action: schema.ActionWait},
 			// 3rd: complete (default from mockBrain)
@@ -824,102 +832,13 @@ func TestLoop_Run_SpawnTask_Wait(t *testing.T) {
 	}
 }
 
-func TestLoop_Run_CheckTask(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.1")
-	mb := &mockBrain{
-		actions: []*schema.Action{
-			// 1st: spawn_task
-			{Thought: "spawning bg task", Action: schema.ActionSpawnTask,
-				TaskKind: "runner", Command: "echo check-output", TaskGoal: "test check"},
-			// 2nd: check_task (task-1)
-			{Thought: "checking task", Action: schema.ActionCheckTask, TaskID: "task-1"},
-			// 3rd: complete (default from mockBrain)
-		},
-	}
-
-	loop, _, events, _, _ := newTestLoopWithTaskManager(target, mb)
-	loop.CheckTaskCooldown = 100 * time.Millisecond // テスト用に短縮
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	go loop.Run(ctx)
-
-	deadline := time.After(8 * time.Second)
-	for {
-		select {
-		case e := <-events:
-			if e.Type == agent.EventComplete {
-				// Verify 3rd Think() call receives partial output info in ToolOutput
-				if len(mb.inputs) < 3 {
-					t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
-				}
-				toolOutput := mb.inputs[2].ToolOutput
-				if !strings.Contains(toolOutput, "task-1") {
-					t.Errorf("3rd Think() ToolOutput should reference task-1, got: %s", toolOutput)
-				}
-				return
-			}
-		case <-deadline:
-			t.Fatal("timeout waiting for EventComplete")
-		}
-	}
-}
-
-// TestCheckTaskCooldown_Unit はクールダウンロジックの単体テスト。
-// TaskManager に直接 running タスクを用意して handleCheckTask の動作を確認する。
-// Loop.Run() を使わず、handleCheckTask を間接的にテストする。
-func TestCheckTaskCooldown_Unit(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.1")
-	// mock brain: check_task → complete
-	mb := &mockBrain{
-		actions: []*schema.Action{
-			{Thought: "check", Action: schema.ActionCheckTask, TaskID: "task-1"},
-			// next: complete (default)
-		},
-	}
-
-	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
-	loop.CheckTaskCooldown = 100 * time.Millisecond
-
-	// TaskManager に running 状態のタスクを手動で注入
-	taskMgr.InjectTask("task-1", &agent.SubTask{
-		ID:     "task-1",
-		Kind:   agent.TaskKindRunner,
-		Goal:   "long scan",
-		Status: agent.TaskStatusRunning,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	start := time.Now()
-	go loop.Run(ctx)
-
-	deadline := time.After(4 * time.Second)
-	for {
-		select {
-		case e := <-events:
-			if e.Type == agent.EventComplete {
-				elapsed := time.Since(start)
-				// クールダウン (100ms) が発動しているはず
-				if elapsed < 80*time.Millisecond {
-					t.Errorf("expected cooldown delay (~100ms), got %v", elapsed)
-				}
-				return
-			}
-		case <-deadline:
-			t.Fatal("timeout waiting for EventComplete")
-		}
-	}
-}
-
 func TestLoop_Run_KillTask(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			// 1st: spawn_task with a long-running command
 			{Thought: "spawning long task", Action: schema.ActionSpawnTask,
-				TaskKind: "runner", Command: "sleep 30", TaskGoal: "long task"},
+				Command: "sleep 30", TaskGoal: "long task"},
 			// 2nd: kill_task (task-1)
 			{Thought: "killing task", Action: schema.ActionKillTask, TaskID: "task-1"},
 			// 3rd: complete (default from mockBrain)
@@ -1019,13 +938,69 @@ func TestLoop_Complete_WaitsForUserMsg(t *testing.T) {
 	}
 }
 
+func TestLoop_Run_SpawnTask_CompletionPush(t *testing.T) {
+	// 完了済みサブタスクの結果が drainCompletedTasks() で自動的に ToolOutput に注入されること
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// 1st: think (この前に doneCh に完了タスクを注入済み → drainCompletedTasks で取得)
+			{Thought: "analyzing results", Action: schema.ActionThink},
+			// 2nd: complete (default from mockBrain)
+		},
+	}
+
+	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	// 事前に完了済みサブタスクを TaskManager に注入
+	completedTask := agent.NewSubTask("task-push-1", agent.TaskKindSmart, "test completion push")
+	completedTask.Status = agent.TaskStatusCompleted
+	completedTask.AppendOutput("push-test-output line 1")
+	completedTask.AppendOutput("push-test-output line 2")
+	completedTask.Complete()
+
+	taskMgr.InjectTask("task-push-1", completedTask)
+	// doneCh に完了を通知（Loop が DrainCompleted で取得できるようにする）
+	taskMgr.InjectDone("task-push-1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// completion push が Think() の ToolOutput に含まれること
+				found := false
+				for _, inp := range mb.inputs {
+					if strings.Contains(inp.ToolOutput, "SubTask Completed: task-push-1") {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected completion push in ToolOutput, inputs:\n")
+					for i, inp := range mb.inputs {
+						t.Errorf("  [%d] ToolOutput: %s", i, inp.ToolOutput)
+					}
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
 func TestLoop_Run_SpawnTask_NoManager(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			// spawn_task action without TaskManager configured
 			{Thought: "try spawning", Action: schema.ActionSpawnTask,
-				TaskKind: "runner", Command: "echo test", TaskGoal: "test no manager"},
+				Command: "echo test", TaskGoal: "test no manager"},
 			// complete (default from mockBrain)
 		},
 	}
@@ -1365,7 +1340,7 @@ func TestLoop_Emit_SubTaskStart(t *testing.T) {
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{Thought: "spawn subtask", Action: schema.ActionSpawnTask,
-				TaskKind: "runner", Command: "echo subtask-start-test", TaskGoal: "test subtask start"},
+				Command: "echo subtask-start-test", TaskGoal: "test subtask start"},
 			{Thought: "waiting", Action: schema.ActionWait},
 		},
 	}

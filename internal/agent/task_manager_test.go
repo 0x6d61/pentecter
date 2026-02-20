@@ -10,19 +10,28 @@ import (
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
 
-func TestTaskManager_SpawnTask_Runner(t *testing.T) {
-	runner := newTestRunner()
+func TestTaskManager_SpawnTask_Smart_Basic(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo hello-manager"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	taskID, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:    agent.TaskKindRunner,
-		Goal:    "echo test",
-		Command: "echo hello-manager",
+		Kind:       agent.TaskKindSmart,
+		Goal:       "echo test",
+		Command:    "echo hello-manager",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
 	})
 	if err != nil {
 		t.Fatalf("SpawnTask: %v", err)
@@ -48,18 +57,27 @@ func TestTaskManager_SpawnTask_Runner(t *testing.T) {
 }
 
 func TestTaskManager_WaitTask(t *testing.T) {
-	runner := newTestRunner()
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo wait-test"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	taskID, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:    agent.TaskKindRunner,
-		Goal:    "wait test",
-		Command: "echo wait-test",
+		Kind:       agent.TaskKindSmart,
+		Goal:       "wait test",
+		Command:    "echo wait-test",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
 	})
 	if err != nil {
 		t.Fatalf("SpawnTask: %v", err)
@@ -77,18 +95,27 @@ func TestTaskManager_WaitTask(t *testing.T) {
 }
 
 func TestTaskManager_GetTask(t *testing.T) {
-	runner := newTestRunner()
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo get-test"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	taskID, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:    agent.TaskKindRunner,
-		Goal:    "get test",
-		Command: "echo get-test",
+		Kind:       agent.TaskKindSmart,
+		Goal:       "get test",
+		Command:    "echo get-test",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
 	})
 	if err != nil {
 		t.Fatalf("SpawnTask: %v", err)
@@ -113,20 +140,27 @@ func TestTaskManager_GetTask(t *testing.T) {
 }
 
 func TestTaskManager_KillTask(t *testing.T) {
-	runner := newTestRunner()
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo killed"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Spawn a slow task — use a pre-cancelled context approach
-	// We spawn with a valid context, then kill it
 	taskID, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:    agent.TaskKindRunner,
-		Goal:    "kill test",
-		Command: "echo killed",
+		Kind:       agent.TaskKindSmart,
+		Goal:       "kill test",
+		Command:    "echo killed",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
 	})
 	if err != nil {
 		t.Fatalf("SpawnTask: %v", err)
@@ -149,34 +183,47 @@ func TestTaskManager_KillTask(t *testing.T) {
 }
 
 func TestTaskManager_ActiveTasks(t *testing.T) {
-	runner := newTestRunner()
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo task-output"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Spawn 2 tasks for target 1
 	id1, _ := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:     agent.TaskKindRunner,
-		Goal:     "task 1",
-		Command:  "echo task1",
-		TargetID: 1,
+		Kind:       agent.TaskKindSmart,
+		Goal:       "task 1",
+		Command:    "echo task1",
+		TargetHost: "10.0.0.5",
+		TargetID:   1,
+		MaxTurns:   10,
 	})
 	id2, _ := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:     agent.TaskKindRunner,
-		Goal:     "task 2",
-		Command:  "echo task2",
-		TargetID: 1,
+		Kind:       agent.TaskKindSmart,
+		Goal:       "task 2",
+		Command:    "echo task2",
+		TargetHost: "10.0.0.5",
+		TargetID:   1,
+		MaxTurns:   10,
 	})
 
 	// Spawn 1 task for target 2
 	_, _ = tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:     agent.TaskKindRunner,
-		Goal:     "task 3",
-		Command:  "echo task3",
-		TargetID: 2,
+		Kind:       agent.TaskKindSmart,
+		Goal:       "task 3",
+		Command:    "echo task3",
+		TargetHost: "10.0.0.5",
+		TargetID:   2,
+		MaxTurns:   10,
 	})
 
 	// Wait for all tasks to complete
@@ -197,23 +244,34 @@ func TestTaskManager_ActiveTasks(t *testing.T) {
 }
 
 func TestTaskManager_WaitAny_MultipleCompleted(t *testing.T) {
-	runner := newTestRunner()
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "executing", Action: schema.ActionRun, Command: "echo multi-output"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	id1, _ := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:    agent.TaskKindRunner,
-		Goal:    "multi 1",
-		Command: "echo multi1",
+		Kind:       agent.TaskKindSmart,
+		Goal:       "multi 1",
+		Command:    "echo multi1",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
 	})
 	id2, _ := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
-		Kind:    agent.TaskKindRunner,
-		Goal:    "multi 2",
-		Command: "echo multi2",
+		Kind:       agent.TaskKindSmart,
+		Goal:       "multi 2",
+		Command:    "echo multi2",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
 	})
 
 	// Collect both completed IDs via WaitAny
@@ -233,7 +291,7 @@ func TestTaskManager_WaitAny_MultipleCompleted(t *testing.T) {
 }
 
 func TestTaskManager_SpawnTask_Smart(t *testing.T) {
-	// mockBrain: run "echo smart-task" → complete
+	// mockBrain: run "echo smart-task" -> complete
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{
@@ -288,6 +346,71 @@ func TestTaskManager_SpawnTask_Smart(t *testing.T) {
 	output := task.FullOutput()
 	if !strings.Contains(output, "smart-task") {
 		t.Errorf("FullOutput should contain 'smart-task', got: %q", output)
+	}
+}
+
+func TestTaskManager_DrainCompleted(t *testing.T) {
+	// SmartSubAgent タスクを spawn -> 完了 -> DrainCompleted() で取得 -> 2回目は空
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "running", Action: schema.ActionRun, Command: "echo drain-test"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	tm := agent.NewTaskManager(runner, nil, events, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	taskID, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
+		Kind:       agent.TaskKindSmart,
+		Goal:       "test drain",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
+	})
+	if err != nil {
+		t.Fatalf("SpawnTask: %v", err)
+	}
+
+	// タスク完了を待つ
+	done := tm.WaitTask(ctx, taskID)
+	if !done {
+		t.Fatal("WaitTask should return true")
+	}
+
+	// WaitTask は task.Done() で待つため、goroutine が doneCh に送信するまで少し待つ
+	time.Sleep(100 * time.Millisecond)
+
+	// DrainCompleted で取得できること
+	completed := tm.DrainCompleted()
+	if len(completed) != 1 {
+		t.Fatalf("DrainCompleted: got %d, want 1", len(completed))
+	}
+	if completed[0].ID != taskID {
+		t.Errorf("DrainCompleted[0].ID: got %q, want %q", completed[0].ID, taskID)
+	}
+
+	// 2回目は空であること
+	completed2 := tm.DrainCompleted()
+	if len(completed2) != 0 {
+		t.Errorf("DrainCompleted (2nd call): got %d, want 0", len(completed2))
+	}
+}
+
+func TestTaskManager_DrainCompleted_Empty(t *testing.T) {
+	// タスクなしで DrainCompleted() -> nil
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	tm := agent.NewTaskManager(runner, nil, events, nil)
+
+	completed := tm.DrainCompleted()
+	if completed != nil {
+		t.Errorf("DrainCompleted (no tasks): got %v, want nil", completed)
 	}
 }
 

@@ -513,7 +513,7 @@ func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
 	// 新しいアクションタイプがプロンプトに含まれることを確認
-	for _, keyword := range []string{"spawn_task", "wait", "check_task", "kill_task"} {
+	for _, keyword := range []string{"spawn_task", "wait", "kill_task"} {
 		if !strings.Contains(prompt, keyword) {
 			t.Errorf("expected system prompt to contain %q", keyword)
 		}
@@ -523,11 +523,6 @@ func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
 	if !strings.Contains(prompt, "PARALLEL EXECUTION") {
 		t.Error("expected system prompt to contain PARALLEL EXECUTION section")
 	}
-
-	// task_kind が含まれることを確認
-	if !strings.Contains(prompt, "task_kind") {
-		t.Error("expected system prompt to contain task_kind")
-	}
 }
 
 // --- SubAgent プロンプト テスト ---
@@ -535,8 +530,8 @@ func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
 func TestBuildSystemPrompt_SubAgent_ExcludesSpawnTask(t *testing.T) {
 	prompt := buildSystemPrompt([]string{"nmap", "nikto"}, nil, true)
 
-	// SubAgent プロンプトに spawn_task / wait / check_task / kill_task が含まれないこと
-	for _, keyword := range []string{"spawn_task", "wait", "check_task", "kill_task"} {
+	// SubAgent プロンプトに spawn_task / wait / kill_task が含まれないこと
+	for _, keyword := range []string{"spawn_task", "wait", "kill_task"} {
 		if strings.Contains(prompt, keyword) {
 			t.Errorf("SubAgent prompt should NOT contain %q", keyword)
 		}
@@ -637,16 +632,13 @@ func TestBuildSystemPrompt_SubAgent_IgnoresMCPTools(t *testing.T) {
 }
 
 func TestParseActionJSON_SpawnTask(t *testing.T) {
-	raw := `{"thought":"spawn scan","action":"spawn_task","task_kind":"runner","task_goal":"full scan","command":"nmap -sV -p- 10.0.0.5","task_port":0,"task_phase":"recon"}`
+	raw := `{"thought":"spawn scan","action":"spawn_task","task_goal":"full scan","command":"nmap -sV -p- 10.0.0.5","task_port":0,"task_phase":"recon"}`
 	action, err := parseActionJSON(raw)
 	if err != nil {
 		t.Fatalf("parseActionJSON (spawn_task): %v", err)
 	}
 	if action.Action != schema.ActionSpawnTask {
 		t.Errorf("Action: got %q, want %q", action.Action, schema.ActionSpawnTask)
-	}
-	if action.TaskKind != "runner" {
-		t.Errorf("TaskKind: got %q, want %q", action.TaskKind, "runner")
 	}
 	if action.TaskGoal != "full scan" {
 		t.Errorf("TaskGoal: got %q, want %q", action.TaskGoal, "full scan")
