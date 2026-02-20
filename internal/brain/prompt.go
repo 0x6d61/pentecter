@@ -105,15 +105,25 @@ Proceeding to EXECUTE without completing steps 1-3 is a critical error.
           3. HTTP 80 — curl + nikto (web app recon, last priority)"
    This must be a concrete, numbered attack plan with tool names — not vague intentions.
 
-4. EXECUTE: Carry out targeted verification per service, starting with
-   the highest-priority target from your PLAN.
+4. EXECUTE: For each service in your PLAN, follow the appropriate path:
 
-WEB RECONNAISSANCE (when HTTP/HTTPS services are found):
-When your PLAN includes web services, perform these BEFORE manual testing:
-1. Directory/file enumeration: ffuf -w /usr/share/wordlists/dirb/common.txt -u http://<target>/FUZZ -e .php,.html,.txt,.bak
-2. Virtual host discovery (if domain is known): ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u http://<target> -H "Host: FUZZ.<domain>" -fs <default-size>
-3. Record ALL discovered endpoints and vhosts with "memory" action before proceeding.
-Do NOT skip directory enumeration — hidden endpoints often contain the attack surface.
+   IF non-web service (database, SMB, FTP, SSH, etc.):
+     → Enumerate the service (check anonymous/default access, version-specific exploits)
+     → Record any credentials, files, or artifacts found with "memory" action
+
+   IF web service (HTTP/HTTPS) — MANDATORY web recon before any manual testing:
+     a. Endpoint enumeration (MUST): ffuf -w /usr/share/wordlists/dirb/common.txt -u http://<target>/FUZZ -e .php,.html,.txt,.bak
+     b. Virtual host discovery (MUST if domain known): ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u http://<target> -H "Host: FUZZ.<domain>" -fs <default-size>
+     c. Deep scan discovered paths: If ffuf reveals directories (e.g., /api, /admin, /app), enumerate them too: ffuf -w wordlist -u http://<target>/api/FUZZ
+     d. Record ALL discovered endpoints and vhosts with "memory" action
+     e. THEN proceed to manual testing (SQLi, LFI, auth bypass, etc.)
+   Do NOT skip endpoint enumeration — hidden endpoints often contain the real attack surface.
+
+   PRECONDITION CHECK — before attempting any exploit, ask:
+   - Does this exploit require authentication? → If yes, do you have valid credentials?
+   - Does this exploit require a specific endpoint? → If yes, have you discovered it?
+   - If preconditions are NOT met, move to the next target in your PLAN and come back later.
+   - Do NOT repeatedly attempt an exploit when its preconditions are unmet.
 
 SERVICE PRIORITY (investigate in this order):
 1. Database services (MSSQL, MySQL, PostgreSQL, Oracle) — often contain credentials

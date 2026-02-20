@@ -544,12 +544,31 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
 func TestBuildSystemPrompt_ContainsWebReconnaissance(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
-	if !strings.Contains(prompt, "WEB RECONNAISSANCE") {
-		t.Error("expected WEB RECONNAISSANCE section in main agent prompt")
+	// EXECUTE ステップ内に Web 偵察が含まれること
+	if !strings.Contains(prompt, "Endpoint enumeration (MUST)") {
+		t.Error("EXECUTE step should contain mandatory endpoint enumeration")
 	}
-	// ffuf によるディレクトリ列挙と vhost スキャンが含まれること
+	if !strings.Contains(prompt, "Virtual host discovery (MUST") {
+		t.Error("EXECUTE step should contain mandatory vhost discovery")
+	}
+	// ffuf が参照されていること
 	if !strings.Contains(prompt, "ffuf") {
-		t.Error("WEB RECONNAISSANCE should reference ffuf for directory/vhost scanning")
+		t.Error("EXECUTE step should reference ffuf for directory/vhost scanning")
+	}
+	// 発見したディレクトリの深掘りが指示されていること
+	if !strings.Contains(prompt, "Deep scan discovered paths") {
+		t.Error("EXECUTE step should instruct deep scanning of discovered directories")
+	}
+}
+
+func TestBuildSystemPrompt_ContainsPreconditionCheck(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	if !strings.Contains(prompt, "PRECONDITION CHECK") {
+		t.Error("EXECUTE step should contain PRECONDITION CHECK")
+	}
+	if !strings.Contains(prompt, "require authentication") {
+		t.Error("PRECONDITION CHECK should warn about auth-required exploits")
 	}
 }
 
