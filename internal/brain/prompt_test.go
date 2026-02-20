@@ -541,6 +541,18 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_ContainsWebReconnaissance(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	if !strings.Contains(prompt, "WEB RECONNAISSANCE") {
+		t.Error("expected WEB RECONNAISSANCE section in main agent prompt")
+	}
+	// ffuf によるディレクトリ列挙と vhost スキャンが含まれること
+	if !strings.Contains(prompt, "ffuf") {
+		t.Error("WEB RECONNAISSANCE should reference ffuf for directory/vhost scanning")
+	}
+}
+
 func TestBuildSystemPrompt_ContainsServicePriority(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
