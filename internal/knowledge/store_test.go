@@ -89,6 +89,42 @@ Use PORT command to scan internal networks.
 		t.Fatal(err)
 	}
 
+	// network-services-pentesting/mssql.md — keywords on DIFFERENT lines
+	mssqlContent := `# 1433 - Pentesting MSSQL - Microsoft SQL Server
+
+## Enumeration
+
+Nmap scripts for MSSQL enumeration:
+
+nmap --script ms-sql-info -p 1433 target
+
+## Tools
+
+### Impacket
+
+impacket-mssqlclient can be used to connect to MSSQL:
+
+impacket-mssqlclient user:pass@target
+
+### sqsh
+
+sqsh -S target -U sa -P password
+
+## Default Credentials
+
+Common default credentials for MSSQL:
+- sa / (empty)
+- sa / sa
+- sa / password
+
+## Post Exploitation
+
+xp_cmdshell can be used for command execution on the server.
+`
+	if err := os.WriteFile(filepath.Join(netDir, "mssql.md"), []byte(mssqlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	return base
 }
 
@@ -369,9 +405,9 @@ func TestListCategories_FileCount(t *testing.T) {
 			}
 		}
 		if c.Name == "network-services-pentesting" {
-			// network-services-pentesting には ftp.md の 1 ファイル
-			if c.FileCount != 1 {
-				t.Errorf("Expected FileCount=1 for network-services-pentesting, got %d", c.FileCount)
+			// network-services-pentesting には ftp.md と mssql.md の 2 ファイル
+			if c.FileCount != 2 {
+				t.Errorf("Expected FileCount=2 for network-services-pentesting, got %d", c.FileCount)
 			}
 		}
 	}
@@ -387,5 +423,55 @@ func TestListCategories_Path(t *testing.T) {
 		if c.Path != c.Name {
 			t.Errorf("Expected Path=%q to equal Name=%q for top-level category", c.Path, c.Name)
 		}
+	}
+}
+
+// --- Keywords Across Lines テスト ---
+
+func TestSearch_KeywordsAcrossLines(t *testing.T) {
+	// Keywords that appear on DIFFERENT lines in the same file should match.
+	// This is the critical fix — previously required all keywords on the SAME line.
+	base := setupTestData(t)
+	store := knowledge.NewStore(base)
+
+	results := store.Search("mssql pentesting impacket", 10)
+	if len(results) == 0 {
+		t.Fatal("Search for 'mssql pentesting impacket' should return results (keywords on different lines)")
+	}
+
+	found := false
+	for _, r := range results {
+		if strings.Contains(r.File, "mssql") {
+			found = true
+			if r.Title == "" {
+				t.Error("Title should not be empty for mssql result")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected mssql.md in results when keywords span different lines")
+	}
+}
+
+func TestSearch_KeywordsAcrossLines_DefaultCredentials(t *testing.T) {
+	// "mssql default credentials" — words on different lines
+	base := setupTestData(t)
+	store := knowledge.NewStore(base)
+
+	results := store.Search("mssql default credentials", 10)
+	if len(results) == 0 {
+		t.Fatal("Search for 'mssql default credentials' should return results")
+	}
+
+	found := false
+	for _, r := range results {
+		if strings.Contains(r.File, "mssql") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected mssql.md in results for 'mssql default credentials'")
 	}
 }
