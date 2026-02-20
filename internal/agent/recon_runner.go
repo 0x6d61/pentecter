@@ -177,6 +177,12 @@ func buildWebReconPrompt(host string, port int) string {
 		url = fmt.Sprintf("%s://%s:%d", scheme, host, port)
 	}
 
+	// Phase 2: カテゴリリストを動的に構築
+	var catList strings.Builder
+	for _, cat := range MinFuzzCategories {
+		fmt.Fprintf(&catList, "     - %s: %s\n", cat.Name, cat.Description)
+	}
+
 	return fmt.Sprintf(`You are a web reconnaissance agent for %s (port %d).
 Execute these tasks in order using "run" action:
 
@@ -202,10 +208,34 @@ Execute these tasks in order using "run" action:
    GET: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "%s/<endpoint>?FUZZ=value" -of json -fs <default-size>
    POST: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u %s/<endpoint> -X POST -d "FUZZ=value" -of json -fs <default-size>
 
+5. PARAMETER VALUE FUZZING (MANDATORY):
+   After discovering parameters in step 4, you MUST test EACH parameter with value fuzzing.
+
+   For each discovered parameter:
+   a. Send baseline: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=normalvalue"
+   b. Record baseline: status_code, content_length, response_time
+
+   MANDATORY categories to test (ALL required):
+%s
+   For each category:
+   1. Choose 2-5 payloads appropriate for the parameter name context
+   2. Send: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=PAYLOAD"
+   3. Compare against baseline:
+      - Status code changed → flag
+      - Content-length differs by >10%% → flag
+      - Response time >5x baseline → flag (time-based injection)
+      - Response body contains error messages, different data, or template output → flag
+   4. Report EACH anomaly with "memory" action:
+      severity: high/medium/low, title: "param X — category (evidence)"
+
+   Additionally, add context-specific payloads based on the parameter name.
+   Example: "file" parameter → test OS path payloads, "id" → test more numeric sequences
+
 IMPORTANT RULES:
 - ffuf MUST use -of json flag for structured output
 - Continue recursive enumeration until ZERO new results
 - Do NOT skip any endpoint or task
+- ALL fuzz categories in step 5 are MANDATORY — do NOT skip any category
 - Report all findings with "memory" action when complete
-`, host, port, url, url, url, url, host, url, url, url)
+`, host, port, url, url, url, url, host, url, url, url, url, catList.String(), url)
 }
