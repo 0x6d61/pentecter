@@ -22,6 +22,7 @@ type TeamConfig struct {
 	MCPManager  *mcp.MCPManager    // nil = MCP 無効
 	SubBrain       brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
 	KnowledgeStore *knowledge.Store   // ナレッジベース検索（nil = 無効）
+	MaxParallelRecon int             // ReconTree の並列数（0 = デフォルト 2）
 }
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
@@ -36,9 +37,10 @@ type Team struct {
 	memoryStore *memory.Store
 	mcpMgr      *mcp.MCPManager
 	taskMgr        *TaskManager     // 全 Loop で共有
-	subBrain       brain.Brain
-	knowledgeStore *knowledge.Store
-	nextID      int
+	subBrain         brain.Brain
+	knowledgeStore   *knowledge.Store
+	maxParallelRecon int
+	nextID           int
 	ctx         context.Context // Start() で保存
 	mu          sync.Mutex
 }
@@ -52,8 +54,9 @@ func NewTeam(cfg TeamConfig) *Team {
 		skillsReg:   cfg.SkillsReg,
 		memoryStore: cfg.MemoryStore,
 		mcpMgr:      cfg.MCPManager,
-		subBrain:       cfg.SubBrain,
-		knowledgeStore: cfg.KnowledgeStore,
+		subBrain:         cfg.SubBrain,
+		knowledgeStore:   cfg.KnowledgeStore,
+		maxParallelRecon: cfg.MaxParallelRecon,
 	}
 	// TaskManager を作成（全 Loop で共有）
 	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain)
@@ -81,12 +84,15 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	approveCh := make(chan bool, 1)
 	userMsgCh := make(chan string, 4)
 
+	reconTree := NewReconTree(host, t.maxParallelRecon)
+
 	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
 		WithSkills(t.skillsReg).
 		WithMemory(t.memoryStore).
 		WithMCP(t.mcpMgr).
 		WithTaskManager(t.taskMgr).
-		WithKnowledge(t.knowledgeStore)
+		WithKnowledge(t.knowledgeStore).
+		WithReconTree(reconTree)
 
 	t.loops = append(t.loops, loop)
 

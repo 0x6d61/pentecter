@@ -210,14 +210,15 @@ Chat commands:
 	userMsgMap := make(map[int]chan<- string)
 
 	team := agent.NewTeam(agent.TeamConfig{
-		Events:      events,
-		Brain:       br,
-		SubBrain:    subBrain,
-		Runner:      runner,
-		SkillsReg:   skillsReg,
-		MemoryStore: memoryStore,
-		MCPManager:     mcpMgr,
-		KnowledgeStore: knowledgeStore,
+		Events:           events,
+		Brain:            br,
+		SubBrain:         subBrain,
+		Runner:           runner,
+		SkillsReg:        skillsReg,
+		MemoryStore:      memoryStore,
+		MCPManager:       mcpMgr,
+		KnowledgeStore:   knowledgeStore,
+		MaxParallelRecon: appCfg.Recon.MaxParallel,
 	})
 
 	// CLI ターゲットを事前追加
