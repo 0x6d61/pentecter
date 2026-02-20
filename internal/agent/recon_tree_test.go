@@ -339,3 +339,74 @@ func TestRenderQueue_Empty(t *testing.T) {
 		t.Errorf("empty tree should return empty queue, got: %q", output)
 	}
 }
+
+func TestReconTree_LockedByDefault(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	if !tree.IsLocked() {
+		t.Error("new ReconTree should be locked by default")
+	}
+}
+
+func TestReconTree_UnlockManual(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	// ロック中
+	if !tree.IsLocked() {
+		t.Error("should be locked")
+	}
+	// 手動解除
+	tree.Unlock()
+	if tree.IsLocked() {
+		t.Error("should be unlocked after Unlock()")
+	}
+}
+
+func TestReconTree_AutoUnlock_WhenNoPending(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	// pending あり → locked
+	if !tree.IsLocked() {
+		t.Error("should be locked with pending tasks")
+	}
+	// 全タスク完了
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "", TaskVhostDiscov)
+	// pending 0 → auto unlock
+	if tree.IsLocked() {
+		t.Error("should be auto-unlocked when no pending tasks")
+	}
+}
+
+func TestReconTree_StaysLocked_WithPending(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	// まだ pending がある
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	if !tree.IsLocked() {
+		t.Error("should still be locked with remaining pending tasks")
+	}
+}
+
+func TestRenderQueue_LockedMessage(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	output := tree.RenderQueue()
+	// locked 状態では強制文言が含まれる
+	if !strings.Contains(output, "MANDATORY") {
+		t.Errorf("locked RenderQueue should contain MANDATORY, got:\n%s", output)
+	}
+}
+
+func TestRenderQueue_UnlockedNoForceMessage(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.Unlock()
+
+	output := tree.RenderQueue()
+	// unlocked 状態では強制文言が含まれない
+	if strings.Contains(output, "MANDATORY") {
+		t.Errorf("unlocked RenderQueue should NOT contain MANDATORY, got:\n%s", output)
+	}
+}
