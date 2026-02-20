@@ -2,7 +2,6 @@ package agent
 
 import (
 	"testing"
-	"time"
 )
 
 func TestIsFailedOutput(t *testing.T) {
@@ -66,103 +65,6 @@ func TestContainsCI(t *testing.T) {
 			got := containsCI(tt.s, tt.sub)
 			if got != tt.want {
 				t.Errorf("containsCI(%q, %q) = %v, want %v", tt.s, tt.sub, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExtractBinary(t *testing.T) {
-	tests := []struct {
-		name    string
-		command string
-		want    string
-	}{
-		{"simple command", "nmap -sV 10.0.0.5", "nmap"},
-		{"absolute path", "/usr/bin/nmap -sV 10.0.0.5", "nmap"},
-		{"relative path", "./exploit.sh", "exploit.sh"},
-		{"empty string", "", ""},
-		{"command only", "whoami", "whoami"},
-		{"python3 script", "python3 -c \"print('hello')\"", "python3"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := extractBinary(tt.command); got != tt.want {
-				t.Errorf("extractBinary(%q) = %q, want %q", tt.command, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsCommandRepetition(t *testing.T) {
-	tests := []struct {
-		name    string
-		history []commandEntry
-		want    bool
-	}{
-		{
-			name: "3 of same binary in last 5",
-			history: []commandEntry{
-				{Command: "nmap -sV 10.0.0.5"},
-				{Command: "nmap -sS 10.0.0.5"},
-				{Command: "nmap -A 10.0.0.5"},
-			},
-			want: true,
-		},
-		{
-			name: "below threshold",
-			history: []commandEntry{
-				{Command: "nmap -sV 10.0.0.5"},
-				{Command: "nmap -sS 10.0.0.5"},
-			},
-			want: false,
-		},
-		{
-			name: "mixed binaries no repetition",
-			history: []commandEntry{
-				{Command: "nmap -sV 10.0.0.5"},
-				{Command: "curl http://10.0.0.5"},
-				{Command: "nmap -sS 10.0.0.5"},
-				{Command: "python3 exploit.py"},
-				{Command: "curl http://10.0.0.5/api"},
-			},
-			want: false,
-		},
-		{
-			name: "python3 repeated 3 times in 5",
-			history: []commandEntry{
-				{Command: "python3 -c \"import os\""},
-				{Command: "curl http://target"},
-				{Command: "python3 -c \"print('a')\""},
-				{Command: "python3 exploit.py"},
-			},
-			want: true,
-		},
-		{
-			name:    "empty history",
-			history: nil,
-			want:    false,
-		},
-		{
-			name: "only last 5 checked - curl 3 times",
-			history: []commandEntry{
-				{Command: "nmap -sV 10.0.0.1"},
-				{Command: "nmap -sS 10.0.0.1"},
-				{Command: "nmap -A 10.0.0.1"},
-				// 直近5件
-				{Command: "curl http://target"},
-				{Command: "python3 exploit.py"},
-				{Command: "curl http://target/api"},
-				{Command: "whoami"},
-				{Command: "curl http://target/v2"},
-			},
-			want: true, // curl が直近5件中3回
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			l := &Loop{history: tt.history}
-			if got := l.isCommandRepetition(); got != tt.want {
-				t.Errorf("isCommandRepetition() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -295,21 +197,3 @@ func TestBuildHistory_EmptySummary_NoColon(t *testing.T) {
 	}
 }
 
-func TestEvaluateResult_Repetition_CountsAsFailure(t *testing.T) {
-	evCh := make(chan Event, 32)
-	l := &Loop{
-		target:         NewTarget(1, "10.0.0.1"),
-		lastExitCode:   0,
-		lastToolOutput: "normal output",
-		events:         evCh,
-		history: []commandEntry{
-			{Command: "python3 a.py", Time: time.Now()},
-			{Command: "python3 b.py", Time: time.Now()},
-			{Command: "python3 c.py", Time: time.Now()},
-		},
-	}
-	l.evaluateResult()
-	if l.consecutiveFailures != 1 {
-		t.Errorf("consecutiveFailures = %d, want 1 (repetition should count as failure)", l.consecutiveFailures)
-	}
-}

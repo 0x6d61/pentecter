@@ -509,6 +509,53 @@ func TestParseActionJSON_CallMCP(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_ContainsAssessmentWorkflow(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	if !strings.Contains(prompt, "ASSESSMENT WORKFLOW") {
+		t.Error("expected ASSESSMENT WORKFLOW section in main agent prompt")
+	}
+	// ワークフローの4ステップが含まれること
+	for _, keyword := range []string{"RECORD", "ANALYZE", "PLAN", "EXECUTE"} {
+		if !strings.Contains(prompt, keyword) {
+			t.Errorf("ASSESSMENT WORKFLOW should contain %q step", keyword)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_ContainsRestrictedActions(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	if !strings.Contains(prompt, "RESTRICTED ACTIONS") {
+		t.Error("expected RESTRICTED ACTIONS section in main agent prompt")
+	}
+	if !strings.Contains(prompt, "hydra") {
+		t.Error("RESTRICTED ACTIONS should mention hydra as example")
+	}
+}
+
+func TestBuildSystemPrompt_ContainsStdinProhibition(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	if !strings.Contains(prompt, "STDIN PROHIBITION") {
+		t.Error("expected STDIN PROHIBITION section in main agent prompt")
+	}
+}
+
+func TestBuildSystemPrompt_SubAgent_ExcludesWorkflowAndRestricted(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, true)
+
+	if strings.Contains(prompt, "ASSESSMENT WORKFLOW") {
+		t.Error("SubAgent prompt should NOT contain ASSESSMENT WORKFLOW")
+	}
+	if strings.Contains(prompt, "RESTRICTED ACTIONS") {
+		t.Error("SubAgent prompt should NOT contain RESTRICTED ACTIONS")
+	}
+	if strings.Contains(prompt, "STDIN PROHIBITION") {
+		t.Error("SubAgent prompt should NOT contain STDIN PROHIBITION")
+	}
+}
+
 func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
