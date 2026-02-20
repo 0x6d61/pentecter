@@ -79,6 +79,8 @@ type Input struct {
 	TurnCount int
 	// Memory は対象ホストの過去の発見物テキスト。空でも可。
 	Memory string
+	// ReconQueue は構造的偵察キューのプロンプト注入テキスト。空でも可。
+	ReconQueue string
 }
 
 // Brain は LLM との対話インターフェース。

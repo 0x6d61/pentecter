@@ -154,6 +154,35 @@ func TestBuildPrompt_NoHistory(t *testing.T) {
 	}
 }
 
+
+func TestBuildPrompt_ContainsReconQueue(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.10.11.100"}`,
+		ReconQueue:     "RECON QUEUE (3 pending, 0 active, max_parallel=2):\n  [next]  endpoint_enum: /api on 10.10.11.100:80\n",
+	}
+	got := buildPrompt(input)
+	if !strings.Contains(got, "Reconnaissance Queue") {
+		t.Error("buildPrompt should contain Reconnaissance Queue section")
+	}
+	if !strings.Contains(got, "RECON QUEUE") {
+		t.Error("buildPrompt should contain RECON QUEUE content")
+	}
+	if !strings.Contains(got, "endpoint_enum") {
+		t.Error("buildPrompt should contain task details")
+	}
+}
+
+func TestBuildPrompt_EmptyReconQueue(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.10.11.100"}`,
+		ReconQueue:     "",
+	}
+	got := buildPrompt(input)
+	if strings.Contains(got, "Reconnaissance Queue") {
+		t.Error("buildPrompt should NOT contain Reconnaissance Queue when empty")
+	}
+}
+
 // --- parseActionJSON tests ---
 
 func TestParseActionJSON_RawJSON(t *testing.T) {

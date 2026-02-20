@@ -51,6 +51,7 @@ type Loop struct {
 	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
 	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
 	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
+	reconTree      *ReconTree       // 構造的偵察制御（nil = 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -119,6 +120,12 @@ func (l *Loop) WithTaskManager(tm *TaskManager) *Loop {
 // WithKnowledge は KnowledgeStore をセットする（メソッドチェーン用）。
 func (l *Loop) WithKnowledge(ks *knowledge.Store) *Loop {
 	l.knowledgeStore = ks
+	return l
+}
+
+// WithReconTree は ReconTree をセットする（メソッドチェーン用）。
+func (l *Loop) WithReconTree(rt *ReconTree) *Loop {
+	l.reconTree = rt
 	return l
 }
 
@@ -198,6 +205,7 @@ func (l *Loop) Run(ctx context.Context) {
 				UserMessage:    userMsg,
 				TurnCount:      l.turnCount,
 				Memory:         l.buildMemory(),
+				ReconQueue:     l.buildReconQueue(),
 			})
 			if brainErr == nil {
 				break
@@ -485,6 +493,7 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
 // 2つのシグナルで判定: exit code, 出力パターン。
+// ReconTree が有効な場合、ツール出力をパースして偵察状態を更新する。
 func (l *Loop) evaluateResult() {
 	failed := l.lastExitCode != 0
 
@@ -497,6 +506,16 @@ func (l *Loop) evaluateResult() {
 		l.consecutiveFailures++
 	} else {
 		l.consecutiveFailures = 0
+	}
+
+	// ReconTree: ツール出力をパースして偵察状態を更新
+	if l.reconTree != nil && l.lastCommand != "" {
+		if err := DetectAndParse(l.lastCommand, l.lastToolOutput, l.reconTree, l.target.Host); err != nil {
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("ReconTree parse warning: %v", err)})
+		}
+		// Target にも反映（TUI から参照可能にする）
+		l.target.SetReconTree(l.reconTree)
 	}
 }
 
@@ -703,6 +722,14 @@ func (l *Loop) buildMemory() string {
 		return ""
 	}
 	return l.memoryStore.Read(l.target.Host)
+}
+
+// buildReconQueue は RECON QUEUE のプロンプト注入テキストを返す。
+func (l *Loop) buildReconQueue() string {
+	if l.reconTree == nil {
+		return ""
+	}
+	return l.reconTree.RenderQueue()
 }
 
 func (l *Loop) buildSnapshot() string {

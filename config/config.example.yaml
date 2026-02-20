@@ -46,3 +46,11 @@ blacklist:
 
   # フォークボム
   - ':\(\)\{.*\|.*:.*\}'
+
+# --- Recon Tree ---
+# Controls structured reconnaissance behavior.
+# max_parallel: Maximum concurrent recon tasks (default: 2)
+#   Higher values speed up recon but increase load on target.
+#   Use 1 for stealth, 2-3 for normal, 4+ for aggressive.
+recon:
+  max_parallel: 2

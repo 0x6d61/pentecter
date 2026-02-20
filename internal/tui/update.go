@@ -254,6 +254,12 @@ func (m *Model) submitInput() {
 		return
 	}
 
+	// /recontree command — show recon tree for the active target
+	if fullText == "/recontree" {
+		m.handleReconTreeCommand()
+		return
+	}
+
 	// ターゲット追加: IP アドレスまたは /target <host>
 	if host, ok := parseTargetInput(fullText); ok && m.team != nil {
 		m.addTarget(host)
@@ -499,6 +505,24 @@ func (m *Model) handleTargetsCommand() {
 		},
 	)
 }
+
+// handleReconTreeCommand は /recontree コマンドを処理する。
+func (m *Model) handleReconTreeCommand() {
+	if m.selected < 0 || m.selected >= len(m.targets) {
+		m.logSystem("No target selected.")
+		return
+	}
+	target := m.targets[m.selected]
+	rt := target.GetReconTree()
+	if rt == nil {
+		m.logSystem("No recon tree available for this target.")
+		return
+	}
+	output := rt.RenderTree()
+	// コードブロックで囲んで glamour の崩れを防止
+	m.logSystem("```\n" + output + "```")
+}
+
 
 // logSystem adds a system message to the active target as a Block.
 func (m *Model) logSystem(msg string) {
