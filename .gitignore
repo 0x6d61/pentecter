@@ -41,6 +41,7 @@ skills/*
 !skills/curl.md
 !skills/ssh.md
 !skills/searchsploit.md
+!skills/ffuf.md
 
 # Config — only example files tracked
 config/*.yaml

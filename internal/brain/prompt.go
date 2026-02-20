@@ -108,6 +108,13 @@ Proceeding to EXECUTE without completing steps 1-3 is a critical error.
 4. EXECUTE: Carry out targeted verification per service, starting with
    the highest-priority target from your PLAN.
 
+WEB RECONNAISSANCE (when HTTP/HTTPS services are found):
+When your PLAN includes web services, perform these BEFORE manual testing:
+1. Directory/file enumeration: ffuf -w /usr/share/wordlists/dirb/common.txt -u http://<target>/FUZZ -e .php,.html,.txt,.bak
+2. Virtual host discovery (if domain is known): ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u http://<target> -H "Host: FUZZ.<domain>" -fs <default-size>
+3. Record ALL discovered endpoints and vhosts with "memory" action before proceeding.
+Do NOT skip directory enumeration — hidden endpoints often contain the attack surface.
+
 SERVICE PRIORITY (investigate in this order):
 1. Database services (MSSQL, MySQL, PostgreSQL, Oracle) — often contain credentials
 2. Authentication services (Kerberos, LDAP) — reveal domain structure
