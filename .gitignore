@@ -35,9 +35,11 @@ memory/*
 # GitHub Wiki clone (managed as separate repo: pentecter.wiki.git)
 wiki/
 
-# Skills — user-managed skill files (directory kept, contents ignored)
+# Skills — user-managed skill files (directory kept, official skills tracked)
 skills/*
 !skills/.gitkeep
+!skills/curl.md
+!skills/ssh.md
 
 # Config — only example files tracked
 config/*.yaml
