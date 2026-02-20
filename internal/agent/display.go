@@ -51,6 +51,11 @@ type DisplayBlock struct {
 
 	// BlockSystem fields
 	SystemMsg string
+
+	// Render cache fields (TUI performance optimization)
+	RenderedCache string // cached render output
+	CacheWidth    int    // width when cache was set
+	CacheExpanded bool   // expanded state when cache was set
 }
 
 // NewCommandBlock はコマンド実行ブロックを作成する。

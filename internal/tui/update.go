@@ -5,6 +5,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -70,8 +71,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.spinning {
 			var spinCmd tea.Cmd
 			m.spinner, spinCmd = m.spinner.Update(msg)
-			m.rebuildViewport() // 新しいスピナーフレームで再描画
+			m.viewportDirty = false // フラッシュ
+			m.rebuildViewport()
 			return m, spinCmd
+		}
+		return m, nil
+
+	case debounceMsg:
+		if m.viewportDirty {
+			m.viewportDirty = false
+			m.rebuildViewport()
 		}
 		return m, nil
 
@@ -576,7 +585,8 @@ func (m *Model) hasActiveSpinner() bool {
 	if t == nil {
 		return false
 	}
-	for _, b := range t.Blocks {
+	for i := len(t.Blocks) - 1; i >= 0; i-- {
+		b := t.Blocks[i]
 		if b.Type == agent.BlockThinking && !b.ThinkingDone {
 			return true
 		}
@@ -709,7 +719,18 @@ func (m *Model) handleAgentEvent(e agent.Event) tea.Cmd {
 	}
 
 	if needsViewportUpdate {
-		m.rebuildViewport()
+		// EventCmdOutput はデバウンス: スピナーが動いていれば次の TickMsg でフラッシュ、
+		// 停止中は debounceMsg タイマーで 100ms 後にフラッシュ。
+		if e.Type == agent.EventCmdOutput {
+			m.viewportDirty = true
+			if !m.spinning {
+				return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+					return debounceMsg{}
+				})
+			}
+		} else {
+			m.rebuildViewport()
+		}
 	}
 	return spinnerCmd
 }
