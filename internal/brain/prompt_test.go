@@ -515,8 +515,8 @@ func TestBuildSystemPrompt_ContainsAssessmentWorkflow(t *testing.T) {
 	if !strings.Contains(prompt, "ASSESSMENT WORKFLOW") {
 		t.Error("expected ASSESSMENT WORKFLOW section in main agent prompt")
 	}
-	// ワークフローの4ステップが含まれること
-	for _, keyword := range []string{"RECORD", "ANALYZE", "PLAN", "EXECUTE"} {
+	// ワークフローの5ステップが含まれること
+	for _, keyword := range []string{"RECON", "RECORD", "ANALYZE", "PLAN", "EXECUTE"} {
 		if !strings.Contains(prompt, keyword) {
 			t.Errorf("ASSESSMENT WORKFLOW should contain %q step", keyword)
 		}
@@ -541,23 +541,28 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_ContainsWebReconnaissance(t *testing.T) {
+func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
-	// EXECUTE ステップ内に Web 偵察が含まれること
-	if !strings.Contains(prompt, "Endpoint enumeration (MUST)") {
-		t.Error("EXECUTE step should contain mandatory endpoint enumeration")
-	}
-	if !strings.Contains(prompt, "Virtual host discovery (MUST") {
-		t.Error("EXECUTE step should contain mandatory vhost discovery")
-	}
-	// ffuf が参照されていること
+	// RECON ステップに ffuf が含まれること
 	if !strings.Contains(prompt, "ffuf") {
-		t.Error("EXECUTE step should reference ffuf for directory/vhost scanning")
+		t.Error("RECON step should reference ffuf for web reconnaissance")
 	}
-	// 発見したディレクトリの深掘りが指示されていること
-	if !strings.Contains(prompt, "Deep scan discovered paths") {
-		t.Error("EXECUTE step should instruct deep scanning of discovered directories")
+	// 再帰的 endpoint 列挙が指示されていること
+	if !strings.Contains(prompt, "Recursive deep scan") {
+		t.Error("RECON step should instruct recursive endpoint enumeration")
+	}
+	// vhost に対しても endpoint 列挙が指示されていること
+	if !strings.Contains(prompt, "discovered vhost") {
+		t.Error("RECON step should instruct endpoint enumeration on discovered vhosts")
+	}
+	// パラメータ fuzz が含まれること
+	if !strings.Contains(prompt, "Parameter fuzzing") {
+		t.Error("RECON step should include parameter fuzzing")
+	}
+	// spawn_task 禁止が明記されていること
+	if !strings.Contains(prompt, "do NOT use spawn_task during reconnaissance") {
+		t.Error("RECON step should prohibit spawn_task usage")
 	}
 }
 
