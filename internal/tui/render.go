@@ -3,12 +3,21 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/0x6d61/pentecter/internal/agent"
+)
+
+// glamourCacheMu protects the cached Glamour renderer.
+// Renderer is recreated only when terminal width changes.
+var (
+	glamourCacheMu    sync.Mutex
+	glamourCacheWidth int
+	glamourCacheRdr   *glamour.TermRenderer
 )
 
 // renderCommandBlock はコマンド実行ブロックをレンダリングする。
@@ -102,14 +111,24 @@ func renderMarkdown(text string, width int) (string, error) {
 	if wrapWidth < 20 {
 		wrapWidth = 20
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStylePath("dark"),
-		glamour.WithWordWrap(wrapWidth),
-	)
-	if err != nil {
-		return "", err
+
+	glamourCacheMu.Lock()
+	defer glamourCacheMu.Unlock()
+
+	// width が変わった場合のみレンダラーを再生成する
+	if glamourCacheRdr == nil || glamourCacheWidth != wrapWidth {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStylePath("dark"),
+			glamour.WithWordWrap(wrapWidth),
+		)
+		if err != nil {
+			return "", err
+		}
+		glamourCacheRdr = r
+		glamourCacheWidth = wrapWidth
 	}
-	out, err := r.Render(text)
+
+	out, err := glamourCacheRdr.Render(text)
 	if err != nil {
 		return "", err
 	}
@@ -193,25 +212,51 @@ func formatDuration(d time.Duration) string {
 
 // renderBlocks は全ての DisplayBlock をビューポート用コンテンツにレンダリングする。
 // spinnerFrame はアクティブな thinking/subtask ブロックに表示するスピナーの現在フレーム。
+// 完了済みブロックはレンダーキャッシュを利用し、再レンダリングをスキップする。
 func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinnerFrame string) string {
 	var sb strings.Builder
 	for _, b := range blocks {
+		// キャッシュヒット判定
+		if b.RenderedCache != "" && b.CacheWidth == width && b.CacheExpanded == expanded {
+			sb.WriteString(b.RenderedCache)
+			continue
+		}
+
+		// レンダリング実行
+		var rendered string
+		cacheable := false
 		switch b.Type {
 		case agent.BlockCommand:
-			sb.WriteString(renderCommandBlock(b, width, expanded))
+			rendered = renderCommandBlock(b, width, expanded)
+			cacheable = b.Completed
 		case agent.BlockThinking:
-			sb.WriteString(renderThinkingBlock(b, spinnerFrame))
+			rendered = renderThinkingBlock(b, spinnerFrame)
+			cacheable = b.ThinkingDone
 		case agent.BlockAIMessage:
-			sb.WriteString(renderAIMessageBlock(b, width))
+			rendered = renderAIMessageBlock(b, width)
+			cacheable = true
 		case agent.BlockMemory:
-			sb.WriteString(renderMemoryBlock(b))
+			rendered = renderMemoryBlock(b)
+			cacheable = true
 		case agent.BlockSubTask:
-			sb.WriteString(renderSubTaskBlock(b, width, spinnerFrame))
+			rendered = renderSubTaskBlock(b, width, spinnerFrame)
+			cacheable = b.TaskDone
 		case agent.BlockUserInput:
-			sb.WriteString(renderUserInputBlock(b, width))
+			rendered = renderUserInputBlock(b, width)
+			cacheable = true
 		case agent.BlockSystem:
-			sb.WriteString(renderSystemBlock(b))
+			rendered = renderSystemBlock(b)
+			cacheable = true
 		}
+
+		// キャッシュ設定
+		if cacheable && rendered != "" {
+			b.RenderedCache = rendered
+			b.CacheWidth = width
+			b.CacheExpanded = expanded
+		}
+
+		sb.WriteString(rendered)
 	}
 	return sb.String()
 }

@@ -620,3 +620,283 @@ func TestRenderBlocks_SpinnerFramePassedToThinkingAndSubTask(t *testing.T) {
 		t.Errorf("expected spinner frame '⠹' in output for active blocks, got:\n%s", result)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// renderMarkdown — cache tests
+// ---------------------------------------------------------------------------
+
+func TestRenderMarkdown_CacheReuse(t *testing.T) {
+	// 同じ width で2回呼び出し → 両方成功
+	out1, err1 := renderMarkdown("**bold**", 80)
+	if err1 != nil {
+		t.Fatalf("first call failed: %v", err1)
+	}
+	out2, err2 := renderMarkdown("*italic*", 80)
+	if err2 != nil {
+		t.Fatalf("second call failed: %v", err2)
+	}
+	if out1 == "" || out2 == "" {
+		t.Error("expected non-empty output from both calls")
+	}
+}
+
+func TestRenderMarkdown_DifferentWidths(t *testing.T) {
+	// width 80 → width 40 → 出力が異なることを確認（折り返し幅の違い）
+	longText := strings.Repeat("word ", 30)
+	out80, err := renderMarkdown(longText, 80)
+	if err != nil {
+		t.Fatalf("width 80 failed: %v", err)
+	}
+	out40, err := renderMarkdown(longText, 40)
+	if err != nil {
+		t.Fatalf("width 40 failed: %v", err)
+	}
+	// 異なる折り返し幅なので出力が異なるはず
+	if out80 == out40 {
+		t.Error("expected different output for different widths")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// renderBlocks — block cache tests
+// ---------------------------------------------------------------------------
+
+func TestBlockCache_CompletedThinking(t *testing.T) {
+	b := agent.NewThinkingBlock()
+	b.ThinkingDone = true
+	b.ThinkDuration = 5 * time.Second
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for completed thinking block")
+	}
+	if b.CacheWidth != 80 {
+		t.Errorf("expected CacheWidth 80, got %d", b.CacheWidth)
+	}
+}
+
+func TestBlockCache_ActiveThinking(t *testing.T) {
+	b := agent.NewThinkingBlock()
+	b.ThinkingDone = false
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache != "" {
+		t.Error("expected RenderedCache to be empty for active thinking block")
+	}
+}
+
+func TestBlockCache_CompletedCommand(t *testing.T) {
+	b := agent.NewCommandBlock("echo test")
+	b.Output = []string{"test output"}
+	b.Completed = true
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for completed command block")
+	}
+}
+
+func TestBlockCache_ActiveCommand(t *testing.T) {
+	b := agent.NewCommandBlock("running...")
+	b.Completed = false
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache != "" {
+		t.Error("expected RenderedCache to be empty for active command block")
+	}
+}
+
+func TestBlockCache_AIMessage(t *testing.T) {
+	b := agent.NewAIMessageBlock("Hello world")
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for AI message block")
+	}
+}
+
+func TestBlockCache_WidthChange(t *testing.T) {
+	b := agent.NewAIMessageBlock("Cached text")
+	blocks := []*agent.DisplayBlock{b}
+
+	// First render at width 80
+	result1 := renderBlocks(blocks, 80, false, "⠋")
+	if b.CacheWidth != 80 {
+		t.Fatalf("expected CacheWidth 80, got %d", b.CacheWidth)
+	}
+
+	// Second render at different width — should re-render
+	result2 := renderBlocks(blocks, 40, false, "⠋")
+	if b.CacheWidth != 40 {
+		t.Errorf("expected CacheWidth updated to 40, got %d", b.CacheWidth)
+	}
+	// Results may differ due to different wrap widths
+	_ = result1
+	_ = result2
+}
+
+func TestBlockCache_CacheHit(t *testing.T) {
+	b := agent.NewSystemBlock("System message")
+	blocks := []*agent.DisplayBlock{b}
+
+	// First render — sets cache
+	result1 := renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Fatal("expected cache to be set after first render")
+	}
+
+	// Second render — should use cache (same output)
+	result2 := renderBlocks(blocks, 80, false, "⠋")
+	if result1 != result2 {
+		t.Error("expected identical output from cached render")
+	}
+}
+
+func TestBlockCache_CompletedSubTask(t *testing.T) {
+	b := agent.NewSubTaskBlock("task-1", "Scan ports")
+	b.TaskDone = true
+	b.TaskDuration = 3 * time.Second
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for completed subtask block")
+	}
+}
+
+func TestBlockCache_ActiveSubTask(t *testing.T) {
+	b := agent.NewSubTaskBlock("task-1", "Running...")
+	b.TaskDone = false
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache != "" {
+		t.Error("expected RenderedCache to be empty for active subtask block")
+	}
+}
+
+func TestBlockCache_MemoryBlock(t *testing.T) {
+	b := agent.NewMemoryBlock("HIGH", "SQL Injection")
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for memory block")
+	}
+}
+
+func TestBlockCache_UserInputBlock(t *testing.T) {
+	b := agent.NewUserInputBlock("scan target")
+	blocks := []*agent.DisplayBlock{b}
+
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for user input block")
+	}
+}
+
+func TestBlockCache_ExpandedChange(t *testing.T) {
+	b := agent.NewCommandBlock("ls -la")
+	b.Output = []string{"l1", "l2", "l3", "l4", "l5", "l6"}
+	b.Completed = true
+	blocks := []*agent.DisplayBlock{b}
+
+	// Render with expanded=false
+	_ = renderBlocks(blocks, 80, false, "⠋")
+	if b.CacheExpanded != false {
+		t.Error("expected CacheExpanded=false")
+	}
+	cachedFolded := b.RenderedCache
+
+	// Render with expanded=true — cache should be invalidated
+	_ = renderBlocks(blocks, 80, true, "⠋")
+	if b.CacheExpanded != true {
+		t.Error("expected CacheExpanded=true after re-render")
+	}
+	if b.RenderedCache == cachedFolded {
+		t.Error("expected different cache for different expanded state")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
+
+func BenchmarkRenderMarkdown(b *testing.B) {
+	text := "# Heading\n\nSome **bold** and *italic* text.\n\n- item 1\n- item 2\n\n```bash\necho hello\n```"
+	for i := 0; i < b.N; i++ {
+		_, _ = renderMarkdown(text, 80)
+	}
+}
+
+func BenchmarkRenderBlocks_50Blocks_Cached(b *testing.B) {
+	blocks := make([]*agent.DisplayBlock, 50)
+	for i := 0; i < 50; i++ {
+		switch i % 5 {
+		case 0:
+			blk := agent.NewCommandBlock("echo test")
+			blk.Output = []string{"output line"}
+			blk.Completed = true
+			blocks[i] = blk
+		case 1:
+			blk := agent.NewThinkingBlock()
+			blk.ThinkingDone = true
+			blk.ThinkDuration = 2 * time.Second
+			blocks[i] = blk
+		case 2:
+			blocks[i] = agent.NewAIMessageBlock("Some AI response text here.")
+		case 3:
+			blocks[i] = agent.NewSystemBlock("System message")
+		case 4:
+			blk := agent.NewSubTaskBlock("task", "Goal text")
+			blk.TaskDone = true
+			blk.TaskDuration = 1 * time.Second
+			blocks[i] = blk
+		}
+	}
+
+	// Warm up cache
+	_ = renderBlocks(blocks, 80, false, "⠋")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = renderBlocks(blocks, 80, false, "⠋")
+	}
+}
+
+func BenchmarkRenderBlocks_50Blocks_NoCacheBaseline(b *testing.B) {
+	// Create fresh blocks each iteration to avoid cache hits
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		blocks := make([]*agent.DisplayBlock, 50)
+		for j := 0; j < 50; j++ {
+			switch j % 5 {
+			case 0:
+				blk := agent.NewCommandBlock("echo test")
+				blk.Output = []string{"output line"}
+				blk.Completed = true
+				blocks[j] = blk
+			case 1:
+				blk := agent.NewThinkingBlock()
+				blk.ThinkingDone = true
+				blk.ThinkDuration = 2 * time.Second
+				blocks[j] = blk
+			case 2:
+				blocks[j] = agent.NewAIMessageBlock("Some AI response text here.")
+			case 3:
+				blocks[j] = agent.NewSystemBlock("System message")
+			case 4:
+				blk := agent.NewSubTaskBlock("task", "Goal text")
+				blk.TaskDone = true
+				blk.TaskDuration = 1 * time.Second
+				blocks[j] = blk
+			}
+		}
+		_ = renderBlocks(blocks, 80, false, "⠋")
+	}
+}

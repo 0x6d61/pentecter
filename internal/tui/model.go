@@ -42,6 +42,9 @@ type SelectOption struct {
 // AgentEventMsg は Agent ループから届く Bubble Tea メッセージ。
 type AgentEventMsg agent.Event
 
+// debounceMsg はビューポート再描画のデバウンスタイマー完了メッセージ。
+type debounceMsg struct{}
+
 // Model is the root Bubble Tea model for the Pentecter Commander Console.
 type Model struct {
 	width    int
@@ -71,6 +74,9 @@ type Model struct {
 
 	// logsExpanded が true の場合、すべてのログ内容を折りたたまずに表示する。
 	logsExpanded bool
+
+	// viewportDirty が true の場合、次のスピナーティックまたはデバウンスタイマーでビューポートを再描画する。
+	viewportDirty bool
 
 	// Global system logs — shown when no target is active
 	globalLogs []string
