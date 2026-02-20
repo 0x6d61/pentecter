@@ -69,7 +69,7 @@ func (m Model) renderStatusBar() string {
 		targetInfo = fmt.Sprintf(
 			"Focus: %s [%s]",
 			lipgloss.NewStyle().Foreground(colorWarning).Render(t.Host),
-			t.Status,
+			t.GetStatus(),
 		)
 	} else {
 		targetInfo = lipgloss.NewStyle().Foreground(colorMuted).Render("No target selected")

@@ -121,42 +121,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Proposal approval keys — handled regardless of which pane is focused,
 		// as long as the active target has a pending proposal.
-		if t := m.activeTarget(); t != nil && t.Proposal != nil {
-			switch msg.String() {
-			case "y", "Y":
-				t.AddBlock(agent.NewUserInputBlock("Approved: " + t.Proposal.Description))
-				t.Status = agent.StatusRunning
-				t.ClearProposal()
-				m.syncListItems()
-				m.rebuildViewport()
-				// 対象ターゲットの Agent ループに承認を通知
-				if ch, ok := m.agentApproveMap[t.ID]; ok {
-					select {
-					case ch <- true:
-					default:
+		if t := m.activeTarget(); t != nil {
+			if prop := t.GetProposal(); prop != nil {
+				switch msg.String() {
+				case "y", "Y":
+					t.AddBlock(agent.NewUserInputBlock("Approved: " + prop.Description))
+					t.SetStatusSafe(agent.StatusRunning)
+					t.ClearProposal()
+					m.syncListItems()
+					m.rebuildViewport()
+					// 対象ターゲットの Agent ループに承認を通知
+					if ch, ok := m.agentApproveMap[t.ID]; ok {
+						select {
+						case ch <- true:
+						default:
+						}
 					}
-				}
-				return m, nil
-			case "n", "N":
-				t.AddBlock(agent.NewUserInputBlock("Rejected: " + t.Proposal.Description))
-				t.Status = agent.StatusIdle
-				t.ClearProposal()
-				m.syncListItems()
-				m.rebuildViewport()
-				// 対象ターゲットの Agent ループに拒否を通知
-				if ch, ok := m.agentApproveMap[t.ID]; ok {
-					select {
-					case ch <- false:
-					default:
+					return m, nil
+				case "n", "N":
+					t.AddBlock(agent.NewUserInputBlock("Rejected: " + prop.Description))
+					t.SetStatusSafe(agent.StatusIdle)
+					t.ClearProposal()
+					m.syncListItems()
+					m.rebuildViewport()
+					// 対象ターゲットの Agent ループに拒否を通知
+					if ch, ok := m.agentApproveMap[t.ID]; ok {
+						select {
+						case ch <- false:
+						default:
+						}
 					}
+					return m, nil
+				case "e", "E":
+					// Populate the input box with the proposal command for editing.
+					m.input.SetValue(prop.Tool + " " + strings.Join(prop.Args, " "))
+					m.focus = FocusInput
+					m.input.Focus()
+					return m, nil
 				}
-				return m, nil
-			case "e", "E":
-				// Populate the input box with the proposal command for editing.
-				m.input.SetValue(t.Proposal.Tool + " " + strings.Join(t.Proposal.Args, " "))
-				m.focus = FocusInput
-				m.input.Focus()
-				return m, nil
 			}
 		}
 
