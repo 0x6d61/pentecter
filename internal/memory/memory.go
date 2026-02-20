@@ -49,6 +49,11 @@ func NewStore(dir string) *Store {
 	return &Store{dir: dir}
 }
 
+// BaseDir はメモリストアのベースディレクトリを返す。
+func (s *Store) BaseDir() string {
+	return s.dir
+}
+
 // Record は発見物を host に対応する型別ファイルに追記する。
 // ホストディレクトリが存在しない場合は自動作成する。
 func (s *Store) Record(host string, m *schema.Memory) error {
