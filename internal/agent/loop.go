@@ -508,6 +508,14 @@ func (l *Loop) evaluateResult() {
 		l.consecutiveFailures = 0
 	}
 
+	// Raw output saving: コマンド出力をファイルに保存
+	if l.lastCommand != "" && l.memoryStore != nil {
+		if _, err := SaveRawOutput(l.memoryStore.BaseDir(), l.target.Host, l.lastCommand, l.lastToolOutput); err != nil {
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("Raw output save warning: %v", err)})
+		}
+	}
+
 	// ReconTree: ツール出力をパースして偵察状態を更新
 	if l.reconTree != nil && l.lastCommand != "" {
 		if err := DetectAndParse(l.lastCommand, l.lastToolOutput, l.reconTree, l.target.Host); err != nil {
