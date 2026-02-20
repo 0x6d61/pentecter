@@ -17,10 +17,23 @@ type KnowledgeEntry struct {
 	Path string `yaml:"path"`
 }
 
+// ReconConfig は偵察ツリーの動作設定
+type ReconConfig struct {
+	MaxParallel int `yaml:"max_parallel"`
+}
+
 // AppConfig は config/config.yaml の統合設定構造
 type AppConfig struct {
 	Knowledge []KnowledgeEntry `yaml:"knowledge"`
 	Blacklist []string         `yaml:"blacklist"`
+	Recon     ReconConfig      `yaml:"recon"`
+}
+
+// applyDefaults はゼロ値のフィールドにデフォルト値を適用する
+func (c *AppConfig) applyDefaults() {
+	if c.Recon.MaxParallel == 0 {
+		c.Recon.MaxParallel = 2
+	}
 }
 
 // Load は config/config.yaml を読み込む。
@@ -30,7 +43,9 @@ func Load(path string) (*AppConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &AppConfig{}, nil
+			cfg := &AppConfig{}
+			cfg.applyDefaults()
+			return cfg, nil
 		}
 		return nil, fmt.Errorf("config: failed to read %s: %w", path, err)
 	}
@@ -44,6 +59,9 @@ func Load(path string) (*AppConfig, error) {
 	for i := range cfg.Knowledge {
 		cfg.Knowledge[i].Path = expandEnvString(cfg.Knowledge[i].Path)
 	}
+
+	// デフォルト値の適用
+	cfg.applyDefaults()
 
 	return &cfg, nil
 }

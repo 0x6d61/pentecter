@@ -118,3 +118,37 @@ func TestLoad_MissingSections(t *testing.T) {
 		t.Errorf("expected 0 blacklist patterns for missing section, got %d", len(cfg.Blacklist))
 	}
 }
+
+func TestLoad_ReconConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+recon:
+  max_parallel: 4
+`), 0o644)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Recon.MaxParallel != 4 {
+		t.Errorf("MaxParallel = %d, want 4", cfg.Recon.MaxParallel)
+	}
+}
+
+func TestLoad_ReconConfig_Default(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+knowledge: []
+`), 0o644)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Default should be 2
+	if cfg.Recon.MaxParallel != 2 {
+		t.Errorf("MaxParallel = %d, want default 2", cfg.Recon.MaxParallel)
+	}
+}

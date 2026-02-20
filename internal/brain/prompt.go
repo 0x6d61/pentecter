@@ -362,6 +362,12 @@ func buildPrompt(input Input) string {
 		sb.WriteString("\n")
 	}
 
+	if input.ReconQueue != "" {
+		sb.WriteString("\n## Reconnaissance Queue\n")
+		sb.WriteString(input.ReconQueue)
+		sb.WriteString("\n")
+	}
+
 	// Last Command セクション（Target State の後、Last Assessment Output の前）
 	if input.LastCommand != "" {
 		sb.WriteString("\n## Last Command\n")

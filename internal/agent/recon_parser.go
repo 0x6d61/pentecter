@@ -1,0 +1,290 @@
+package agent
+
+import (
+	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"net/url"
+	"path"
+	"strings"
+)
+
+// --- nmap XML パーサー ---
+
+// nmapRun は nmap -oX の出力構造
+type nmapRun struct {
+	XMLName xml.Name   `xml:"nmaprun"`
+	Hosts   []nmapHost `xml:"host"`
+}
+
+type nmapHost struct {
+	Ports []nmapPort `xml:"ports>port"`
+}
+
+type nmapPort struct {
+	Protocol string       `xml:"protocol,attr"`
+	PortID   int          `xml:"portid,attr"`
+	State    nmapState    `xml:"state"`
+	Service  nmapService  `xml:"service"`
+}
+
+type nmapState struct {
+	State string `xml:"state,attr"`
+}
+
+type nmapService struct {
+	Name    string `xml:"name,attr"`
+	Product string `xml:"product,attr"`
+	Version string `xml:"version,attr"`
+}
+
+// ParseNmapXML は nmap XML 出力をパースし、open ポートを ReconTree に追加する。
+func ParseNmapXML(xmlData string, tree *ReconTree) error {
+	// XML 部分を抽出（前後にゴミがある場合）
+	start := strings.Index(xmlData, "<nmaprun")
+	if start < 0 {
+		return nil // nmap XML が見つからない
+	}
+	end := strings.Index(xmlData, "</nmaprun>")
+	if end < 0 {
+		return nil
+	}
+	xmlData = xmlData[start : end+len("</nmaprun>")]
+
+	var run nmapRun
+	if err := xml.Unmarshal([]byte(xmlData), &run); err != nil {
+		return fmt.Errorf("nmap XML parse: %w", err)
+	}
+
+	for _, host := range run.Hosts {
+		for _, port := range host.Ports {
+			if port.State.State != "open" {
+				continue
+			}
+			banner := port.Service.Product
+			if port.Service.Version != "" {
+				if banner != "" {
+					banner += " "
+				}
+				banner += port.Service.Version
+			}
+			tree.AddPort(port.PortID, port.Service.Name, banner)
+		}
+	}
+	return nil
+}
+
+// --- ffuf JSON パーサー ---
+
+// ffufOutput は ffuf -of json の出力構造
+type ffufOutput struct {
+	CommandLine string       `json:"commandline"`
+	Results     []ffufResult `json:"results"`
+}
+
+type ffufResult struct {
+	Input  map[string]string `json:"input"`
+	Status int               `json:"status"`
+	Length int               `json:"length"`
+	URL    string            `json:"url"`
+}
+
+// ParseFfufJSON は ffuf JSON 出力をパースし、結果を ReconTree に追加する。
+// taskType により追加方法が異なる:
+//   - TaskEndpointEnum: 各結果を endpoint として追加
+//   - TaskVhostDiscov: 各結果を vhost として追加
+//   - TaskParamFuzz: タスクを完了にするのみ
+func ParseFfufJSON(jsonData string, tree *ReconTree, host string, port int, parentPath string, taskType ReconTaskType) error {
+	// JSON 部分を抽出（前後にゴミがある場合）
+	start := strings.Index(jsonData, "{")
+	if start < 0 {
+		return nil
+	}
+	jsonData = jsonData[start:]
+
+	var output ffufOutput
+	if err := json.Unmarshal([]byte(jsonData), &output); err != nil {
+		return fmt.Errorf("ffuf JSON parse: %w", err)
+	}
+
+	// 結果が空ならタスクを完了にする
+	if len(output.Results) == 0 {
+		tree.CompleteTask(host, port, parentPath, taskType)
+		return nil
+	}
+
+	switch taskType {
+	case TaskEndpointEnum:
+		for _, r := range output.Results {
+			fuzz := r.Input["FUZZ"]
+			if fuzz == "" {
+				continue
+			}
+			newPath := path.Join(parentPath, fuzz)
+			if !strings.HasPrefix(newPath, "/") {
+				newPath = "/" + newPath
+			}
+			tree.AddEndpoint(host, port, parentPath, newPath)
+		}
+		// 親のenum完了（結果あり = 列挙できた）
+		tree.CompleteTask(host, port, parentPath, TaskEndpointEnum)
+
+	case TaskVhostDiscov:
+		// vhost 発見: コマンドラインからドメインを抽出
+		domain := extractDomainFromFfufCmd(output.CommandLine)
+		for _, r := range output.Results {
+			fuzz := r.Input["FUZZ"]
+			if fuzz == "" {
+				continue
+			}
+			vhostName := fuzz + "." + domain
+			tree.AddVhost(host, port, vhostName)
+		}
+		// 親の vhost discovery 完了
+		tree.CompleteTask(host, port, parentPath, TaskVhostDiscov)
+
+	case TaskParamFuzz:
+		// パラメータ発見は情報のみ、タスクを完了にする
+		tree.CompleteTask(host, port, parentPath, TaskParamFuzz)
+
+	case TaskProfiling:
+		tree.CompleteTask(host, port, parentPath, TaskProfiling)
+	}
+
+	return nil
+}
+
+// extractDomainFromFfufCmd は ffuf コマンドラインから "Host: FUZZ.<domain>" のドメイン部分を抽出する。
+func extractDomainFromFfufCmd(cmd string) string {
+	// -H "Host: FUZZ.example.com" or -H 'Host: FUZZ.example.com'
+	idx := strings.Index(cmd, "FUZZ.")
+	if idx < 0 {
+		return "unknown"
+	}
+	rest := cmd[idx+len("FUZZ."):]
+	// クォートまたはスペースで終端
+	for i, c := range rest {
+		if c == '"' || c == '\'' || c == ' ' || c == '\t' {
+			return rest[:i]
+		}
+	}
+	return rest
+}
+
+// --- 統合検出パーサー ---
+
+// DetectAndParse はコマンドと出力からツールを判定し、適切なパーサーを呼ぶ。
+// パーサーが一致しない場合は nil を返す（エラーではない）。
+func DetectAndParse(command string, output string, tree *ReconTree, host string) error {
+	cmdLower := strings.ToLower(command)
+
+	// nmap 検出
+	if strings.Contains(cmdLower, "nmap") && strings.Contains(output, "<nmaprun") {
+		return ParseNmapXML(output, tree)
+	}
+
+	// ffuf 検出
+	if strings.Contains(cmdLower, "ffuf") && strings.Contains(output, `"results"`) {
+		port, parentPath, taskType := parseFfufCommand(command)
+		return ParseFfufJSON(output, tree, host, port, parentPath, taskType)
+	}
+
+	// curl 検出 → profiling 完了
+	if strings.Contains(cmdLower, "curl") {
+		port, curlPath := parseCurlCommand(command)
+		if curlPath != "" {
+			tree.CompleteTask(host, port, curlPath, TaskProfiling)
+		}
+		return nil
+	}
+
+	return nil
+}
+
+// parseFfufCommand は ffuf コマンドからポート、パス、タスクタイプを抽出する。
+func parseFfufCommand(command string) (port int, parentPath string, taskType ReconTaskType) {
+	port = 80
+	parentPath = "/"
+	taskType = TaskEndpointEnum
+
+	// -H "Host:" があれば vhost discovery
+	if strings.Contains(command, "Host:") || strings.Contains(command, "host:") {
+		taskType = TaskVhostDiscov
+		// vhost の場合、-u から port を抽出
+		if u := extractURLFromFlag(command, "-u"); u != "" {
+			if parsed, err := url.Parse(u); err == nil {
+				port = portFromURL(parsed)
+			}
+		}
+		return
+	}
+
+	// ?FUZZ= や -d "FUZZ=value" があれば param fuzz
+	if strings.Contains(command, "?FUZZ=") || strings.Contains(command, "FUZZ=value") {
+		taskType = TaskParamFuzz
+	}
+
+	// -u フラグから URL を抽出
+	if u := extractURLFromFlag(command, "-u"); u != "" {
+		if parsed, err := url.Parse(u); err == nil {
+			port = portFromURL(parsed)
+			// パスから FUZZ を除去して親パスを得る
+			p := parsed.Path
+			p = strings.ReplaceAll(p, "/FUZZ", "")
+			p = strings.ReplaceAll(p, "FUZZ", "")
+			if p == "" {
+				p = "/"
+			}
+			parentPath = p
+		}
+	}
+
+	return
+}
+
+// parseCurlCommand は curl コマンドから URL のポートとパスを抽出する。
+func parseCurlCommand(command string) (port int, curlPath string) {
+	// curl コマンドから URL を探す
+	parts := strings.Fields(command)
+	for _, p := range parts {
+		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+			// クォートを除去
+			p = strings.Trim(p, `"'`)
+			if parsed, err := url.Parse(p); err == nil {
+				port = portFromURL(parsed)
+				curlPath = parsed.Path
+				if curlPath == "" {
+					curlPath = "/"
+				}
+				return
+			}
+		}
+	}
+	return 0, ""
+}
+
+// extractURLFromFlag はコマンドから指定フラグの値を抽出する。
+func extractURLFromFlag(command string, flag string) string {
+	parts := strings.Fields(command)
+	for i, p := range parts {
+		if p == flag && i+1 < len(parts) {
+			val := parts[i+1]
+			return strings.Trim(val, `"'`)
+		}
+	}
+	return ""
+}
+
+// portFromURL は URL からポート番号を返す。明示されていなければスキームから推定。
+func portFromURL(u *url.URL) int {
+	if u.Port() != "" {
+		var port int
+		if _, err := fmt.Sscanf(u.Port(), "%d", &port); err == nil {
+			return port
+		}
+	}
+	if u.Scheme == "https" {
+		return 443
+	}
+	return 80
+}
