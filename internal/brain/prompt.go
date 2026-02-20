@@ -85,15 +85,18 @@ Proceeding to EXECUTE without completing steps 1-3 is a critical error.
    e.g., "1433/tcp | ms-sql-s | Microsoft SQL Server 2019 | Authentication required"
    Record EVERY open port — not just the ones you plan to attack.
 
-2. ANALYZE: For EACH discovered service, use "search_knowledge" to find attack techniques.
-   Then use "think" action to create a prioritized attack scenario considering
-   ALL discovered services — not just web. For each service, evaluate:
-   - Known CVEs for the specific version (use search_knowledge)
-   - Default credentials or misconfigurations
-   - Service-specific attack vectors and tools
+2. ANALYZE: For EACH discovered service:
+   a. Use "search_knowledge" to find attack techniques from the knowledge base.
+   b. Use "run" with searchsploit to find known exploits for the specific version:
+      searchsploit "<service> <version>" (e.g., searchsploit "Apache 2.4.49")
+   c. Use "think" action to create a prioritized attack scenario considering
+      ALL discovered services — not just web. For each service, evaluate:
+      - Known CVEs and exploits (from searchsploit results)
+      - Default credentials or misconfigurations
+      - Service-specific attack vectors and tools
    Use search_knowledge once per service — do NOT search the same service twice.
-   Once you have knowledge results, move on to the next service or to PLAN.
-   Example: nmap finds MSSQL 1433 → search_knowledge "mssql pentesting impacket" → done for MSSQL, move on
+   Once you have knowledge + searchsploit results, move on to the next service or to PLAN.
+   Example: nmap finds MSSQL 1433 → search_knowledge "mssql pentesting" → searchsploit "Microsoft SQL Server 2019" → done for MSSQL, move on
 
 3. PLAN: Record a numbered attack plan with "memory" action (type: note).
    Each entry MUST include the specific tool to use:

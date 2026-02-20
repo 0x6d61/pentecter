@@ -532,6 +532,15 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchKnowledge(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	// ANALYZE ステップで searchsploit の使用が必須であること
+	if !strings.Contains(prompt, "searchsploit") {
+		t.Error("ASSESSMENT WORKFLOW ANALYZE step should require searchsploit for exploit lookup")
+	}
+}
+
 func TestBuildSystemPrompt_ContainsServicePriority(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
