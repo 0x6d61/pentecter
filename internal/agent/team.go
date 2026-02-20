@@ -112,12 +112,18 @@ func (t *Team) Start(ctx context.Context) {
 	}
 }
 
-// SetBrain は Team の Brain を差し替える。以降の AddTarget で新しい Brain が使われる。
-// 既に実行中の Loop には影響しない。
+// SetBrain は Team の Brain を差し替える。
+// 以降の AddTarget で新しい Brain が使われ、既に実行中の Loop にも即時反映される。
 func (t *Team) SetBrain(br brain.Brain) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.br = br
+	loops := make([]*Loop, len(t.loops))
+	copy(loops, t.loops)
+	t.mu.Unlock()
+
+	for _, loop := range loops {
+		loop.SetBrain(br)
+	}
 }
 
 // Loops は管理している全 Loop を返す（TUI のターゲットリスト表示用）。

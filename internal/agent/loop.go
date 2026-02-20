@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
@@ -43,6 +44,7 @@ type commandEntry struct {
 type Loop struct {
 	target       *Target
 	br           brain.Brain
+	brMu         sync.Mutex // Brain の差し替え保護（/model コマンド対応）
 	runner       *tools.CommandRunner
 	skillsReg    *skills.Registry  // スキルテンプレート（nil = 無効）
 	memoryStore  *memory.Store     // 発見物の永続化（nil = 無効）
@@ -120,6 +122,14 @@ func (l *Loop) WithKnowledge(ks *knowledge.Store) *Loop {
 	return l
 }
 
+// SetBrain は実行中の Loop の Brain を差し替える（/model コマンド対応）。
+// TUI goroutine から呼ばれるため mutex で保護。
+func (l *Loop) SetBrain(br brain.Brain) {
+	l.brMu.Lock()
+	defer l.brMu.Unlock()
+	l.br = br
+}
+
 // Run はエージェントループを実行する。別 goroutine で呼び出すこと。
 func (l *Loop) Run(ctx context.Context) {
 	l.emit(Event{Type: EventLog, Source: SourceSystem,
@@ -176,7 +186,10 @@ func (l *Loop) Run(ctx context.Context) {
 		var action *schema.Action
 		var brainErr error
 		for attempt := 1; attempt <= maxBrainRetries; attempt++ {
-			action, brainErr = l.br.Think(ctx, brain.Input{
+			l.brMu.Lock()
+			currentBrain := l.br
+			l.brMu.Unlock()
+			action, brainErr = currentBrain.Think(ctx, brain.Input{
 				TargetSnapshot: l.buildSnapshot(),
 				ToolOutput:     l.lastToolOutput,
 				LastCommand:    l.lastCommand,
@@ -315,8 +328,20 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 }
 
 // handlePropose は Proposal を TUI に表示し承認を待つ。
+// AutoApprove が ON の場合はユーザー確認をスキップして即実行する。
 func (l *Loop) handlePropose(ctx context.Context, command, description string) bool {
 	l.lastCommand = command
+
+	// AutoApprove ON → proposal UI をスキップして即実行
+	if l.runner.AutoApprove() {
+		l.emit(Event{Type: EventLog, Source: SourceSystem,
+			Message: fmt.Sprintf("Auto-approved: %s", command)})
+		l.target.Status = StatusRunning
+		linesCh, resultCh := l.runner.ForceRun(ctx, command)
+		l.streamAndCollect(ctx, linesCh, resultCh)
+		return true
+	}
+
 	p := &Proposal{
 		Description: description,
 		Tool:        command,

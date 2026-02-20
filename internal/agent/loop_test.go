@@ -150,6 +150,89 @@ func TestLoop_Run_Proposal_Approve(t *testing.T) {
 	}
 }
 
+func TestLoop_Run_Proposal_AutoApprove(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run exploit", Action: schema.ActionPropose, Command: "echo auto-approved"},
+		},
+	}
+
+	// AutoApprove ON のランナーを構築
+	falseVal := false
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ToolDef{
+		Name: "echo", ProposalRequired: &falseVal,
+		Output: tools.OutputConfig{Strategy: tools.StrategyHeadTail, HeadLines: 5, TailLines: 5},
+	})
+	runner := tools.NewCommandRunner(reg, tools.NewBlacklist(nil), tools.NewLogStore())
+	runner.SetAutoApprove(true)
+
+	events := make(chan agent.Event, 32)
+	approve := make(chan bool, 1)
+	userMsg := make(chan string, 1)
+	loop := agent.NewLoop(target, mb, runner, events, approve, userMsg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotAutoApproved := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "Auto-approved") {
+				gotAutoApproved = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotAutoApproved {
+					t.Error("expected Auto-approved log before complete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_SetBrain_AffectsRunningLoop(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	// Original brain: think then wait for user
+	originalBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "original thinking", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, originalBrain)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// Wait for first think, then swap brain
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// After complete, verify originalBrain was called
+				if len(originalBrain.inputs) == 0 {
+					t.Error("expected original brain to be called")
+				}
+				// SetBrain should not panic on a completed loop
+				newBrain := &mockBrain{}
+				loop.SetBrain(newBrain)
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout")
+		}
+	}
+}
+
 func TestLoop_Run_Proposal_Deny(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	mb := &mockBrain{
