@@ -12,19 +12,10 @@ var (
 	colorMuted        = lipgloss.Color("#555577") // dim gray — timestamps / hints
 	colorBorder       = lipgloss.Color("#333355") // default border
 	colorBorderActive = lipgloss.Color("#00D7FF") // focused border
-	colorTitle        = lipgloss.Color("#FFFFFF") // pane titles
 )
 
 // Pane borders
 var (
-	leftPaneStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder)
-
-	leftPaneActiveStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorBorderActive)
-
 	rightPaneStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder)
@@ -63,15 +54,6 @@ var confirmQuitBoxStyle = lipgloss.NewStyle().
 	BorderForeground(colorDanger).
 	Padding(0, 2)
 
-// Status icon color styles
-var (
-	statusIdleStyle     = lipgloss.NewStyle().Foreground(colorMuted)
-	statusScanningStyle = lipgloss.NewStyle().Foreground(colorWarning)
-	statusRunningStyle  = lipgloss.NewStyle().Foreground(colorPrimary)
-	statusPausedStyle   = lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
-	statusPwnedStyle    = lipgloss.NewStyle().Foreground(colorSuccess).Bold(true)
-	statusFailedStyle   = lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
-)
 
 // foldIndicatorStyle は折りたたみ行の「⋯ +N Lines (Ctrl+O)」スタイル。
 var foldIndicatorStyle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)

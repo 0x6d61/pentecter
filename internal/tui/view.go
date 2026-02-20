@@ -17,30 +17,17 @@ func (m Model) View() string {
 	// ── Status bar (1 line) ──────────────────────────────────────────────────
 	statusBar := m.renderStatusBar()
 
-	// ── Left pane: target list ───────────────────────────────────────────────
-	leftContent := m.list.View()
-	var leftStyle lipgloss.Style
-	if m.focus == FocusList {
-		leftStyle = leftPaneActiveStyle.Width(leftPaneOuterWidth - 2)
-	} else {
-		leftStyle = leftPaneStyle.Width(leftPaneOuterWidth - 2)
-	}
-	leftPane := leftStyle.Render(leftContent)
-
-	// ── Right pane: session log ──────────────────────────────────────────────
-	rightOuterW := m.width - leftPaneOuterWidth
-	rightContentW := rightOuterW - 2 // subtract left+right borders
-	rightContent := m.viewport.View()
-	var rightStyle lipgloss.Style
+	// ── Main pane: session log (full width) ─────────────────────────────────
+	mainOuterW := m.width
+	mainContentW := mainOuterW - 2 // subtract left+right borders
+	mainContent := m.viewport.View()
+	var mainStyle lipgloss.Style
 	if m.focus == FocusViewport {
-		rightStyle = rightPaneActiveStyle.Width(rightContentW)
+		mainStyle = rightPaneActiveStyle.Width(mainContentW)
 	} else {
-		rightStyle = rightPaneStyle.Width(rightContentW)
+		mainStyle = rightPaneStyle.Width(mainContentW)
 	}
-	rightPane := rightStyle.Render(rightContent)
-
-	// ── Join panes side by side ──────────────────────────────────────────────
-	panesRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	panesRow := mainStyle.Render(mainContent)
 
 	// ── Input bar (3 lines) ──────────────────────────────────────────────────
 	inputBar := m.renderInputBar()
@@ -85,37 +72,12 @@ func (m Model) renderStatusBar() string {
 			fmt.Sprintf("Model: %s", m.CurrentProvider))
 	}
 
-	hint := lipgloss.NewStyle().Foreground(colorMuted).Render("[Tab] Switch pane  [y/n/e] Proposal")
-	focusIndicator := m.renderFocusIndicator()
-
-	left := appName + "  " + targetInfo + "  " + focusIndicator
+	left := appName + "  " + targetInfo
 	if modelInfo != "" {
 		left += "  " + modelInfo
 	}
-	gap := strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(hint)-2))
 
-	return statusBarStyle.Width(m.width).Render(left + gap + hint)
-}
-
-// renderFocusIndicator shows which pane is currently focused.
-func (m Model) renderFocusIndicator() string {
-	dim := lipgloss.NewStyle().Foreground(colorMuted)
-	active := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
-
-	list := dim.Render("[LIST]")
-	log := dim.Render("[LOG]")
-	input := dim.Render("[INPUT]")
-
-	switch m.focus {
-	case FocusList:
-		list = active.Render("[LIST]")
-	case FocusViewport:
-		log = active.Render("[LOG]")
-	case FocusInput:
-		input = active.Render("[INPUT]")
-	}
-
-	return fmt.Sprintf("%s %s %s", list, log, input)
+	return statusBarStyle.Width(m.width).Render(left)
 }
 
 // renderInputBar renders the bottom input area with context-aware prefix.
@@ -128,8 +90,6 @@ func (m Model) renderInputBar() string {
 
 	var prefix string
 	switch m.focus {
-	case FocusList:
-		prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("[List] ↑↓ Select target")
 	case FocusViewport:
 		prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("[Log]  ↑↓ Scroll")
 	case FocusInput:

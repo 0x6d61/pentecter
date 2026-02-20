@@ -16,17 +16,6 @@ import (
 // cycleFocus
 // ---------------------------------------------------------------------------
 
-func TestCycleFocus_ListToViewport(t *testing.T) {
-	m := NewWithTargets(nil)
-	m.focus = FocusList
-
-	m.cycleFocus()
-
-	if m.focus != FocusViewport {
-		t.Errorf("expected FocusViewport after cycling from FocusList, got %d", m.focus)
-	}
-}
-
 func TestCycleFocus_ViewportToInput(t *testing.T) {
 	m := NewWithTargets(nil)
 	m.focus = FocusViewport
@@ -38,27 +27,26 @@ func TestCycleFocus_ViewportToInput(t *testing.T) {
 	}
 }
 
-func TestCycleFocus_InputToList(t *testing.T) {
+func TestCycleFocus_InputToViewport(t *testing.T) {
 	m := NewWithTargets(nil)
 	m.focus = FocusInput
 
 	m.cycleFocus()
 
-	if m.focus != FocusList {
-		t.Errorf("expected FocusList after cycling from FocusInput, got %d", m.focus)
+	if m.focus != FocusViewport {
+		t.Errorf("expected FocusViewport after cycling from FocusInput, got %d", m.focus)
 	}
 }
 
 func TestCycleFocus_FullCycle(t *testing.T) {
 	m := NewWithTargets(nil)
-	m.focus = FocusList
+	m.focus = FocusViewport
 
-	m.cycleFocus() // List -> Viewport
 	m.cycleFocus() // Viewport -> Input
-	m.cycleFocus() // Input -> List
+	m.cycleFocus() // Input -> Viewport
 
-	if m.focus != FocusList {
-		t.Errorf("expected FocusList after full cycle, got %d", m.focus)
+	if m.focus != FocusViewport {
+		t.Errorf("expected FocusViewport after full cycle, got %d", m.focus)
 	}
 }
 
@@ -711,13 +699,13 @@ func TestUpdate_TabCyclesFocus(t *testing.T) {
 	m := NewWithTargets(nil)
 	m.handleResize(120, 40)
 	m.ready = true
-	m.focus = FocusList
+	m.focus = FocusViewport
 
 	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	rm := result.(Model)
 
-	if rm.focus != FocusViewport {
-		t.Errorf("expected FocusViewport after Tab from FocusList, got %d", rm.focus)
+	if rm.focus != FocusInput {
+		t.Errorf("expected FocusInput after Tab from FocusViewport, got %d", rm.focus)
 	}
 }
 

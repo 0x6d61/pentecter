@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -21,8 +20,7 @@ import (
 type FocusState int
 
 const (
-	FocusList     FocusState = iota // left pane: target list
-	FocusViewport                   // right pane: session log
+	FocusViewport FocusState = iota // main pane: session log
 	FocusInput                      // bottom: input bar
 )
 
@@ -41,9 +39,6 @@ type SelectOption struct {
 	Value string
 }
 
-// leftPaneOuterWidth is the total rendered width of the left pane (borders included).
-const leftPaneOuterWidth = 32
-
 // AgentEventMsg は Agent ループから届く Bubble Tea メッセージ。
 type AgentEventMsg agent.Event
 
@@ -55,7 +50,6 @@ type Model struct {
 	focus    FocusState
 	targets  []*agent.Target
 	selected int // index into targets
-	list     list.Model
 	viewport viewport.Model
 	input    textarea.Model
 
@@ -100,70 +94,8 @@ func AgentEventCmd(ch <-chan agent.Event) tea.Cmd {
 	}
 }
 
-// targetListItem wraps *agent.Target to satisfy the list.Item interface.
-type targetListItem struct {
-	t *agent.Target
-}
-
-func (i targetListItem) Title() string {
-	status := i.t.GetStatus()
-	icon := status.Icon()
-	var coloredIcon string
-	switch status {
-	case agent.StatusPwned:
-		coloredIcon = statusPwnedStyle.Render(icon)
-	case agent.StatusRunning:
-		coloredIcon = statusRunningStyle.Render(icon)
-	case agent.StatusScanning:
-		coloredIcon = statusScanningStyle.Render(icon)
-	case agent.StatusPaused:
-		coloredIcon = statusPausedStyle.Render(icon)
-	case agent.StatusFailed:
-		coloredIcon = statusFailedStyle.Render(icon)
-	default:
-		coloredIcon = statusIdleStyle.Render(icon)
-	}
-	return fmt.Sprintf("%s %s", coloredIcon, i.t.Host)
-}
-
-func (i targetListItem) Description() string {
-	status := i.t.GetStatus()
-	extra := ""
-	if i.t.GetProposal() != nil {
-		extra = lipgloss.NewStyle().Foreground(colorWarning).Render(" ⚠ APPROVAL")
-	}
-	return fmt.Sprintf("[%s]%s", status, extra)
-}
-
-func (i targetListItem) FilterValue() string { return i.t.Host }
-
-// New はデモデータで Model を初期化する（開発・デモ用）。
-// 本番では NewWithTargets を使うこと。
-func New() Model {
-	return NewWithTargets(buildDemoTargets())
-}
-
 // NewWithTargets は指定されたターゲットリストで Model を初期化する。
 func NewWithTargets(targets []*agent.Target) Model {
-	items := make([]list.Item, len(targets))
-	for i, t := range targets {
-		items[i] = targetListItem{t: t}
-	}
-
-	d := list.NewDefaultDelegate()
-	d.ShowDescription = true
-	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(colorPrimary)
-	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorSecondary)
-
-	l := list.New(items, d, leftPaneOuterWidth-4, 20)
-	l.Title = "TARGETS"
-	l.SetShowHelp(false)
-	l.SetFilteringEnabled(false)
-	l.Styles.Title = lipgloss.NewStyle().
-		Foreground(colorTitle).
-		Bold(true).
-		Padding(0, 1)
-
 	ta := textarea.New()
 	ta.Prompt = ""
 	ta.Placeholder = "Type here... [Enter] send  [Alt+Enter] newline"
@@ -184,7 +116,6 @@ func NewWithTargets(targets []*agent.Target) Model {
 	return Model{
 		targets:         targets,
 		selected:        0,
-		list:            l,
 		input:           ta,
 		spinner:         sp,
 		focus:           FocusInput,
@@ -236,7 +167,7 @@ func (m *Model) rebuildViewport() {
 		sb.WriteString("  No target selected.\n\n")
 		sb.WriteString("  Add a target by entering an IP address:\n")
 		sb.WriteString("    e.g. 10.0.0.5 / /target example.com\n\n")
-		sb.WriteString("  Commands: /model, /approve, /curl, /ssh\n")
+		sb.WriteString("  Commands: /targets, /model, /approve, /curl, /ssh\n")
 		if len(m.globalLogs) > 0 {
 			sb.WriteString("\n")
 			for _, log := range m.globalLogs {
@@ -304,15 +235,6 @@ func (m *Model) renderProposal(p *agent.Proposal) string {
 	return sb.String()
 }
 
-// syncListItems refreshes list items to reflect the current target states.
-func (m *Model) syncListItems() {
-	items := make([]list.Item, len(m.targets))
-	for i, t := range m.targets {
-		items[i] = targetListItem{t: t}
-	}
-	m.list.SetItems(items)
-}
-
 // showSelect activates the select UI with the given title, options, and callback.
 // The callback is invoked when the user presses Enter on an option.
 func (m *Model) showSelect(title string, options []SelectOption, callback func(m *Model, value string)) {
@@ -323,41 +245,3 @@ func (m *Model) showSelect(title string, options []SelectOption, callback func(m
 	m.selectCallback = callback
 }
 
-// buildDemoTargets creates representative demo targets for display.
-func buildDemoTargets() []*agent.Target {
-	t1 := agent.NewTarget(1, "10.0.0.5")
-	t1.Status = agent.StatusScanning
-	t1.AddBlock(agent.NewSystemBlock("Session started"))
-	t1.AddBlock(agent.NewAIMessageBlock("Starting recon on 10.0.0.5"))
-	cmd := agent.NewCommandBlock("nmap -sV -p- 10.0.0.5")
-	cmd.Output = []string{
-		"PORT     STATE  SERVICE  VERSION",
-		"22/tcp   open   ssh      OpenSSH 8.0",
-		"80/tcp   open   http     Apache httpd 2.4.49",
-	}
-	cmd.Completed = true
-	cmd.ExitCode = 0
-	t1.AddBlock(cmd)
-	t1.AddBlock(agent.NewAIMessageBlock("Detected Apache 2.4.49 — possible CVE-2021-41773 (Path Traversal)"))
-
-	t2 := agent.NewTarget(2, "10.0.0.8")
-	t2.AddBlock(agent.NewSystemBlock("Session started"))
-	t2.AddBlock(agent.NewAIMessageBlock("Starting recon on 10.0.0.8"))
-	cmd2 := agent.NewCommandBlock("nmap -sV 10.0.0.8")
-	cmd2.Output = []string{"80/tcp open http Apache httpd 2.4.49"}
-	cmd2.Completed = true
-	cmd2.ExitCode = 0
-	t2.AddBlock(cmd2)
-	t2.AddBlock(agent.NewAIMessageBlock("Port 80 (Apache 2.4.49) — vulnerable to CVE-2021-41773"))
-	t2.AddBlock(agent.NewAIMessageBlock("Planning exploit with Metasploit module..."))
-	t2.SetProposal(&agent.Proposal{
-		Description: "Exploit Apache 2.4.49 Path Traversal (CVE-2021-41773)",
-		Tool:        "metasploit",
-		Args:        []string{"exploit/multi/http/apache_normalize_path_rce", "--target", "10.0.0.8", "--lhost", "10.0.0.2"},
-	})
-
-	t3 := agent.NewTarget(3, "10.0.0.12")
-	t3.AddBlock(agent.NewSystemBlock("Session started"))
-
-	return []*agent.Target{t1, t2, t3}
-}
