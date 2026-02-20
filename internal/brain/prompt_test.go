@@ -523,6 +523,46 @@ func TestBuildSystemPrompt_ContainsAssessmentWorkflow(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_WorkflowRequiresSearchKnowledge(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	// ANALYZE ステップで search_knowledge の使用が必須であること
+	if !strings.Contains(prompt, "search_knowledge") {
+		t.Error("ASSESSMENT WORKFLOW ANALYZE step should require search_knowledge")
+	}
+}
+
+func TestBuildSystemPrompt_ContainsServicePriority(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	if !strings.Contains(prompt, "SERVICE PRIORITY") {
+		t.Error("expected SERVICE PRIORITY section in main agent prompt")
+	}
+	// 非 Web サービスが Web より前にリストされていること
+	for _, svc := range []string{"Database", "Authentication", "Remote access"} {
+		if !strings.Contains(prompt, svc) {
+			t.Errorf("SERVICE PRIORITY should list %q", svc)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_PlanRequiresConcreteTools(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, false)
+
+	// PLAN ステップで具体的なツール名を含む攻撃計画が必要であること
+	if !strings.Contains(prompt, "numbered attack plan") {
+		t.Error("PLAN step should require numbered attack plan with concrete tools")
+	}
+}
+
+func TestBuildSystemPrompt_SubAgent_ExcludesServicePriority(t *testing.T) {
+	prompt := buildSystemPrompt(nil, nil, true)
+
+	if strings.Contains(prompt, "SERVICE PRIORITY") {
+		t.Error("SubAgent prompt should NOT contain SERVICE PRIORITY")
+	}
+}
+
 func TestBuildSystemPrompt_ContainsRestrictedActions(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
