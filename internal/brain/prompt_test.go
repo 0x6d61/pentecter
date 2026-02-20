@@ -548,17 +548,21 @@ func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
 	if !strings.Contains(prompt, "ffuf") {
 		t.Error("RECON step should reference ffuf for web reconnaissance")
 	}
-	// 再帰的 endpoint 列挙が指示されていること
-	if !strings.Contains(prompt, "Recursive deep scan") {
-		t.Error("RECON step should instruct recursive endpoint enumeration")
+	// 再帰的 endpoint 列挙が ZERO results まで続くこと
+	if !strings.Contains(prompt, "ZERO new results") {
+		t.Error("RECON step should instruct recursive enumeration until zero results")
 	}
 	// vhost に対しても endpoint 列挙が指示されていること
 	if !strings.Contains(prompt, "discovered vhost") {
 		t.Error("RECON step should instruct endpoint enumeration on discovered vhosts")
 	}
-	// パラメータ fuzz が含まれること
-	if !strings.Contains(prompt, "Parameter fuzzing") {
-		t.Error("RECON step should include parameter fuzzing")
+	// 全エンドポイントに対するパラメータ fuzz が含まれること
+	if !strings.Contains(prompt, "Parameter fuzzing on ALL endpoints") {
+		t.Error("RECON step should include parameter fuzzing on ALL endpoints")
+	}
+	// エンドポイントプロファイリングが含まれること
+	if !strings.Contains(prompt, "Endpoint profiling") {
+		t.Error("RECON step should include endpoint profiling with curl")
 	}
 	// spawn_task 禁止が明記されていること
 	if !strings.Contains(prompt, "do NOT use spawn_task during reconnaissance") {
