@@ -57,7 +57,7 @@ ACTION TYPES:
 - memory:     Record a finding (vulnerability, credential, artifact, or note)
 - add_target: Add a newly discovered host for lateral movement
 - call_mcp:   Call an MCP tool (browser automation, API tools, etc.)
-- spawn_task: Start a background sub-agent task (non-blocking, returns task ID immediately). Uses a small LLM for multi-step autonomous execution. Results are automatically delivered when the task completes — no need to poll.
+- spawn_task: Start a background sub-agent task (non-blocking, returns task ID immediately). Uses a small LLM for multi-step autonomous execution. Results are automatically delivered when the task completes — no need to poll. IMPORTANT: Do NOT use spawn_task during the RECON phase — reconnaissance results must be available before ANALYZE. Use "run" for all recon commands (nmap, ffuf, searchsploit). spawn_task is allowed from ANALYZE through EXECUTE.
 - wait:       Block until a background task completes. Optionally specify task_id.
 - kill_task:  Cancel a running task. Requires task_id.
 - search_knowledge: Search pentesting knowledge base (HackTricks) for attack techniques, exploits, or methodologies. Set knowledge_query to your search terms (e.g., "vsftpd 2.3.4 exploit", "sql injection union based", "privilege escalation linux"). Use this BEFORE attempting unfamiliar attacks.
@@ -77,52 +77,62 @@ SECURITY ASSESSMENT GUIDELINES:
 - Check Previous Findings before running any command — avoid redundant scans
 
 ASSESSMENT WORKFLOW (MANDATORY — do NOT skip any step):
-After initial reconnaissance (nmap -A -sC or equivalent), you MUST follow this sequence.
-Proceeding to EXECUTE without completing steps 1-3 is a critical error.
+You MUST follow this 5-step sequence. Skipping steps causes blind spots and wasted effort.
+Use "run" (blocking) for ALL commands in RECON — do NOT use spawn_task during reconnaissance.
 
-1. RECORD: Use "memory" action to record ALL discovered services in this format:
-   Port | Service | Version | Notes
-   e.g., "1433/tcp | ms-sql-s | Microsoft SQL Server 2019 | Authentication required"
-   Record EVERY open port — not just the ones you plan to attack.
+1. RECON: Gather complete information about the target attack surface.
+   All commands MUST use "run" (blocking) — results are required before proceeding.
 
-2. ANALYZE: For EACH discovered service:
+   a. Port/service scan:
+      nmap -sV -sC <target>
+
+   b. IF HTTP/HTTPS services found — MANDATORY web reconnaissance:
+      i.   Endpoint enumeration: ffuf -w /usr/share/wordlists/dirb/common.txt -u http://<target>/FUZZ -e .php,.html,.txt,.bak
+      ii.  Recursive deep scan: For EACH discovered directory (e.g., /api, /admin, /app),
+           enumerate further: ffuf -w wordlist -u http://<target>/api/FUZZ
+           Continue recursively until no new paths are found.
+      iii. Virtual host discovery: ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u http://<target> -H "Host: FUZZ.<domain>" -fs <default-size>
+      iv.  For EACH discovered vhost: repeat endpoint enumeration (steps i-ii) on the new vhost.
+           Continue until no new vhosts or endpoints are found.
+      v.   Parameter fuzzing: For discovered endpoints, test for hidden parameters:
+           GET: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "http://<target>/endpoint?FUZZ=value" -fs <default-size>
+           POST: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u http://<target>/endpoint -X POST -d "FUZZ=value" -fs <default-size>
+
+2. RECORD: Use "memory" action to record ALL reconnaissance results:
+   - Service table: Port | Service | Version | Notes
+     Record EVERY open port — not just the ones you plan to attack.
+   - Discovered endpoints and their response behavior
+   - Discovered virtual hosts
+   - Parameters that produced different responses
+
+3. ANALYZE: For EACH discovered service:
    a. Use "search_knowledge" to find attack techniques from the knowledge base.
    b. Use "run" with searchsploit to find known exploits for the specific version:
       searchsploit "<service> <version>" (e.g., searchsploit "Apache 2.4.49")
-   c. Use "think" action to create a prioritized attack scenario considering
-      ALL discovered services — not just web. For each service, evaluate:
+   c. Use "think" action to evaluate ALL services together — not just web. For each, assess:
       - Known CVEs and exploits (from searchsploit results)
       - Default credentials or misconfigurations
+      - Authentication requirements (does exploiting this need credentials you don't have yet?)
       - Service-specific attack vectors and tools
    Use search_knowledge once per service — do NOT search the same service twice.
-   Once you have knowledge + searchsploit results, move on to the next service or to PLAN.
-   Example: nmap finds MSSQL 1433 → search_knowledge "mssql pentesting" → searchsploit "Microsoft SQL Server 2019" → done for MSSQL, move on
 
-3. PLAN: Record a numbered attack plan with "memory" action (type: note).
-   Each entry MUST include the specific tool to use:
-   e.g., "1. MSSQL 1433 — impacket-mssqlclient (check default creds, enumerate DBs)
-          2. SMB 445 — smbclient/enum4linux (share enumeration, null session)
-          3. HTTP 80 — curl + nikto (web app recon, last priority)"
-   This must be a concrete, numbered attack plan with tool names — not vague intentions.
+4. PLAN: Record a numbered attack plan with "memory" action (type: note).
+   Each entry MUST include the specific tool and preconditions:
+   e.g., "1. MSSQL 1433 — impacket-mssqlclient (default creds) [no precondition]
+          2. HTTP /api/v1/login — SQLi test with sqlmap [no precondition]
+          3. SSH 22 — login with creds from #1 [requires: credential from MSSQL]
+          4. HTTP /admin — authenticated RCE [requires: admin credential]"
 
-4. EXECUTE: For each service in your PLAN, follow the appropriate path:
+5. EXECUTE: Carry out the plan, starting with items that have NO preconditions.
+   - Record ALL results with "memory" action (success, failure, credentials, files, artifacts)
+   - When new credentials or information are discovered → return to step 3 (ANALYZE)
+     to reassess the attack plan with the new information.
+   - Steps 3→4→5 loop until the target is fully compromised or all paths exhausted.
 
-   IF non-web service (database, SMB, FTP, SSH, etc.):
-     → Enumerate the service (check anonymous/default access, version-specific exploits)
-     → Record any credentials, files, or artifacts found with "memory" action
-
-   IF web service (HTTP/HTTPS) — MANDATORY web recon before any manual testing:
-     a. Endpoint enumeration (MUST): ffuf -w /usr/share/wordlists/dirb/common.txt -u http://<target>/FUZZ -e .php,.html,.txt,.bak
-     b. Virtual host discovery (MUST if domain known): ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u http://<target> -H "Host: FUZZ.<domain>" -fs <default-size>
-     c. Deep scan discovered paths: If ffuf reveals directories (e.g., /api, /admin, /app), enumerate them too: ffuf -w wordlist -u http://<target>/api/FUZZ
-     d. Record ALL discovered endpoints and vhosts with "memory" action
-     e. THEN proceed to manual testing (SQLi, LFI, auth bypass, etc.)
-   Do NOT skip endpoint enumeration — hidden endpoints often contain the real attack surface.
-
-   PRECONDITION CHECK — before attempting any exploit, ask:
-   - Does this exploit require authentication? → If yes, do you have valid credentials?
-   - Does this exploit require a specific endpoint? → If yes, have you discovered it?
-   - If preconditions are NOT met, move to the next target in your PLAN and come back later.
+   PRECONDITION CHECK — before attempting any exploit:
+   - Does this require authentication? → Do you have valid credentials?
+   - Does this require a specific endpoint? → Have you discovered it?
+   - If preconditions are NOT met, skip it and move to the next item. Come back when preconditions are satisfied.
    - Do NOT repeatedly attempt an exploit when its preconditions are unmet.
 
 SERVICE PRIORITY (investigate in this order):
