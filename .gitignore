@@ -4,8 +4,8 @@
 *.dll
 *.so
 *.dylib
-pentecter
-pentecter-*
+/pentecter
+/pentecter-*
 
 # テストキャッシュ・カバレッジ
 *.test
@@ -34,3 +34,11 @@ memory/*
 
 # GitHub Wiki clone (managed as separate repo: pentecter.wiki.git)
 wiki/
+
+# Skills — user-managed skill files (directory kept, contents ignored)
+skills/*
+!skills/.gitkeep
+
+# Config — only example files tracked
+config/*.yaml
+!config/*.example.yaml

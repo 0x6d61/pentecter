@@ -2,6 +2,9 @@
 # Each server is started as a subprocess using stdio transport.
 # Add servers here to extend pentecter's capabilities.
 #
+# Copy this file and customize:
+#   cp mcp.example.yaml mcp.yaml
+#
 # Fields:
 #   name:              Server identifier (referenced by Brain)
 #   command:           Executable to start the server

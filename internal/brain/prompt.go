@@ -91,8 +91,9 @@ Proceeding to EXECUTE without completing steps 1-3 is a critical error.
    - Known CVEs for the specific version (use search_knowledge)
    - Default credentials or misconfigurations
    - Service-specific attack vectors and tools
-   You MUST use search_knowledge at least once per non-trivial service.
-   Example: nmap finds MSSQL 1433 → search_knowledge "mssql pentesting impacket"
+   Use search_knowledge once per service — do NOT search the same service twice.
+   Once you have knowledge results, move on to the next service or to PLAN.
+   Example: nmap finds MSSQL 1433 → search_knowledge "mssql pentesting impacket" → done for MSSQL, move on
 
 3. PLAN: Record a numbered attack plan with "memory" action (type: note).
    Each entry MUST include the specific tool to use:

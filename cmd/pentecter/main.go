@@ -11,10 +11,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
-	"gopkg.in/yaml.v3"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/config"
 	"github.com/0x6d61/pentecter/internal/knowledge"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/memory"
@@ -156,8 +156,25 @@ Chat commands:
 		subBrain = nil
 	}
 
+	// --- App Config (knowledge + blacklist) ---
+	appCfg, cfgErr := config.Load("config/config.yaml")
+	if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "Config warning: %v\n", cfgErr)
+		appCfg = &config.AppConfig{}
+	}
+
 	// --- Blacklist ---
-	blacklist := loadBlacklist("config/blacklist.yaml")
+	blacklist := tools.NewBlacklist(appCfg.Blacklist)
+	if len(appCfg.Blacklist) == 0 {
+		// デフォルトの安全パターン
+		blacklist = tools.NewBlacklist([]string{
+			`rm\s+-rf\s+/`,
+			`dd\s+if=`,
+			`mkfs`,
+			`\bshutdown\b`,
+			`\breboot\b`,
+		})
+	}
 
 	// --- Skills ---
 	skillsReg := skills.NewRegistry()
@@ -165,18 +182,15 @@ Chat commands:
 
 	// --- Knowledge Base ---
 	var knowledgeStore *knowledge.Store
-	knowledgeCfg, kErr := knowledge.LoadConfig("config/knowledge.yaml")
-	if kErr != nil {
-		fmt.Fprintf(os.Stderr, "Knowledge config warning: %v\n", kErr)
-	}
-	if knowledgeCfg != nil && len(knowledgeCfg.Knowledge) > 0 {
+	if len(appCfg.Knowledge) > 0 {
 		// 最初のエントリを使用（将来的に複数対応可能）
-		ks := knowledge.NewStore(knowledgeCfg.Knowledge[0].Path)
+		entry := appCfg.Knowledge[0]
+		ks := knowledge.NewStore(entry.Path)
 		if ks != nil {
 			knowledgeStore = ks
-			log.Printf("Knowledge base loaded: %s (%s)", knowledgeCfg.Knowledge[0].Name, knowledgeCfg.Knowledge[0].Path)
+			log.Printf("Knowledge base loaded: %s (%s)", entry.Name, entry.Path)
 		} else {
-			log.Printf("Knowledge base path not found: %s (run: git clone --depth 1 https://github.com/carlospolop/hacktricks.git)", knowledgeCfg.Knowledge[0].Path)
+			log.Printf("Knowledge base path not found: %s (run: git clone --depth 1 https://github.com/carlospolop/hacktricks.git)", entry.Path)
 		}
 	}
 
@@ -245,28 +259,4 @@ Chat commands:
 		fmt.Fprintln(os.Stderr, "TUI error:", err)
 		os.Exit(1)
 	}
-}
-
-// loadBlacklist は YAML ファイルからブラックリストパターンを読み込む。
-// ファイルが存在しない場合はデフォルトの安全パターンを返す。
-func loadBlacklist(path string) *tools.Blacklist {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return tools.NewBlacklist([]string{
-			`rm\s+-rf\s+/`,
-			`dd\s+if=`,
-			`mkfs`,
-			`\bshutdown\b`,
-			`\breboot\b`,
-		})
-	}
-
-	var cfg struct {
-		Patterns []string `yaml:"patterns"`
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "blacklist load error: %v (using defaults)\n", err)
-		return tools.NewBlacklist(nil)
-	}
-	return tools.NewBlacklist(cfg.Patterns)
 }
