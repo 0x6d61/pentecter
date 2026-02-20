@@ -75,10 +75,23 @@ func (m Model) renderStatusBar() string {
 		targetInfo = lipgloss.NewStyle().Foreground(colorMuted).Render("No target selected")
 	}
 
+	// Model info
+	var modelInfo string
+	if m.CurrentModel != "" {
+		modelInfo = lipgloss.NewStyle().Foreground(colorMuted).Render(
+			fmt.Sprintf("Model: %s/%s", m.CurrentProvider, m.CurrentModel))
+	} else if m.CurrentProvider != "" {
+		modelInfo = lipgloss.NewStyle().Foreground(colorMuted).Render(
+			fmt.Sprintf("Model: %s", m.CurrentProvider))
+	}
+
 	hint := lipgloss.NewStyle().Foreground(colorMuted).Render("[Tab] Switch pane  [y/n/e] Proposal")
 	focusIndicator := m.renderFocusIndicator()
 
-	left := fmt.Sprintf("%s  %s  %s", appName, targetInfo, focusIndicator)
+	left := appName + "  " + targetInfo + "  " + focusIndicator
+	if modelInfo != "" {
+		left += "  " + modelInfo
+	}
 	gap := strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(hint)-2))
 
 	return statusBarStyle.Width(m.width).Render(left + gap + hint)

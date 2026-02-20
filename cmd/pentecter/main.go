@@ -233,6 +233,10 @@ Chat commands:
 	m := tui.NewWithTargets(targets)
 	m.ConnectTeam(team, events, approveMap, userMsgMap)
 
+	// Set initial model info for status bar
+	m.CurrentProvider = string(selectedProvider)
+	m.CurrentModel = brainCfg.Model
+
 	// Connect CommandRunner for /approve command
 	m.Runner = runner
 
