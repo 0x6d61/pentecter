@@ -185,6 +185,84 @@ func TestDetectAndParse_Curl(t *testing.T) {
 	}
 }
 
+const testNmapText = `Starting Nmap 7.94SVN ( https://nmap.org ) at 2024-01-01 00:00 UTC
+Nmap scan report for 10.10.11.100
+Host is up (0.050s latency).
+
+PORT     STATE    SERVICE  VERSION
+22/tcp   open     ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)
+80/tcp   open     http     Apache httpd 2.4.49 ((Unix))
+443/tcp  closed   https
+3306/tcp open     mysql    MySQL 5.7.36-0ubuntu0.18.04.1
+8080/tcp filtered http-proxy
+
+Service detection performed. Please provide correct files.
+Nmap done: 1 IP address (1 host up) scanned in 25.43 seconds`
+
+func TestParseNmapText(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	err := ParseNmapText(testNmapText, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// open ポートのみ追加（22, 80, 3306）。closed(443), filtered(8080) は除外
+	if len(tree.Ports) != 3 {
+		t.Fatalf("Ports count = %d, want 3", len(tree.Ports))
+	}
+
+	ssh := tree.Ports[0]
+	if ssh.Port != 22 || ssh.Service != "ssh" {
+		t.Errorf("port 0: %d/%s, want 22/ssh", ssh.Port, ssh.Service)
+	}
+	if ssh.Banner != "OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 (Ubuntu Linux; protocol 2.0)" {
+		t.Errorf("ssh banner = %q", ssh.Banner)
+	}
+
+	http := tree.Ports[1]
+	if http.Port != 80 || http.Service != "http" {
+		t.Errorf("port 1: %d/%s, want 80/http", http.Port, http.Service)
+	}
+	if http.Banner != "Apache httpd 2.4.49 ((Unix))" {
+		t.Errorf("http banner = %q", http.Banner)
+	}
+
+	mysql := tree.Ports[2]
+	if mysql.Port != 3306 || mysql.Service != "mysql" {
+		t.Errorf("port 2: %d/%s, want 3306/mysql", mysql.Port, mysql.Service)
+	}
+}
+
+func TestParseNmapText_HTTPGetsPending(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	_ = ParseNmapText(testNmapText, tree)
+
+	http := tree.Ports[1] // port 80
+	if http.EndpointEnum != StatusPending {
+		t.Errorf("HTTP EndpointEnum = %d, want pending", http.EndpointEnum)
+	}
+	if http.VhostDiscov != StatusPending {
+		t.Errorf("HTTP VhostDiscov = %d, want pending", http.VhostDiscov)
+	}
+
+	ssh := tree.Ports[0] // port 22
+	if ssh.EndpointEnum != StatusNone {
+		t.Errorf("SSH EndpointEnum = %d, want none", ssh.EndpointEnum)
+	}
+}
+
+func TestDetectAndParse_NmapText(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	// nmap command without XML output
+	err := DetectAndParse("nmap -sV -sC 10.10.11.100", testNmapText, tree, "10.10.11.100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Ports) != 3 {
+		t.Errorf("Ports count = %d, want 3", len(tree.Ports))
+	}
+}
+
 func TestDetectAndParse_Unknown(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
 	err := DetectAndParse("echo hello", "hello", tree, "10.10.11.100")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -70,6 +71,31 @@ func ParseNmapXML(xmlData string, tree *ReconTree) error {
 			}
 			tree.AddPort(port.PortID, port.Service.Name, banner)
 		}
+	}
+	return nil
+}
+
+// --- nmap テキストパーサー ---
+
+// ParseNmapText は nmap テキスト出力をパースし、open ポートを ReconTree に追加する。
+// XML パーサーのフォールバックとして使用。
+func ParseNmapText(output string, tree *ReconTree) error {
+	// Regex: "22/tcp   open   ssh   OpenSSH 8.2p1..."
+	// Format: PORT/PROTO STATE SERVICE VERSION...
+	re := regexp.MustCompile(`(?m)^(\d+)/(tcp|udp)\s+(open)\s+(\S+)\s*(.*)$`)
+	matches := re.FindAllStringSubmatch(output, -1)
+
+	for _, m := range matches {
+		portStr := m[1]
+		// state := m[3] // always "open" due to regex
+		service := m[4]
+		banner := strings.TrimSpace(m[5])
+
+		port := 0
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+			continue
+		}
+		tree.AddPort(port, service, banner)
 	}
 	return nil
 }
@@ -179,8 +205,12 @@ func DetectAndParse(command string, output string, tree *ReconTree, host string)
 	cmdLower := strings.ToLower(command)
 
 	// nmap 検出
-	if strings.Contains(cmdLower, "nmap") && strings.Contains(output, "<nmaprun") {
-		return ParseNmapXML(output, tree)
+	if strings.Contains(cmdLower, "nmap") {
+		if strings.Contains(output, "<nmaprun") {
+			return ParseNmapXML(output, tree)
+		}
+		// XML がない場合はテキストパーサーにフォールバック
+		return ParseNmapText(output, tree)
 	}
 
 	// ffuf 検出
