@@ -260,6 +260,12 @@ func (m *Model) submitInput() {
 		return
 	}
 
+	// /skip-recon command — unlock RECON phase for the active target
+	if fullText == "/skip-recon" {
+		m.handleSkipReconCommand()
+		return
+	}
+
 	// ターゲット追加: IP アドレスまたは /target <host>
 	if host, ok := parseTargetInput(fullText); ok && m.team != nil {
 		m.addTarget(host)
@@ -523,6 +529,26 @@ func (m *Model) handleReconTreeCommand() {
 	m.logSystem("```\n" + output + "```")
 }
 
+// handleSkipReconCommand は /skip-recon コマンドを処理する。
+func (m *Model) handleSkipReconCommand() {
+	if m.selected < 0 || m.selected >= len(m.targets) {
+		m.logSystem("No target selected.")
+		return
+	}
+	target := m.targets[m.selected]
+	rt := target.GetReconTree()
+	if rt == nil {
+		m.logSystem("No recon tree available for this target.")
+		return
+	}
+	if !rt.IsLocked() {
+		m.logSystem("RECON phase is already unlocked.")
+		return
+	}
+	pending := rt.CountPending()
+	rt.Unlock()
+	m.logSystem(fmt.Sprintf("RECON phase unlocked (%d pending tasks skipped). Agent will proceed to ANALYZE.", pending))
+}
 
 // logSystem adds a system message to the active target as a Block.
 func (m *Model) logSystem(msg string) {

@@ -134,6 +134,7 @@ type ReconTree struct {
 	Host        string
 	MaxParallel int
 	active      int
+	locked      bool         // RECON フェーズがロック中か（true = pending タスク完了まで遷移不可）
 	Ports       []*ReconNode // ポートレベルノード
 	Vhosts      []*ReconNode // vhost ルートノード
 }
@@ -146,6 +147,7 @@ func NewReconTree(host string, maxParallel int) *ReconTree {
 	return &ReconTree{
 		Host:        host,
 		MaxParallel: maxParallel,
+		locked:      true,
 	}
 }
 
@@ -251,6 +253,20 @@ func (t *ReconTree) CountTotal() int {
 		total += tt
 	}
 	return total
+}
+
+// IsLocked は RECON フェーズがロックされているか返す。
+// タスクが存在し、かつ pending がなければ自動解除する。
+func (t *ReconTree) IsLocked() bool {
+	if t.locked && t.CountTotal() > 0 && !t.HasPending() {
+		t.locked = false
+	}
+	return t.locked
+}
+
+// Unlock は RECON フェーズロックを手動解除する。
+func (t *ReconTree) Unlock() {
+	t.locked = false
 }
 
 // NextBatch は MaxParallel - active 個の pending タスクを優先順で返す。
@@ -512,6 +528,11 @@ func (t *ReconTree) RenderQueue() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "RECON QUEUE (%d pending, %d active, max_parallel=%d):\n",
 		pending, t.active, t.MaxParallel)
+
+	if t.locked {
+		sb.WriteString("MANDATORY: You MUST complete ALL pending recon tasks before proceeding to RECORD/ANALYZE.\n")
+		sb.WriteString("Execute the [next] task below. Do NOT skip to other workflow phases.\n\n")
+	}
 
 	// active タスクを表示
 	t.renderActiveTasks(&sb)
