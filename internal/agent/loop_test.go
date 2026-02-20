@@ -353,12 +353,13 @@ func TestLoop_Run_BrainError_MaxRetries_Fails(t *testing.T) {
 
 func TestLoop_Run_Stalled_WaitsForUser(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-	// 3 consecutive commands that produce "failed" output, then recover after user input
+	// 3 consecutive commands that produce failure output (Signal A: exit code + Signal B: pattern),
+	// then recover after user input
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{Thought: "scan 1", Action: schema.ActionRun, Command: "echo 0 hosts up"},
-			{Thought: "scan 2", Action: schema.ActionRun, Command: "echo 0 hosts up"},
-			{Thought: "scan 3", Action: schema.ActionRun, Command: "echo 0 hosts up"},
+			{Thought: "scan 2", Action: schema.ActionRun, Command: "echo Host seems down"},
+			{Thought: "scan 3", Action: schema.ActionRun, Command: "echo Connection refused"},
 			// After user guidance, brain should continue
 			{Thought: "trying new approach", Action: schema.ActionRun, Command: "echo PORT 80 open"},
 		},

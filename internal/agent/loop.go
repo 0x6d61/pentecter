@@ -459,7 +459,7 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 }
 
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
-// 3つのシグナルで判定: exit code, 出力パターン, コマンド繰り返し。
+// 2つのシグナルで判定: exit code, 出力パターン。
 func (l *Loop) evaluateResult() {
 	failed := l.lastExitCode != 0
 
@@ -468,64 +468,11 @@ func (l *Loop) evaluateResult() {
 		failed = true
 	}
 
-	// Signal C: 同一バイナリの繰り返し（直近5件で3回以上）
-	if l.isCommandRepetition() {
-		failed = true
-		l.emit(Event{Type: EventLog, Source: SourceSystem,
-			Message: "Repetition detected: same tool used repeatedly"})
-	}
-
 	if failed {
 		l.consecutiveFailures++
 	} else {
 		l.consecutiveFailures = 0
 	}
-}
-
-// isCommandRepetition は直近5件のコマンド履歴で同一バイナリが3回以上使われたか判定する。
-func (l *Loop) isCommandRepetition() bool {
-	n := len(l.history)
-	if n < 3 {
-		return false
-	}
-	start := 0
-	if n > 5 {
-		start = n - 5
-	}
-	counts := map[string]int{}
-	for _, e := range l.history[start:] {
-		bin := extractBinary(e.Command)
-		if bin != "" {
-			counts[bin]++
-		}
-	}
-	for _, c := range counts {
-		if c >= 3 {
-			return true
-		}
-	}
-	return false
-}
-
-// extractBinary はコマンド文字列から実行バイナリ名を抽出する。
-// "nmap -sV 10.0.0.5" → "nmap", "/usr/bin/nmap -sV" → "nmap"
-func extractBinary(command string) string {
-	if command == "" {
-		return ""
-	}
-	// 最初のスペースまでがコマンド部分
-	cmd := command
-	if idx := strings.IndexByte(command, ' '); idx >= 0 {
-		cmd = command[:idx]
-	}
-	// パスからファイル名だけ取り出す
-	if idx := strings.LastIndexByte(cmd, '/'); idx >= 0 {
-		cmd = cmd[idx+1:]
-	}
-	if idx := strings.LastIndexByte(cmd, '\\'); idx >= 0 {
-		cmd = cmd[idx+1:]
-	}
-	return cmd
 }
 
 // buildCommandSummary はコマンド実行結果のサマリーを生成する。

@@ -161,6 +161,7 @@ func (r *CommandRunner) execute(
 			cmd = exec.CommandContext(ctx, shPath, "-c", originalCommand) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- originalCommand はブラックリスト検証済み
 		}
 
+		cmd.Stdin = nil // stdin 奪取防止: 子プロセスが親の stdin を読めないようにする
 		stdout, _ := cmd.StdoutPipe()
 		stderr, _ := cmd.StderrPipe()
 
