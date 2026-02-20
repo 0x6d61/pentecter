@@ -478,6 +478,8 @@ func (m *Model) switchModel(provider brain.Provider, model string) {
 	if m.team != nil {
 		m.team.SetBrain(newBrain)
 	}
+	m.CurrentProvider = string(provider)
+	m.CurrentModel = model
 	msg := fmt.Sprintf("Switched to %s", provider)
 	if model != "" {
 		msg += "/" + model
@@ -489,6 +491,8 @@ func (m *Model) switchModel(provider brain.Provider, model string) {
 func (m *Model) logSystem(msg string) {
 	if t := m.activeTarget(); t != nil {
 		t.AddBlock(agent.NewSystemBlock(msg))
+	} else {
+		m.globalLogs = append(m.globalLogs, msg)
 	}
 	m.syncListItems()
 	m.rebuildViewport()

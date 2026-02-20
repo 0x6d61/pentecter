@@ -78,6 +78,13 @@ type Model struct {
 	// logsExpanded が true の場合、すべてのログ内容を折りたたまずに表示する。
 	logsExpanded bool
 
+	// Global system logs — shown when no target is active
+	globalLogs []string
+
+	// Current model info — displayed in status bar
+	CurrentProvider string
+	CurrentModel    string
+
 	// Select mode fields — used by /model, /approve to show interactive selection.
 	inputMode      InputMode
 	selectOptions  []SelectOption
@@ -225,7 +232,18 @@ func (m *Model) activeTarget() *agent.Target {
 func (m *Model) rebuildViewport() {
 	t := m.activeTarget()
 	if t == nil {
-		m.viewport.SetContent("  No target selected.\n\n  Add a target by entering an IP address:\n    e.g. 10.0.0.5 / /target example.com\n\n  Skills: /web-recon, /full-scan, /sqli-check")
+		var sb strings.Builder
+		sb.WriteString("  No target selected.\n\n")
+		sb.WriteString("  Add a target by entering an IP address:\n")
+		sb.WriteString("    e.g. 10.0.0.5 / /target example.com\n\n")
+		sb.WriteString("  Commands: /model, /approve, /curl, /ssh\n")
+		if len(m.globalLogs) > 0 {
+			sb.WriteString("\n")
+			for _, log := range m.globalLogs {
+				sb.WriteString("  [SYS] " + log + "\n")
+			}
+		}
+		m.viewport.SetContent(sb.String())
 		return
 	}
 
