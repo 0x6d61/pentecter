@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -137,7 +138,7 @@ func TestEvaluateResult_ExitCodeNonZero(t *testing.T) {
 		lastToolOutput: "some output",
 		events:         evCh,
 	}
-	l.evaluateResult()
+	l.evaluateResult(context.Background())
 	if l.consecutiveFailures != 1 {
 		t.Errorf("consecutiveFailures = %d, want 1 (exit code != 0 should count as failure)", l.consecutiveFailures)
 	}
@@ -151,7 +152,7 @@ func TestEvaluateResult_ExitCodeZero_SuccessfulOutput(t *testing.T) {
 		lastToolOutput: "PORT 80/tcp open http",
 		events:         evCh,
 	}
-	l.evaluateResult()
+	l.evaluateResult(context.Background())
 	if l.consecutiveFailures != 0 {
 		t.Errorf("consecutiveFailures = %d, want 0 (exit 0 + good output = success)", l.consecutiveFailures)
 	}
@@ -575,7 +576,7 @@ func TestEvaluateResult_ConsecutiveFailures_Reset(t *testing.T) {
 		consecutiveFailures: 2,
 		events:              evCh,
 	}
-	l.evaluateResult()
+	l.evaluateResult(context.Background())
 	if l.consecutiveFailures != 3 {
 		t.Errorf("consecutiveFailures: got %d, want 3", l.consecutiveFailures)
 	}
@@ -583,7 +584,7 @@ func TestEvaluateResult_ConsecutiveFailures_Reset(t *testing.T) {
 	// 成功でリセット
 	l.lastExitCode = 0
 	l.lastToolOutput = "PORT 80 open"
-	l.evaluateResult()
+	l.evaluateResult(context.Background())
 	if l.consecutiveFailures != 0 {
 		t.Errorf("consecutiveFailures after success: got %d, want 0", l.consecutiveFailures)
 	}
@@ -598,7 +599,7 @@ func TestEvaluateResult_SignalB_FailedOutputPattern(t *testing.T) {
 		lastToolOutput: "0 hosts up", // Signal B: failure pattern
 		events:         evCh,
 	}
-	l.evaluateResult()
+	l.evaluateResult(context.Background())
 	if l.consecutiveFailures != 1 {
 		t.Errorf("consecutiveFailures: got %d, want 1 (Signal B should detect failure)", l.consecutiveFailures)
 	}
@@ -613,7 +614,7 @@ func TestEvaluateResult_EmptyOutput_Failure(t *testing.T) {
 		lastToolOutput: "",
 		events:         evCh,
 	}
-	l.evaluateResult()
+	l.evaluateResult(context.Background())
 	if l.consecutiveFailures != 1 {
 		t.Errorf("consecutiveFailures: got %d, want 1 (empty output = failure)", l.consecutiveFailures)
 	}

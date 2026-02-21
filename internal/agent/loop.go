@@ -260,7 +260,7 @@ func (l *Loop) Run(ctx context.Context) {
 		switch action.Action {
 		case schema.ActionRun:
 			l.runCommand(ctx, action.Command)
-			l.evaluateResult()
+			l.evaluateResult(ctx)
 
 		case schema.ActionPropose:
 			if !l.handlePropose(ctx, action.Command, action.Thought) {
@@ -272,7 +272,7 @@ func (l *Loop) Run(ctx context.Context) {
 
 		case schema.ActionCallMCP:
 			l.callMCP(ctx, action)
-			l.evaluateResult()
+			l.evaluateResult(ctx)
 
 		case schema.ActionSpawnTask:
 			l.handleSpawnTask(ctx, action)
@@ -540,7 +540,7 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
 // 2つのシグナルで判定: exit code, 出力パターン。
 // ReconTree が有効な場合、ツール出力をパースして偵察状態を更新する。
-func (l *Loop) evaluateResult() {
+func (l *Loop) evaluateResult(ctx context.Context) {
 	failed := l.lastExitCode != 0
 
 	// Signal B: 出力パターンマッチ
@@ -580,18 +580,16 @@ func (l *Loop) evaluateResult() {
 			}
 		}
 
-		// パース前のポート数を記録（自動 spawn 判定用）
-		portsBefore := l.reconTree.PortCount()
-
 		if err := DetectAndParse(l.lastCommand, parseOutput, l.reconTree, l.target.Host); err != nil {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
 				Message: fmt.Sprintf("ReconTree parse warning: %v", err)})
 		}
 
-		// リアクティブ spawn: 新規 HTTP ポートが検出されたら SubAgent を自動起動
+		// リアクティブ spawn: Pending な HTTP ポートがあれば SubAgent を自動起動
+		// 新規追加ポートと非HTTP→HTTP 更新ポートの両方を検出する
 		if l.reconRunner != nil {
-			for _, port := range l.reconTree.NewHTTPPortsSince(portsBefore) {
-				l.reconRunner.SpawnWebReconForPort(context.Background(), port)
+			for _, port := range l.reconTree.PendingHTTPPorts() {
+				l.reconRunner.SpawnWebReconForPort(ctx, port)
 			}
 		}
 

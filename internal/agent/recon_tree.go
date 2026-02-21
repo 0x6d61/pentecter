@@ -785,15 +785,13 @@ func (t *ReconTree) PortCount() int {
 	return len(t.Ports)
 }
 
-// NewHTTPPortsSince は index 以降の新規 HTTP ポートを返す。
-func (t *ReconTree) NewHTTPPortsSince(startIdx int) []*ReconNode {
+// PendingHTTPPorts は EndpointEnum == StatusPending の全 HTTP ポートを返す。
+// 新規追加ポートと、非HTTP→HTTP に更新されたポートの両方を検出する。
+func (t *ReconTree) PendingHTTPPorts() []*ReconNode {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if startIdx >= len(t.Ports) {
-		return nil
-	}
 	var result []*ReconNode
-	for _, port := range t.Ports[startIdx:] {
+	for _, port := range t.Ports {
 		if port.isHTTP() && port.EndpointEnum == StatusPending {
 			result = append(result, port)
 		}
