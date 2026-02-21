@@ -703,18 +703,7 @@ func (t *ReconTree) RenderIntel() string {
 				}
 			}
 			if status == "not tested" {
-				// Check if all tasks are complete
-				allComplete := true
-				anyTask := false
-				for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-					st := node.getReconStatus(tt)
-					if st != StatusNone {
-						anyTask = true
-						if st != StatusComplete {
-							allComplete = false
-						}
-					}
-				}
+				anyTask, allComplete := nodeTreeTaskStatus(node)
 				if anyTask && allComplete {
 					status = "recon complete"
 				} else if anyTask {
@@ -730,6 +719,32 @@ func (t *ReconTree) RenderIntel() string {
 	}
 
 	return sb.String()
+}
+
+// nodeTreeTaskStatus はノードとその子を再帰的に走査し、
+// タスクが1つでもあるか (anyTask) と、すべて完了か (allComplete) を返す。
+func nodeTreeTaskStatus(node *ReconNode) (anyTask, allComplete bool) {
+	allComplete = true
+	taskTypes := []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov}
+	for _, tt := range taskTypes {
+		st := node.getReconStatus(tt)
+		if st != StatusNone {
+			anyTask = true
+			if st != StatusComplete {
+				allComplete = false
+			}
+		}
+	}
+	for _, child := range node.Children {
+		childAny, childAll := nodeTreeTaskStatus(child)
+		if childAny {
+			anyTask = true
+			if !childAll {
+				allComplete = false
+			}
+		}
+	}
+	return
 }
 
 // renderNodeFindings はノードとその子の findings を再帰的にレンダリングする。

@@ -931,3 +931,22 @@ func TestRenderIntel_AttackSurface(t *testing.T) {
 		t.Errorf("ssh should show 'not tested'\noutput:\n%s", output)
 	}
 }
+
+func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	// ポートレベルのタスクを complete にする
+	tree.CompleteTask("10.10.11.100", 80, "/", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/", TaskVhostDiscov)
+	// 子エンドポイントを追加（ParamFuzz が Pending のまま）
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/admin")
+
+	output := tree.RenderIntel()
+	// 子に pending タスクがあるのでまだ "recon complete" にならない
+	if strings.Contains(output, "recon complete") {
+		t.Errorf("should NOT show 'recon complete' when child has pending tasks\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "recon pending") {
+		t.Errorf("should show 'recon pending' when child has pending tasks\noutput:\n%s", output)
+	}
+}
