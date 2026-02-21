@@ -549,3 +549,28 @@ func TestExtractDomainFromFfufCmd_NoFUZZ(t *testing.T) {
 		t.Errorf("extractDomainFromFfufCmd = %q, want 'unknown'", got)
 	}
 }
+
+// --- ExtractFfufOutputPath テスト ---
+
+func TestExtractFfufOutputPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"basic -o flag", `ffuf -w wordlist -u http://10.10.11.100/FUZZ -o /tmp/out.json -of json`, "/tmp/out.json"},
+		{"quoted path", `ffuf -w wordlist -o "/tmp/ffuf_out.json" -u http://10.10.11.100/FUZZ`, "/tmp/ffuf_out.json"},
+		{"single quoted", `ffuf -w wordlist -o '/tmp/out.json' -u http://10.10.11.100/FUZZ`, "/tmp/out.json"},
+		{"no -o flag", `ffuf -w wordlist -u http://10.10.11.100/FUZZ -of json`, ""},
+		{"not ffuf", `nmap -p- -oX - 10.10.11.100`, ""},
+		{"-of is not -o", `ffuf -w wordlist -u http://10.10.11.100/FUZZ -of json`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractFfufOutputPath(tt.command)
+			if got != tt.want {
+				t.Errorf("ExtractFfufOutputPath(%q) = %q, want %q", tt.command, got, tt.want)
+			}
+		})
+	}
+}

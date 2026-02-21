@@ -353,6 +353,23 @@ func (t *ReconTree) FinishTask(task *ReconTask) {
 	}
 }
 
+// CompleteAllPortTasks は指定ポートの InProgress な全タスクを Complete にする。
+// SubAgent がポート単位で全 recon を担当するため、完了時に一括で更新する。
+func (t *ReconTree) CompleteAllPortTasks(port int) {
+	for _, node := range t.Ports {
+		if node.Port == port {
+			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+				if node.getReconStatus(tt) == StatusInProgress {
+					node.setReconStatus(tt, StatusComplete)
+					if t.active > 0 {
+						t.active--
+					}
+				}
+			}
+		}
+	}
+}
+
 // findNode はホスト/ポート/パスでノードを検索する。
 // path が "/" かつポートノードの Path が "" の場合はポートノード自身を返す（ルート扱い）。
 func (t *ReconTree) findNode(host string, port int, path string) *ReconNode {

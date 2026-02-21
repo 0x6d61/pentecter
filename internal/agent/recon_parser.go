@@ -293,6 +293,22 @@ func parseCurlCommand(command string) (port int, curlPath string) {
 	return 0, ""
 }
 
+// ExtractFfufOutputPath は ffuf コマンドから -o フラグの出力ファイルパスを抽出する。
+// ffuf でなければ、または -o がなければ空文字を返す。
+// -of（output format）は -o とは別フラグなので混同しない。
+func ExtractFfufOutputPath(command string) string {
+	if !strings.Contains(strings.ToLower(command), "ffuf") {
+		return ""
+	}
+	parts := strings.Fields(command)
+	for i, p := range parts {
+		if p == "-o" && i+1 < len(parts) {
+			return strings.Trim(parts[i+1], `"'`)
+		}
+	}
+	return ""
+}
+
 // extractURLFromFlag はコマンドから指定フラグの値を抽出する。
 func extractURLFromFlag(command string, flag string) string {
 	parts := strings.Fields(command)

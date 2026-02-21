@@ -675,3 +675,121 @@ func TestFindNode_VhostChild(t *testing.T) {
 		t.Errorf("child Profiling = %d, want complete(%d)", child.Profiling, StatusComplete)
 	}
 }
+
+// --- CompleteAllPortTasks テスト ---
+
+func TestCompleteAllPortTasks_Basic(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	// StartTask で全タスクを InProgress にする
+	node := tree.Ports[0]
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+		task := &ReconTask{Type: tt, Node: node, Host: node.Host, Port: node.Port}
+		tree.StartTask(task)
+	}
+
+	if tree.active != 4 {
+		t.Fatalf("active = %d, want 4", tree.active)
+	}
+
+	// CompleteAllPortTasks で全タスクを Complete にする
+	tree.CompleteAllPortTasks(80)
+
+	// active が 0 になること
+	if tree.active != 0 {
+		t.Errorf("active = %d, want 0 after CompleteAllPortTasks", tree.active)
+	}
+
+	// 全タスクが Complete であること
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+		if node.getReconStatus(tt) != StatusComplete {
+			t.Errorf("task %v status = %d, want complete", tt, node.getReconStatus(tt))
+		}
+	}
+}
+
+func TestCompleteAllPortTasks_OnlyInProgress(t *testing.T) {
+	// InProgress のタスクのみ Complete にし、Pending はスキップすること
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	node := tree.Ports[0]
+	// EndpointEnum だけ InProgress にする
+	task := &ReconTask{Type: TaskEndpointEnum, Node: node, Host: node.Host, Port: node.Port}
+	tree.StartTask(task)
+
+	if tree.active != 1 {
+		t.Fatalf("active = %d, want 1", tree.active)
+	}
+
+	tree.CompleteAllPortTasks(80)
+
+	// active が 0 になること
+	if tree.active != 0 {
+		t.Errorf("active = %d, want 0", tree.active)
+	}
+
+	// EndpointEnum は Complete
+	if node.EndpointEnum != StatusComplete {
+		t.Errorf("EndpointEnum = %d, want complete", node.EndpointEnum)
+	}
+
+	// VhostDiscov は元の Pending のまま（HTTP ポートは Pending で追加される）
+	if node.VhostDiscov != StatusPending {
+		t.Errorf("VhostDiscov = %d, want pending (unchanged)", node.VhostDiscov)
+	}
+}
+
+func TestCompleteAllPortTasks_NoMatchingPort(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	node := tree.Ports[0]
+	task := &ReconTask{Type: TaskEndpointEnum, Node: node, Host: node.Host, Port: node.Port}
+	tree.StartTask(task)
+
+	// 存在しないポートを指定 → 何も変わらない
+	tree.CompleteAllPortTasks(443)
+
+	if tree.active != 1 {
+		t.Errorf("active = %d, want 1 (no matching port)", tree.active)
+	}
+	if node.EndpointEnum != StatusInProgress {
+		t.Errorf("EndpointEnum = %d, want in_progress (unchanged)", node.EndpointEnum)
+	}
+}
+
+func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 4)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(443, "https", "nginx")
+
+	// 両方の EndpointEnum を InProgress にする
+	for _, node := range tree.Ports {
+		task := &ReconTask{Type: TaskEndpointEnum, Node: node, Host: node.Host, Port: node.Port}
+		tree.StartTask(task)
+	}
+
+	if tree.active != 2 {
+		t.Fatalf("active = %d, want 2", tree.active)
+	}
+
+	// port 80 だけ Complete にする
+	tree.CompleteAllPortTasks(80)
+
+	// active は 1（port 443 の分だけ残る）
+	if tree.active != 1 {
+		t.Errorf("active = %d, want 1", tree.active)
+	}
+
+	// port 80 は Complete
+	if tree.Ports[0].EndpointEnum != StatusComplete {
+		t.Errorf("port 80 EndpointEnum = %d, want complete", tree.Ports[0].EndpointEnum)
+	}
+
+	// port 443 は InProgress のまま
+	if tree.Ports[1].EndpointEnum != StatusInProgress {
+		t.Errorf("port 443 EndpointEnum = %d, want in_progress", tree.Ports[1].EndpointEnum)
+	}
+}
