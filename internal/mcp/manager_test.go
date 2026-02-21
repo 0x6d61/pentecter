@@ -263,6 +263,198 @@ func TestManager_Close(t *testing.T) {
 	}
 }
 
+func TestManager_NewManager_InvalidYAML(t *testing.T) {
+	// 不正な YAML ファイルの場合はエラーを返す
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.yaml")
+	if err := os.WriteFile(path, []byte("{{{invalid yaml"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(path)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML config")
+	}
+	if m != nil {
+		t.Error("expected nil manager on error")
+	}
+}
+
+func TestManager_StartAllWithClients_InitializeFailure(t *testing.T) {
+	// Initialize が失敗するサーバーは除外されてエラーにならない
+	configs := []ServerConfig{
+		{Name: "failing-server", Command: "echo"},
+		{Name: "ok-server", Command: "echo"},
+	}
+	mgr, pairs := newTestManager(t, configs)
+	defer func() {
+		for _, p := range pairs {
+			p.mock.close()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- mgr.startAllWithClients(ctx)
+	}()
+
+	// failing-server: initialize リクエストを読み取ってエラーレスポンスを返す
+	req1 := pairs[0].mock.readRequest(t)
+	pairs[0].mock.writeErrorResponse(t, req1.ID, -32600, "initialization failed")
+
+	// ok-server: 正常に処理
+	req2 := pairs[1].mock.readRequest(t)
+	pairs[1].mock.writeResponse(t, req2.ID, map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities":    map[string]any{},
+		"serverInfo":      map[string]any{"name": "ok", "version": "1.0"},
+	})
+	notif := pairs[1].mock.readNotification(t)
+	if notif["method"] != "notifications/initialized" {
+		t.Fatalf("expected notifications/initialized, got '%v'", notif["method"])
+	}
+	req3 := pairs[1].mock.readRequest(t)
+	pairs[1].mock.writeResponse(t, req3.ID, map[string]any{
+		"tools": []map[string]any{
+			{"name": "ok_tool", "description": "works", "inputSchema": map[string]any{"type": "object"}},
+		},
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("startAllWithClients returned error: %v", err)
+	}
+
+	// failing-server はクライアントから除外されていること
+	if _, ok := mgr.clients["failing-server"]; ok {
+		t.Error("expected failing-server to be removed from clients")
+	}
+
+	// ok-server のツールは登録されていること
+	tools := mgr.ListAllTools()
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	if tools[0].Name != "ok_tool" {
+		t.Errorf("expected tool 'ok_tool', got '%s'", tools[0].Name)
+	}
+	if tools[0].Server != "ok-server" {
+		t.Errorf("expected server 'ok-server', got '%s'", tools[0].Server)
+	}
+}
+
+func TestManager_StartAllWithClients_ListToolsFailure(t *testing.T) {
+	// Initialize は成功するが ListTools が失敗するサーバー
+	configs := []ServerConfig{
+		{Name: "list-fail-server", Command: "echo"},
+	}
+	mgr, pairs := newTestManager(t, configs)
+	defer func() {
+		for _, p := range pairs {
+			p.mock.close()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- mgr.startAllWithClients(ctx)
+	}()
+
+	mock := pairs[0].mock
+
+	// Initialize: 正常処理
+	req := mock.readRequest(t)
+	mock.writeResponse(t, req.ID, map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities":    map[string]any{},
+		"serverInfo":      map[string]any{"name": "test", "version": "1.0"},
+	})
+	_ = mock.readNotification(t)
+
+	// ListTools: エラーレスポンスを返す
+	req = mock.readRequest(t)
+	mock.writeErrorResponse(t, req.ID, -32601, "tools/list not supported")
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("startAllWithClients returned error: %v", err)
+	}
+
+	// サーバーはクライアントから除外されていること
+	if _, ok := mgr.clients["list-fail-server"]; ok {
+		t.Error("expected list-fail-server to be removed from clients")
+	}
+
+	// ツールは登録されていないこと
+	tools := mgr.ListAllTools()
+	if len(tools) != 0 {
+		t.Errorf("expected 0 tools, got %d", len(tools))
+	}
+}
+
+func TestManager_StartAllWithClients_MissingClient(t *testing.T) {
+	// configs にあるがクライアントが注入されていないサーバーはスキップされる
+	configs := []ServerConfig{
+		{Name: "missing-server", Command: "echo"},
+	}
+	mgr := &MCPManager{
+		clients: make(map[string]*MCPClient), // 空: クライアントなし
+		configs: configs,
+		tools:   make(map[string][]ToolSchema),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := mgr.startAllWithClients(ctx)
+	if err != nil {
+		t.Fatalf("startAllWithClients returned error: %v", err)
+	}
+
+	// ツールは登録されていないこと
+	tools := mgr.ListAllTools()
+	if len(tools) != 0 {
+		t.Errorf("expected 0 tools, got %d", len(tools))
+	}
+}
+
+func TestManager_Close_NoClients(t *testing.T) {
+	// クライアントがない場合の Close
+	mgr := &MCPManager{
+		clients: make(map[string]*MCPClient),
+		configs: nil,
+		tools:   make(map[string][]ToolSchema),
+	}
+
+	err := mgr.Close()
+	if err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestManager_Close_MultipleClients(t *testing.T) {
+	// 複数クライアントが正常に Close されること
+	configs := []ServerConfig{
+		{Name: "server-a", Command: "echo"},
+		{Name: "server-b", Command: "echo"},
+	}
+	mgr, _ := newTestManager(t, configs)
+
+	err := mgr.Close()
+	if err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	// Close 後はクライアントが空になっていること
+	if len(mgr.clients) != 0 {
+		t.Errorf("expected 0 clients after Close, got %d", len(mgr.clients))
+	}
+}
+
 func TestManager_StartAll_WithMock(t *testing.T) {
 	// StartAll がイニシャライズとツール一覧取得を行うことを確認
 	configs := []ServerConfig{

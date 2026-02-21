@@ -4,11 +4,42 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
 )
+
+// failWriter は常にエラーを返す io.WriteCloser（sendRequest の Write 失敗テスト用）
+type failWriter struct{}
+
+func (fw *failWriter) Write(p []byte) (int, error) {
+	return 0, fmt.Errorf("write error: pipe broken")
+}
+
+func (fw *failWriter) Close() error {
+	return nil
+}
+
+// countingWriter は指定回数後に Write がエラーになる io.WriteCloser
+type countingWriter struct {
+	w         io.WriteCloser
+	count     int
+	failAfter int // この回数 Write が成功した後にエラーを返す
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	cw.count++
+	if cw.count > cw.failAfter {
+		return 0, fmt.Errorf("write error: simulated failure after %d writes", cw.failAfter)
+	}
+	return cw.w.Write(p)
+}
+
+func (cw *countingWriter) Close() error {
+	return cw.w.Close()
+}
 
 // mockMCPServer はテスト用のモック MCP サーバーをシミュレートする。
 // クライアントの stdin に書き込まれた JSON-RPC リクエストを読み取り、
@@ -494,6 +525,355 @@ func TestClient_SkipNonJSONBanner(t *testing.T) {
 	}
 	if tools[0].Name != "search_hacktricks" {
 		t.Errorf("expected tool name 'search_hacktricks', got '%s'", tools[0].Name)
+	}
+}
+
+// --- 追加テスト: エラーパスと閉じた接続のカバレッジ向上 ---
+
+func TestClient_Initialize_Closed(t *testing.T) {
+	// Close 済みクライアントで Initialize を呼ぶとエラー
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+
+	client.Close()
+
+	ctx := context.Background()
+	err := client.Initialize(ctx)
+	if err == nil {
+		t.Fatal("expected error when Initialize on closed client")
+	}
+	if !strings.Contains(err.Error(), "client is closed") {
+		t.Errorf("expected 'client is closed' error, got: %v", err)
+	}
+}
+
+func TestClient_Initialize_SendRequestError(t *testing.T) {
+	// sendRequest が失敗する場合（サーバーがリクエスト読み取り後に stdout を閉じる → EOF）
+	mock, client := newMockMCPServer(t)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Initialize(ctx)
+	}()
+
+	// リクエストを読み取ってからレスポンスを返さずに stdout を閉じる → unexpected EOF
+	_ = mock.readRequest(t)
+	mock.clientStdoutWriter.Close()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error when server closes stdout without response")
+	}
+	if !strings.Contains(err.Error(), "initialize failed") {
+		t.Errorf("expected 'initialize failed' error, got: %v", err)
+	}
+}
+
+func TestClient_Initialize_NotificationWriteError(t *testing.T) {
+	// Initialize の sendRequest は成功するが、sendNotification が失敗するケース
+	// countingWriter を使って最初の Write（sendRequest）は成功し、
+	// 2回目の Write（sendNotification）で失敗させる
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	cw := &countingWriter{w: stdinWriter, failAfter: 1}
+	client := newClientFromPipes(cw, stdoutReader)
+	defer client.Close()
+	defer stdinReader.Close()
+	defer stdoutWriter.Close()
+
+	scanner := bufio.NewScanner(stdinReader)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Initialize(ctx)
+	}()
+
+	// initialize リクエストを読み取る
+	if !scanner.Scan() {
+		t.Fatal("failed to read request from stdin")
+	}
+	var req jsonRPCRequest
+	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	// initialize レスポンスを返す
+	resultBytes, _ := json.Marshal(map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities":    map[string]any{},
+		"serverInfo":      map[string]any{"name": "test", "version": "1.0"},
+	})
+	resp := jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  json.RawMessage(resultBytes),
+	}
+	data, _ := json.Marshal(resp)
+	data = append(data, '\n')
+	if _, err := stdoutWriter.Write(data); err != nil {
+		t.Fatalf("failed to write response: %v", err)
+	}
+
+	// sendNotification の Write が失敗する → Initialize がエラーを返すことを確認
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error when notification write fails")
+	}
+	if !strings.Contains(err.Error(), "failed to send initialized notification") {
+		t.Errorf("expected notification failure error, got: %v", err)
+	}
+}
+
+func TestClient_ListTools_Closed(t *testing.T) {
+	// Close 済みクライアントで ListTools を呼ぶとエラー
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+
+	client.Close()
+
+	ctx := context.Background()
+	_, err := client.ListTools(ctx)
+	if err == nil {
+		t.Fatal("expected error when ListTools on closed client")
+	}
+	if !strings.Contains(err.Error(), "client is closed") {
+		t.Errorf("expected 'client is closed' error, got: %v", err)
+	}
+}
+
+func TestClient_ListTools_InvalidJSON(t *testing.T) {
+	// tools/list レスポンスの JSON が不正な場合
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		errCh <- err
+	}()
+
+	req := mock.readRequest(t)
+	// tools フィールドが不正な型のレスポンスを返す
+	// json.Unmarshal が失敗するようにする
+	mock.writeResponse(t, req.ID, "not-a-valid-tools-response")
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error for invalid tools/list response JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse tools/list response") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+func TestClient_CallTool_Closed(t *testing.T) {
+	// Close 済みクライアントで CallTool を呼ぶとエラー
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+
+	client.Close()
+
+	ctx := context.Background()
+	_, err := client.CallTool(ctx, "tool", nil)
+	if err == nil {
+		t.Fatal("expected error when CallTool on closed client")
+	}
+	if !strings.Contains(err.Error(), "client is closed") {
+		t.Errorf("expected 'client is closed' error, got: %v", err)
+	}
+}
+
+func TestClient_CallTool_NilArgs(t *testing.T) {
+	// args が nil の場合、arguments フィールドが含まれないことを確認
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.CallTool(ctx, "my_tool", nil)
+		errCh <- err
+	}()
+
+	req := mock.readRequest(t)
+	// params を検証: arguments フィールドがないこと
+	paramsBytes, _ := json.Marshal(req.Params)
+	var params map[string]any
+	json.Unmarshal(paramsBytes, &params)
+	if _, hasArgs := params["arguments"]; hasArgs {
+		t.Error("expected no 'arguments' field when args is nil")
+	}
+	if params["name"] != "my_tool" {
+		t.Errorf("expected tool name 'my_tool', got '%v'", params["name"])
+	}
+
+	mock.writeResponse(t, req.ID, map[string]any{
+		"content": []map[string]any{
+			{"type": "text", "text": "ok"},
+		},
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("CallTool returned error: %v", err)
+	}
+}
+
+func TestClient_CallTool_InvalidResponseJSON(t *testing.T) {
+	// tools/call レスポンスの JSON パースが失敗する場合
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.CallTool(ctx, "tool", nil)
+		errCh <- err
+	}()
+
+	req := mock.readRequest(t)
+	// CallResult にアンマーシャルできないレスポンスを返す
+	mock.writeResponse(t, req.ID, "invalid-call-result")
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error for invalid call result JSON")
+	}
+	if !strings.Contains(err.Error(), "failed to parse tools/call response") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+func TestClient_Close_Idempotent(t *testing.T) {
+	// Close を複数回呼んでもエラーにならない
+	mock, client := newMockMCPServer(t)
+	_ = mock
+
+	err := client.Close()
+	if err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+
+	err = client.Close()
+	if err != nil {
+		t.Fatalf("second Close returned error: %v", err)
+	}
+}
+
+func TestClient_SendRequest_WriteError(t *testing.T) {
+	// stdin への書き込みが失敗する場合
+	// 壊れた writer を注入してテスト
+	_, stdoutWriter := io.Pipe()
+	stdoutReader2, _ := io.Pipe()
+
+	client := newClientFromPipes(&failWriter{}, stdoutReader2)
+	defer client.Close()
+	defer stdoutWriter.Close()
+	defer stdoutReader2.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := client.ListTools(ctx)
+	if err == nil {
+		t.Fatal("expected error when stdin write fails")
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Errorf("expected write failure error, got: %v", err)
+	}
+}
+
+func TestClient_SendRequest_ServerEOF(t *testing.T) {
+	// サーバーが応答前に stdout を閉じた場合（unexpected EOF）
+	mock, client := newMockMCPServer(t)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		errCh <- err
+	}()
+
+	// リクエストを読み取ってから stdout を閉じる
+	_ = mock.readRequest(t)
+	mock.clientStdoutWriter.Close()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error when server closes stdout")
+	}
+	// "unexpected EOF" or similar error
+	if !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "failed") {
+		t.Errorf("expected EOF-related error, got: %v", err)
+	}
+}
+
+func TestClient_SendRequest_InvalidJSONResponse(t *testing.T) {
+	// サーバーが不正な JSON を返した場合
+	mock, client := newMockMCPServer(t)
+	defer mock.close()
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		errCh <- err
+	}()
+
+	_ = mock.readRequest(t)
+	// 不正な JSON を直接書き込む（{ で始まるが JSON としては不正）
+	invalidJSON := []byte("{invalid json\n")
+	if _, err := mock.clientStdoutWriter.Write(invalidJSON); err != nil {
+		t.Fatalf("failed to write invalid JSON: %v", err)
+	}
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error for invalid JSON response")
+	}
+	if !strings.Contains(err.Error(), "failed to parse response") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+func TestClient_SendNotification_WriteError(t *testing.T) {
+	// sendNotification の stdin.Write が失敗するケース
+	// failWriter を使って書き込みエラーを再現する
+	stdoutReader, _ := io.Pipe()
+
+	client := newClientFromPipes(&failWriter{}, stdoutReader)
+	defer client.Close()
+	defer stdoutReader.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// ListTools → sendRequest → stdin.Write が失敗する
+	_, err := client.ListTools(ctx)
+	if err == nil {
+		t.Fatal("expected error when stdin write fails")
 	}
 }
 

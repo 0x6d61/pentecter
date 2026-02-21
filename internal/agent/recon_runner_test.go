@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -274,3 +275,91 @@ func TestBuildWebReconPrompt_Phase2Instructions(t *testing.T) {
 	}
 }
 
+
+// --- Run() ラッパーのカバレッジ ---
+
+func TestReconRunner_Run(t *testing.T) {
+	// Run() は RunInitialScans + SpawnWebRecon を呼ぶ。
+	// echo で nmap XML を出力 → ツリーにポートが追加されることを確認。
+	// TaskMgr は nil なので SpawnWebRecon はスキップされる。
+	tree := NewReconTree("10.10.11.100", 2)
+	events := make(chan Event, 100)
+
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:         tree,
+		Events:       events,
+		InitialScans: []string{"echo '<nmaprun><host><ports><port protocol=\"tcp\" portid=\"8080\"><state state=\"open\"/><service name=\"http\" product=\"Jetty\"/></port></ports></host></nmaprun>'"},
+		TargetHost:   "10.10.11.100",
+		// TaskMgr は nil → SpawnWebRecon はスキップ
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rr.Run(ctx)
+
+	// nmap XML パースで port 8080 が追加される
+	if len(tree.Ports) != 1 {
+		t.Fatalf("Ports count = %d, want 1", len(tree.Ports))
+	}
+	if tree.Ports[0].Port != 8080 {
+		t.Errorf("Port = %d, want 8080", tree.Ports[0].Port)
+	}
+	if tree.Ports[0].Service != "http" {
+		t.Errorf("Service = %q, want http", tree.Ports[0].Service)
+	}
+
+	// TaskMgr nil → SpawnWebRecon がスキップログを出すこと
+	foundSkip := false
+	for len(events) > 0 {
+		e := <-events
+		if strings.Contains(e.Message, "TaskManager not configured") {
+			foundSkip = true
+			break
+		}
+	}
+	if !foundSkip {
+		t.Error("Run() should emit TaskManager not configured message via SpawnWebRecon")
+	}
+}
+
+// --- RunInitialScans raw output 保存のカバレッジ ---
+
+func TestReconRunner_RunInitialScans_RawOutput(t *testing.T) {
+	// memDir を設定して RunInitialScans を実行し、raw output ファイルが保存されることを確認
+	tree := NewReconTree("10.10.11.100", 2)
+	events := make(chan Event, 100)
+	tmpDir := t.TempDir()
+
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:         tree,
+		Events:       events,
+		InitialScans: []string{"echo '<nmaprun><host><ports><port protocol=\"tcp\" portid=\"22\"><state state=\"open\"/><service name=\"ssh\" product=\"OpenSSH\" version=\"8.2\"/></port></ports></host></nmaprun>'"},
+		TargetHost:   "10.10.11.100",
+		MemDir:       tmpDir,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rr.RunInitialScans(ctx)
+
+	// ポートが追加されたこと
+	if len(tree.Ports) != 1 {
+		t.Fatalf("Ports count = %d, want 1", len(tree.Ports))
+	}
+	if tree.Ports[0].Port != 22 {
+		t.Errorf("Port = %d, want 22", tree.Ports[0].Port)
+	}
+
+	// raw output ファイルが保存されたこと（SaveRawOutput は <host>/raw/ 配下にファイルを作る）
+	// ファイルが存在するかどうかを確認
+	rawDir := tmpDir + "/10.10.11.100/raw"
+	entries, err := os.ReadDir(rawDir)
+	if err != nil {
+		t.Fatalf("failed to read raw output dir %q: %v", rawDir, err)
+	}
+	if len(entries) == 0 {
+		t.Errorf("raw output dir %q is empty, expected at least 1 file", rawDir)
+	}
+}

@@ -184,6 +184,20 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ReadError(t *testing.T) {
+	// ファイルが存在するが読み取りエラーが発生する場合（例: ディレクトリを読もうとする）
+	dir := t.TempDir()
+	// ディレクトリパスを config として読もうとする → os.ErrNotExist 以外のエラー
+	_, err := LoadConfig(dir)
+	if err == nil {
+		t.Fatal("expected error when reading a directory as config file")
+	}
+	// エラーが返され、nil でないことを確認（os.ErrNotExist とは異なるパス）
+	if err.Error() == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
 func TestLoadConfig_EmptyServers(t *testing.T) {
 	// servers が空配列の場合も正常に読み込めること
 	dir := t.TempDir()

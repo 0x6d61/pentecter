@@ -528,3 +528,78 @@ func TestTarget_ConcurrentEntityAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+// --- GetReconTree / SetReconTree テスト ---
+
+func TestTarget_GetReconTree_Nil(t *testing.T) {
+	// 新しい Target は ReconTree が nil であること
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	rt := tgt.GetReconTree()
+	if rt != nil {
+		t.Errorf("GetReconTree on new target: got %v, want nil", rt)
+	}
+}
+
+func TestTarget_SetReconTree(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	// ReconTree を設定して取得
+	rt := agent.NewReconTree("10.0.0.1", 2)
+	rt.AddPort(80, "http", "Apache 2.4.49")
+
+	tgt.SetReconTree(rt)
+
+	got := tgt.GetReconTree()
+	if got == nil {
+		t.Fatal("GetReconTree after SetReconTree: got nil, want non-nil")
+	}
+	if got.Host != "10.0.0.1" {
+		t.Errorf("GetReconTree().Host: got %q, want %q", got.Host, "10.0.0.1")
+	}
+	if len(got.Ports) != 1 {
+		t.Errorf("GetReconTree().Ports: got %d, want 1", len(got.Ports))
+	}
+
+	// nil で上書きできること
+	tgt.SetReconTree(nil)
+	if got := tgt.GetReconTree(); got != nil {
+		t.Errorf("GetReconTree after SetReconTree(nil): got %v, want nil", got)
+	}
+}
+
+func TestTarget_GetReconTree_ConcurrentAccess(t *testing.T) {
+	tgt := agent.NewTarget(1, "10.0.0.1")
+
+	var wg sync.WaitGroup
+
+	// Writer goroutines: 交互に ReconTree を設定・nil 化
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				if j%2 == 0 {
+					rt := agent.NewReconTree("10.0.0.1", 2)
+					tgt.SetReconTree(rt)
+				} else {
+					tgt.SetReconTree(nil)
+				}
+			}
+		}(i)
+	}
+
+	// Reader goroutines: 同時に読み取り
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = tgt.GetReconTree()
+			}
+		}()
+	}
+
+	wg.Wait()
+	// race detector でパニックしなければテスト通過
+}

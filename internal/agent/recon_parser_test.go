@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"net/url"
 	"testing"
 )
 
@@ -441,5 +442,110 @@ func TestCompareBaseline_MultipleAnomalies(t *testing.T) {
 	}
 	if !types["time_change"] {
 		t.Error("missing time_change anomaly")
+	}
+}
+
+// --- portFromURL カバレッジ ---
+
+func TestPortFromURL_ExplicitPort(t *testing.T) {
+	// 明示的なポート番号がある場合はそれを返す
+	u, err := url.Parse("http://host:8080/path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := portFromURL(u)
+	if got != 8080 {
+		t.Errorf("portFromURL(%q) = %d, want 8080", u.String(), got)
+	}
+}
+
+func TestPortFromURL_HTTPS(t *testing.T) {
+	// HTTPS でポート未指定 → 443
+	u, err := url.Parse("https://host/path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := portFromURL(u)
+	if got != 443 {
+		t.Errorf("portFromURL(%q) = %d, want 443", u.String(), got)
+	}
+}
+
+func TestPortFromURL_HTTP(t *testing.T) {
+	// HTTP でポート未指定 → 80
+	u, err := url.Parse("http://host/path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := portFromURL(u)
+	if got != 80 {
+		t.Errorf("portFromURL(%q) = %d, want 80", u.String(), got)
+	}
+}
+
+func TestPortFromURL_HTTPSWithPort(t *testing.T) {
+	// HTTPS + 明示ポート → 明示ポートが優先される
+	u, err := url.Parse("https://host:9443/path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := portFromURL(u)
+	if got != 9443 {
+		t.Errorf("portFromURL(%q) = %d, want 9443", u.String(), got)
+	}
+}
+
+// --- parseFfufCommand カバレッジ ---
+
+func TestParseFfufCommand_ParamFuzz(t *testing.T) {
+	// "?FUZZ=" を含むコマンド → TaskParamFuzz
+	cmd := `ffuf -w /usr/share/seclists/params.txt -u "http://10.10.11.100/api?FUZZ=value" -of json`
+	port, parentPath, taskType := parseFfufCommand(cmd)
+
+	if taskType != TaskParamFuzz {
+		t.Errorf("taskType = %v, want TaskParamFuzz(%v)", taskType, TaskParamFuzz)
+	}
+	if port != 80 {
+		t.Errorf("port = %d, want 80", port)
+	}
+	if parentPath != "/api" {
+		t.Errorf("parentPath = %q, want /api", parentPath)
+	}
+}
+
+// --- parseCurlCommand カバレッジ ---
+
+func TestParseCurlCommand_WithPort(t *testing.T) {
+	// 非標準ポートの curl コマンド
+	cmd := `curl -isk https://10.10.11.100:9443/admin`
+	port, curlPath := parseCurlCommand(cmd)
+	if port != 9443 {
+		t.Errorf("port = %d, want 9443", port)
+	}
+	if curlPath != "/admin" {
+		t.Errorf("path = %q, want /admin", curlPath)
+	}
+}
+
+func TestParseCurlCommand_NoURL(t *testing.T) {
+	// URL がないコマンド → port=0, path=""
+	cmd := `curl --help`
+	port, curlPath := parseCurlCommand(cmd)
+	if port != 0 {
+		t.Errorf("port = %d, want 0", port)
+	}
+	if curlPath != "" {
+		t.Errorf("path = %q, want empty", curlPath)
+	}
+}
+
+// --- extractDomainFromFfufCmd カバレッジ ---
+
+func TestExtractDomainFromFfufCmd_NoFUZZ(t *testing.T) {
+	// "FUZZ." が含まれないコマンド → "unknown"
+	cmd := `ffuf -w wordlist -u http://10.10.11.100/FUZZ`
+	got := extractDomainFromFfufCmd(cmd)
+	if got != "unknown" {
+		t.Errorf("extractDomainFromFfufCmd = %q, want 'unknown'", got)
 	}
 }

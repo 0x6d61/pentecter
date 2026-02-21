@@ -557,3 +557,121 @@ func TestRenderTree_WithFindings(t *testing.T) {
 		}
 	}
 }
+
+// --- renderActiveTasks カバレッジ ---
+
+func TestRenderTree_WithActiveTasks(t *testing.T) {
+	// StartTask で in_progress にした後、RenderTree に "[>]" と "[active]" が含まれること
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	batch := tree.NextBatch()
+	if len(batch) == 0 {
+		t.Fatal("NextBatch returned empty")
+	}
+	// タスクを開始 → in_progress
+	tree.StartTask(batch[0])
+
+	output := tree.RenderTree()
+
+	// "[>]" は StatusInProgress の表示
+	if !strings.Contains(output, "[>]") {
+		t.Errorf("RenderTree should contain '[>]' for active task\noutput:\n%s", output)
+	}
+
+	// RenderQueue で "[active]" が含まれること
+	queue := tree.RenderQueue()
+	if !strings.Contains(queue, "[active]") {
+		t.Errorf("RenderQueue should contain '[active]' for in-progress task\noutput:\n%s", queue)
+	}
+}
+
+// --- renderEndpointNode with findings AND children ---
+
+func TestRenderTree_FindingsAndChildren(t *testing.T) {
+	// エンドポイントに finding と子エンドポイントの両方がある場合、
+	// ツリーレンダリングで両方が正しく表示されること
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	// /api の子として /api/v1 を追加
+	tree.AddEndpoint("10.10.11.100", 80, "/api", "/api/v1")
+
+	// /api に finding を追加
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param:    "id",
+		Category: "sqli",
+		Evidence: "500 error with single quote",
+		Severity: "high",
+	})
+
+	output := tree.RenderTree()
+
+	// finding が表示されること
+	if !strings.Contains(output, `finding: param "id"`) {
+		t.Errorf("RenderTree missing finding line\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "sqli") {
+		t.Errorf("RenderTree missing sqli category\noutput:\n%s", output)
+	}
+
+	// 子エンドポイントも表示されること
+	if !strings.Contains(output, "/api/v1") {
+		t.Errorf("RenderTree missing child endpoint /api/v1\noutput:\n%s", output)
+	}
+
+	// ツリーブランチ文字 ("|--" or "+--") が含まれること
+	if !strings.Contains(output, "|--") && !strings.Contains(output, "+--") {
+		t.Errorf("RenderTree missing tree branch characters\noutput:\n%s", output)
+	}
+}
+
+// --- findNode for vhost パスのカバレッジ ---
+
+func TestFindNode_Vhost(t *testing.T) {
+	// AddVhost で追加した vhost ノードを findNode で見つけられること
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
+
+	// CompleteTask は内部で findNode を使う。vhost ノードは host=vhost名
+	tree.CompleteTask("dev.example.com", 80, "", TaskEndpointEnum)
+
+	// 確認: vhost ノードの EndpointEnum が complete になっていること
+	if len(tree.Vhosts) == 0 {
+		t.Fatal("Vhosts should not be empty")
+	}
+	vnode := tree.Vhosts[0]
+	if vnode.EndpointEnum != StatusComplete {
+		t.Errorf("vhost EndpointEnum = %d, want complete(%d)", vnode.EndpointEnum, StatusComplete)
+	}
+}
+
+func TestFindNode_VhostChild(t *testing.T) {
+	// vhost に子エンドポイントを追加し、CompleteTask で子の findNode が動作すること
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
+
+	// vhost ノードの配下にエンドポイントを追加
+	tree.AddEndpoint("dev.example.com", 80, "/", "/admin")
+
+	// 子エンドポイントのタスクを完了 → findNode が vhost 子ノードを辿ること
+	tree.CompleteTask("dev.example.com", 80, "/admin", TaskProfiling)
+
+	// 確認: vhost 子ノードの Profiling が complete
+	if len(tree.Vhosts) == 0 {
+		t.Fatal("Vhosts should not be empty")
+	}
+	vnode := tree.Vhosts[0]
+	if len(vnode.Children) != 1 {
+		t.Fatalf("vhost children count = %d, want 1", len(vnode.Children))
+	}
+	child := vnode.Children[0]
+	if child.Path != "/admin" {
+		t.Errorf("child path = %q, want /admin", child.Path)
+	}
+	if child.Profiling != StatusComplete {
+		t.Errorf("child Profiling = %d, want complete(%d)", child.Profiling, StatusComplete)
+	}
+}

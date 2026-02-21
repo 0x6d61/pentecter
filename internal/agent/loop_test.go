@@ -1533,6 +1533,522 @@ func TestTeam_AddTarget_DifferentHosts_CreatesMultiple(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// runCommand エッジケース (#90)
+// =============================================================================
+
+func TestLoop_RunCommand_EmptyCommand(t *testing.T) {
+	// run アクションで空コマンドを渡した場合のエッジケース
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "empty command", Action: schema.ActionRun, Command: ""},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotEmptyMsg := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "command is empty") {
+				gotEmptyMsg = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotEmptyMsg {
+					t.Error("expected 'command is empty' log before complete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_RunCommand_BlacklistedCommand(t *testing.T) {
+	// run アクションでブラックリストに引っかかるコマンド → エラーログ
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "dangerous", Action: schema.ActionRun, Command: "rm -rf /"},
+		},
+	}
+
+	// ブラックリスト付きの Loop を構築
+	falseVal := false
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ToolDef{
+		Name:             "rm",
+		ProposalRequired: &falseVal,
+	})
+	bl := tools.NewBlacklist([]string{`rm\s+-rf\s+/`})
+	store := tools.NewLogStore()
+	runner := tools.NewCommandRunner(reg, bl, store)
+
+	events := make(chan agent.Event, 32)
+	approve := make(chan bool, 1)
+	userMsg := make(chan string, 1)
+	loop := agent.NewLoop(target, mb, runner, events, approve, userMsg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotBlacklistErr := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "Execution error") && strings.Contains(e.Message, "blacklist") {
+				gotBlacklistErr = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotBlacklistErr {
+					t.Error("expected blacklist error log before complete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_RunCommand_NeedsProposal_SafetyNet(t *testing.T) {
+	// Brain が run を使ったが、実はツールが未登録で要承認 → propose に格上げ
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run unknown tool", Action: schema.ActionRun, Command: "unknowntool123 --flag"},
+		},
+	}
+
+	loop, events, approve, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotProposal := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventProposal {
+				gotProposal = true
+				approve <- true // 承認する
+			}
+			if e.Type == agent.EventComplete {
+				if !gotProposal {
+					t.Error("expected proposal event when using unknown tool with 'run' action")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+// =============================================================================
+// recordMemory エッジケース (#90)
+// =============================================================================
+
+func TestLoop_RecordMemory_NilMemory(t *testing.T) {
+	// memory アクションで Memory=nil → 何もしない（パニックしない）
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "recording nil", Action: schema.ActionMemory, Memory: nil},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// パニックせずに完了すればOK
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_RecordMemory_NoMemoryStore(t *testing.T) {
+	// Memory Store なしで memory アクション → ログのみ出力（永続化エラーなし）
+	target := agent.NewTarget(1, "10.0.0.5")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "found something", Action: schema.ActionMemory, Memory: &schema.Memory{
+				Type:        schema.MemoryVulnerability,
+				Title:       "test-vuln",
+				Description: "test description",
+				Severity:    "high",
+			}},
+		},
+	}
+
+	// Memory Store を設定しない Loop
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotMemoryLog := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "test-vuln") {
+				gotMemoryLog = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotMemoryLog {
+					t.Error("expected memory log event")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_RecordMemory_WithValidStore(t *testing.T) {
+	// 有効な Memory Store でメモリ記録 → 永続化され、読み出しに含まれる
+	target := agent.NewTarget(1, "10.0.0.5")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "found vuln", Action: schema.ActionMemory, Memory: &schema.Memory{
+				Type:        schema.MemoryVulnerability,
+				Title:       "test-vuln-persist",
+				Description: "persisted vulnerability",
+				Severity:    "critical",
+			}},
+			// 2nd Think: Memory フィールドに記録した内容が含まれるか確認
+			{Thought: "check memory", Action: schema.ActionThink},
+		},
+	}
+
+	memDir := t.TempDir()
+	memStore := memory.NewStore(memDir)
+
+	loop, events, _, _ := newTestLoop(target, mb)
+	loop.WithMemory(memStore)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// Memory Store から読み出せること
+				memContent := memStore.Read("10.0.0.5")
+				if !strings.Contains(memContent, "test-vuln-persist") {
+					t.Errorf("expected memory content to contain vuln title, got: %s", memContent)
+				}
+				// 3回目の Think の Memory フィールドにも含まれるはず
+				if len(mb.inputs) >= 3 {
+					if !strings.Contains(mb.inputs[2].Memory, "test-vuln-persist") {
+						t.Errorf("expected Think() Memory to contain recorded vuln, got: %s", mb.inputs[2].Memory)
+					}
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+// =============================================================================
+// streamAndCollect エッジケース (#90)
+// =============================================================================
+
+func TestLoop_StreamAndCollect_FailedExitCode(t *testing.T) {
+	// 終了コード非ゼロのコマンド → lastExitCode が適切に設定される
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run failing cmd", Action: schema.ActionRun, Command: "echo fail && exit 42"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventCmdDone {
+				if e.ExitCode != 42 {
+					t.Errorf("EventCmdDone ExitCode: got %d, want 42", e.ExitCode)
+				}
+			}
+			if e.Type == agent.EventComplete {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_StreamAndCollect_LargeOutput_HistoryTruncated(t *testing.T) {
+	// 200文字以上の出力 → history.Summary が200文字に切り捨てられる
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	// 300文字分のランダムなテキストを出力するコマンド
+	longText := strings.Repeat("A", 300)
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "long output", Action: schema.ActionRun, Command: "echo " + longText},
+			// 2回目: Think（history に truncated summary が含まれるはず）
+			{Thought: "checking history", Action: schema.ActionThink},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// 3回目の Think() の CommandHistory にエントリがあるはず
+				if len(mb.inputs) >= 3 {
+					hist := mb.inputs[2].CommandHistory
+					if hist == "" {
+						t.Error("expected non-empty CommandHistory after command execution")
+					}
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_StreamAndCollect_HistoryCap10(t *testing.T) {
+	// 12コマンドを実行 → history は最新10件のみ保持
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	actions := make([]*schema.Action, 12)
+	for i := 0; i < 12; i++ {
+		actions[i] = &schema.Action{
+			Thought: fmt.Sprintf("cmd %d", i),
+			Action:  schema.ActionRun,
+			Command: fmt.Sprintf("echo cmd-%d", i),
+		}
+	}
+	// 最後に Think を追加して CommandHistory を確認
+	actions = append(actions, &schema.Action{
+		Thought: "check history",
+		Action:  schema.ActionThink,
+	})
+
+	mb := &mockBrain{actions: actions}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(12 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// 最後の Think() 呼び出しの CommandHistory を確認
+				lastInput := mb.inputs[len(mb.inputs)-1]
+				hist := lastInput.CommandHistory
+				// history は最大5件表示（buildHistory は最新5件を返す）
+				// ただし内部は10件保持。cmd-2 以前は含まれないはず
+				if strings.Contains(hist, "cmd-0") {
+					t.Error("history should not contain cmd-0 (oldest commands should be evicted)")
+				}
+				// 最新のコマンドは含まれるはず
+				if !strings.Contains(hist, "cmd-11") {
+					t.Errorf("history should contain cmd-11, got:\n%s", hist)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_StreamAndCollect_NoOutput_Command(t *testing.T) {
+	// 出力なしのコマンド → EventCmdOutput に空行は送信されない（line.Content == "" は skip）
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			// echo -n は改行なしで出力するが、空文字列の場合は何も出力しない
+			{Thought: "run no-output", Action: schema.ActionRun, Command: "echo -n ''"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// EventComplete は waitForUserMsg でブロックするので EventCmdDone まで待つ
+	deadline := time.After(8 * time.Second)
+	var collected []agent.Event
+	for {
+		select {
+		case e := <-events:
+			collected = append(collected, e)
+			if e.Type == agent.EventComplete {
+				// 空の OutputLine が送信されていないことを確認
+				for _, ev := range collected {
+					if ev.Type == agent.EventCmdOutput && ev.OutputLine == "" {
+						t.Error("EventCmdOutput should not have empty OutputLine")
+					}
+				}
+				return
+			}
+		case <-deadline:
+			// EventComplete が来なくても EventCmdDone が来ていれば確認可能
+			for _, ev := range collected {
+				if ev.Type == agent.EventCmdOutput && ev.OutputLine == "" {
+					t.Error("EventCmdOutput should not have empty OutputLine")
+				}
+			}
+			// EventCmdDone が来ていれば成功（Complete は waitForUserMsg でブロック中）
+			for _, ev := range collected {
+				if ev.Type == agent.EventCmdDone {
+					return
+				}
+			}
+			t.Fatal("timeout waiting for EventCmdDone or EventComplete")
+		}
+	}
+}
+
+// =============================================================================
+// buildCommandSummary 追加テスト (#90)
+// =============================================================================
+
+func TestLoop_CmdDone_ContainsSummary(t *testing.T) {
+	// EventCmdDone の Message にサマリーが含まれること
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run", Action: schema.ActionRun, Command: "echo summary-test"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	e, ok := findEvent(collected, agent.EventCmdDone)
+	if !ok {
+		t.Fatal("expected EventCmdDone")
+	}
+	if !strings.Contains(e.Message, "exit 0") {
+		t.Errorf("EventCmdDone Message should contain 'exit 0', got: %q", e.Message)
+	}
+}
+
+// =============================================================================
+// AddTarget と UnknownAction テスト (#90)
+// =============================================================================
+
+func TestLoop_UnknownAction_LogsWarning(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "mystery", Action: "unknown_action_xyz"},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	gotUnknown := false
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "Unknown action") {
+				gotUnknown = true
+			}
+			if e.Type == agent.EventComplete {
+				if !gotUnknown {
+					t.Error("expected 'Unknown action' log for unsupported action type")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+func TestLoop_AddTarget_EmptyHost_NoEvent(t *testing.T) {
+	// add_target で空のホスト → EventAddTarget は発生しない
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "empty target", Action: schema.ActionAddTarget, Target: ""},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	collected := collectEvents(t, events, 4*time.Second)
+
+	if hasEventType(collected, agent.EventAddTarget) {
+		t.Error("expected no EventAddTarget for empty target host")
+	}
+}
+
 func TestTeam_AddTarget_Duplicate_AfterStart(t *testing.T) {
 	// Start() 済みの状態でも重複チェックが機能することを検証。
 	events := make(chan agent.Event, 128)
