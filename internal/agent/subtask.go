@@ -32,9 +32,10 @@ const (
 
 // TaskMetadata はサブタスクに付与されるメタ情報。
 type TaskMetadata struct {
-	Port    int    `json:"port,omitempty"`
-	Service string `json:"service,omitempty"`
-	Phase   string `json:"phase,omitempty"`
+	Port          int           `json:"port,omitempty"`
+	Service       string        `json:"service,omitempty"`
+	Phase         string        `json:"phase,omitempty"`
+	ReconTaskType ReconTaskType `json:"recon_task_type,omitempty"`
 }
 
 // SubTask はバックグラウンドで実行されるタスクを表す。

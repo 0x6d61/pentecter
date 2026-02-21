@@ -437,3 +437,66 @@ func TestDrainCompletedTasks_PushModel(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildTaskResult_WebReconUpdatesReconTree tests that completing a web_recon
+// subtask calls CompleteAllPortTasks on the ReconTree.
+func TestBuildTaskResult_WebReconUpdatesReconTree(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "waiting", Action: schema.ActionWait, TaskID: "task-inject-recon"},
+		},
+	}
+	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	// ReconTree をセットアップ
+	tree := agent.NewReconTree("10.0.0.1", 2)
+	tree.AddPort(80, "http", "Apache")
+	// Pending なタスクだけ InProgress にマーク（SpawnWebRecon の実際の動作を再現）
+	// AddPort(http) は EndpointEnum + VhostDiscov を Pending にする
+	node := tree.Ports[0]
+	for _, tt := range []agent.ReconTaskType{agent.TaskEndpointEnum, agent.TaskVhostDiscov} {
+		task := &agent.ReconTask{Type: tt, Node: node, Host: node.Host, Port: node.Port}
+		tree.StartTask(task)
+	}
+	loop.WithReconTree(tree)
+
+	// web_recon phase の SubTask を注入
+	task := agent.NewSubTask("task-inject-recon", agent.TaskKindSmart, "web recon on :80")
+	task.Metadata = agent.TaskMetadata{
+		Port:    80,
+		Service: "http",
+		Phase:   "web_recon",
+	}
+	task.Status = agent.TaskStatusCompleted
+	task.Complete()
+	taskMgr.InjectTask("task-inject-recon", task)
+	taskMgr.InjectDone("task-inject-recon")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				// CompleteAllPortTasks により InProgress だった2タスクが Complete になっていること
+				if got := tree.CountComplete(); got != 2 {
+					t.Errorf("CountComplete = %d, want 2 after web_recon complete", got)
+				}
+				// Pending が 0 であること
+				if got := tree.CountPending(); got != 0 {
+					t.Errorf("CountPending = %d, want 0 after web_recon complete", got)
+				}
+				// IsLocked が false（全タスク完了で自動解除）
+				if tree.IsLocked() {
+					t.Error("ReconTree should be auto-unlocked after all tasks complete")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}

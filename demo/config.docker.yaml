@@ -1,0 +1,37 @@
+# Pentecter Docker Configuration
+# This config is optimized for the Docker demo environment (Kali Linux).
+
+# --- Knowledge Base ---
+knowledge:
+  - name: hacktricks
+    path: "/opt/hacktricks/src"
+
+# --- Blacklist ---
+blacklist:
+  # ファイルシステムの破壊的操作
+  - 'rm\s+-rf\s+/'
+  - 'rm\s+--no-preserve-root'
+  - 'dd\s+if='
+  - 'mkfs'
+  - 'fdisk'
+  - 'parted'
+
+  # デバイスへの直接書き込み
+  - '>\s*/dev/sd'
+  - '>\s*/dev/nvme'
+  - '>\s*/dev/hd'
+
+  # システム停止
+  - '\bshutdown\b'
+  - '\breboot\b'
+  - '\binit\s+0\b'
+  - '\bpoweroff\b'
+
+  # フォークボム
+  - ':\(\)\{.*\|.*:.*\}'
+
+# --- Recon Tree ---
+recon:
+  max_parallel: 2
+  initial_scans:
+    - "nmap -p- -sV -Pn -oX - -T5 {target}"

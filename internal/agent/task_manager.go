@@ -77,7 +77,8 @@ func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (str
 		sa.Run(taskCtx, task, req.TargetHost)
 		select {
 		case tm.doneCh <- id:
-		default:
+		case <-taskCtx.Done():
+			// context cancelled — 完了通知は不要
 		}
 	}()
 

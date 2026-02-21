@@ -105,6 +105,14 @@ func (rr *ReconRunner) SpawnWebRecon(ctx context.Context) {
 		default:
 		}
 
+		// Pending なタスクだけ InProgress にマーク（StatusNone のタスクはスキップ）
+		for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+			if port.getReconStatus(tt) == StatusPending {
+				task := &ReconTask{Type: tt, Node: port, Host: rr.targetHost, Port: port.Port}
+				rr.tree.StartTask(task)
+			}
+		}
+
 		prompt := buildWebReconPrompt(rr.targetHost, port.Port)
 		rr.emitLog(fmt.Sprintf("[RECON] Spawning web recon SubAgent for %s:%d", rr.targetHost, port.Port))
 

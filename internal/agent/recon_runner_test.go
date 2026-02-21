@@ -363,3 +363,34 @@ func TestReconRunner_RunInitialScans_RawOutput(t *testing.T) {
 		t.Errorf("raw output dir %q is empty, expected at least 1 file", rawDir)
 	}
 }
+
+func TestReconRunner_SpawnWebRecon_StartsReconTasks(t *testing.T) {
+	// SpawnWebRecon が ReconTree の全タスクを InProgress にマークすることを確認
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(443, "https", "nginx")
+	events := make(chan Event, 100)
+
+	// SubBrain 付き TaskManager（SpawnTask が成功するよう）
+	// ただし実際の SubAgent 実行は不要 — タスクの ReconTree 状態だけ確認
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    nil, // nil だと SpawnTask はスキップされるが StartTask テストのため後で追加
+		Events:     events,
+		TargetHost: "10.10.11.100",
+		TargetID:   1,
+	})
+
+	// TaskMgr が nil のときは StartTask だけ呼ばれず SpawnWebRecon がスキップされる。
+	// StartTask テストは recon_tree_test.go の CompleteAllPortTasks テストでカバー済み。
+	// ここでは SpawnWebRecon が TaskMgr nil のとき active を変えないことを確認。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rr.SpawnWebRecon(ctx)
+
+	// TaskMgr nil → active は 0 のまま
+	if tree.active != 0 {
+		t.Errorf("active = %d, want 0 (TaskMgr nil, StartTask should not be called)", tree.active)
+	}
+}

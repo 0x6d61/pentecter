@@ -6,13 +6,16 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /pentecter ./cmd/pentecter
 
-# Stage 2: ランタイム（ペンテストツール入り）
-FROM ubuntu:24.04
+# Stage 2: ランタイム（Kali Linux — ペンテストツール入り）
+FROM kalilinux/kali-rolling
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    git \
     nmap \
     nikto \
+    ffuf \
+    seclists \
     curl \
     wget \
     bash \
@@ -25,9 +28,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping \
     sqlmap \
     && rm -rf /var/lib/apt/lists/*
+
+# HackTricks Knowledge Base
+RUN git clone --depth 1 https://github.com/carlospolop/hacktricks.git /opt/hacktricks
+
 COPY --from=builder /pentecter /usr/local/bin/pentecter
 COPY tools/  /app/tools/
 COPY skills/ /app/skills/
 COPY config/ /app/config/
+# Docker 専用 config で上書き
+COPY demo/config.docker.yaml /app/config/config.yaml
 WORKDIR /app
 ENTRYPOINT ["pentecter"]

@@ -160,5 +160,18 @@ func (l *Loop) buildTaskResult(task *SubTask) string {
 		l.target.AddEntities(task.Entities)
 	}
 
+	// ReconTree 連携: web_recon SubTask 完了時にポートの全タスクを Complete にする
+	if l.reconTree != nil && task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
+		l.reconTree.CompleteAllPortTasks(task.Metadata.Port)
+
+		// SubAgent 出力から ffuf JSON を検出してパース → 新エンドポイントを ReconTree に追加
+		output := task.FullOutput()
+		// パースエラーは無視（SubAgent の出力は複数コマンドの混合のためパース失敗は想定内）
+		_ = DetectAndParse("ffuf", output, l.reconTree, l.target.Host)
+
+		// Target に最新の ReconTree を反映
+		l.target.SetReconTree(l.reconTree)
+	}
+
 	return sb.String()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -167,8 +168,8 @@ func (l *Loop) Run(ctx context.Context) {
 		})
 		// Phase 0: nmap 自動実行（ブロッキング）
 		rr.RunInitialScans(ctx)
-		// Phase 1: web recon SubAgent（非ブロッキング、メイン LLM と並列）
-		go rr.SpawnWebRecon(ctx)
+		// Phase 1: web recon SubAgent spawn（タスク起動自体は即座に完了、SubAgent は goroutine で実行）
+		rr.SpawnWebRecon(ctx)
 		// Target に ReconTree を反映
 		l.target.SetReconTree(l.reconTree)
 	}
@@ -548,7 +549,16 @@ func (l *Loop) evaluateResult() {
 
 	// ReconTree: ツール出力をパースして偵察状態を更新
 	if l.reconTree != nil && l.lastCommand != "" {
-		if err := DetectAndParse(l.lastCommand, l.lastToolOutput, l.reconTree, l.target.Host); err != nil {
+		parseOutput := l.lastToolOutput
+
+		// ffuf -o <file> の場合、ファイルから JSON を読み取る（stdout には JSON が出ないため）
+		if ffufPath := ExtractFfufOutputPath(l.lastCommand); ffufPath != "" {
+			if data, err := os.ReadFile(ffufPath); err == nil {
+				parseOutput = string(data)
+			}
+		}
+
+		if err := DetectAndParse(l.lastCommand, parseOutput, l.reconTree, l.target.Host); err != nil {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
 				Message: fmt.Sprintf("ReconTree parse warning: %v", err)})
 		}
