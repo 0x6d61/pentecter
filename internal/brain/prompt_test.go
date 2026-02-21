@@ -573,25 +573,17 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
 func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
-	// RECON ステップに ffuf が含まれること
-	if !strings.Contains(prompt, "ffuf") {
-		t.Error("RECON step should reference ffuf for web reconnaissance")
+	// HTTPAgent に web recon を委譲する指示
+	if !strings.Contains(prompt, "HTTPAgent") {
+		t.Error("RECON step should reference HTTPAgent for web reconnaissance")
 	}
-	// 再帰的 endpoint 列挙が ZERO results まで続くこと
-	if !strings.Contains(prompt, "ZERO new results") {
-		t.Error("RECON step should instruct recursive enumeration until zero results")
+	// ffuf/dirb を自分で実行しない指示
+	if !strings.Contains(prompt, "Do NOT run ffuf") {
+		t.Error("RECON step should prohibit running ffuf directly")
 	}
-	// vhost に対しても endpoint 列挙が指示されていること
-	if !strings.Contains(prompt, "discovered vhost") {
-		t.Error("RECON step should instruct endpoint enumeration on discovered vhosts")
-	}
-	// 全エンドポイントに対するパラメータ fuzz が含まれること
-	if !strings.Contains(prompt, "Parameter fuzzing on ALL endpoints") {
-		t.Error("RECON step should include parameter fuzzing on ALL endpoints")
-	}
-	// エンドポイントプロファイリングが含まれること
-	if !strings.Contains(prompt, "Endpoint profiling") {
-		t.Error("RECON step should include endpoint profiling with curl")
+	// Reconnaissance Intel を参照する指示
+	if !strings.Contains(prompt, "Reconnaissance Intel") {
+		t.Error("RECON step should reference Reconnaissance Intel for HTTPAgent progress")
 	}
 	// spawn_task 禁止が明記されていること
 	if !strings.Contains(prompt, "do NOT use spawn_task during reconnaissance") {
