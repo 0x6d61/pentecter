@@ -179,6 +179,11 @@ func (t *ReconTree) AddPort(port int, service, banner string) {
 			if service != "" {
 				existing.Service = service
 			}
+			// 非HTTP→HTTP に変わった場合、偵察タスクを初期化
+			if existing.isHTTP() && existing.EndpointEnum == StatusNone {
+				existing.EndpointEnum = StatusPending
+				existing.VhostDiscov = StatusPending
+			}
 			return
 		}
 	}

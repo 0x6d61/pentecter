@@ -48,6 +48,12 @@ func NewTaskManager(runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events 
 	}
 }
 
+// CanSpawnSmart は SmartSubAgent を起動可能かどうかを返す。
+// SubBrain が設定されていない場合は false を返す。
+func (tm *TaskManager) CanSpawnSmart() bool {
+	return tm != nil && tm.subBrain != nil
+}
+
 // SpawnTask は新しいサブタスクを生成し、バックグラウンドで実行する。
 func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (string, error) {
 	id := fmt.Sprintf("task-%d", tm.nextID.Add(1))

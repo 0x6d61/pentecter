@@ -340,7 +340,8 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	}
 
 	// リアクティブモード有効時: web recon ツールは HTTPAgent が担当 → メイン Agent はブロック
-	if l.reconRunner != nil && isWebReconCommand(command) {
+	// SubBrain が未設定の場合は HTTPAgent を起動できないためブロックしない
+	if l.reconRunner != nil && l.taskMgr.CanSpawnSmart() && isWebReconCommand(command) {
 		blockMsg := "Web recon tools (ffuf/dirb/gobuster/nikto) are handled by HTTPAgent. Focus on non-HTTP services."
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: blockMsg})
 		l.lastToolOutput = blockMsg

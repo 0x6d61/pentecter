@@ -760,6 +760,50 @@ func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
 	}
 }
 
+func TestAddPort_NonHTTPToHTTP_InitializesTasks(t *testing.T) {
+	tree := NewReconTree("10.0.0.1", 2)
+	// First add as generic TCP
+	tree.AddPort(8080, "tcpwrapped", "")
+	// Port should not have HTTP tasks
+	if tree.Ports[0].EndpointEnum != StatusNone {
+		t.Error("non-HTTP port should not have EndpointEnum")
+	}
+	if tree.Ports[0].VhostDiscov != StatusNone {
+		t.Error("non-HTTP port should not have VhostDiscov")
+	}
+	// Now update to HTTP
+	tree.AddPort(8080, "http", "Apache")
+	if tree.Ports[0].EndpointEnum != StatusPending {
+		t.Error("port updated to HTTP should have EndpointEnum=Pending")
+	}
+	if tree.Ports[0].VhostDiscov != StatusPending {
+		t.Error("port updated to HTTP should have VhostDiscov=Pending")
+	}
+	// Should still be just one port
+	if len(tree.Ports) != 1 {
+		t.Errorf("expected 1 port, got %d", len(tree.Ports))
+	}
+	// Banner should be updated
+	if tree.Ports[0].Banner != "Apache" {
+		t.Errorf("Banner = %q, want 'Apache'", tree.Ports[0].Banner)
+	}
+}
+
+func TestAddPort_NonHTTPToHTTP_AlreadyInitialized(t *testing.T) {
+	// HTTP ポートとして追加された後、再度 HTTP で更新されても
+	// すでに初期化済みのタスクステータスが上書きされないこと
+	tree := NewReconTree("10.0.0.1", 2)
+	tree.AddPort(80, "http", "Apache")
+	// EndpointEnum を InProgress に変更
+	tree.Ports[0].EndpointEnum = StatusInProgress
+	// 再度 HTTP として追加
+	tree.AddPort(80, "http", "Apache 2.4.49")
+	// InProgress が StatusPending にリセットされていないこと
+	if tree.Ports[0].EndpointEnum != StatusInProgress {
+		t.Error("already initialized EndpointEnum should not be reset to Pending")
+	}
+}
+
 func TestAddPort_Dedup(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "")
