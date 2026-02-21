@@ -363,7 +363,7 @@ func buildPrompt(input Input) string {
 	}
 
 	if input.ReconQueue != "" {
-		sb.WriteString("\n## Reconnaissance Queue\n")
+		sb.WriteString("\n## Reconnaissance Intel\n")
 		sb.WriteString(input.ReconQueue)
 		sb.WriteString("\n")
 	}

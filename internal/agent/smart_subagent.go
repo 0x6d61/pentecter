@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
@@ -14,19 +15,23 @@ import (
 
 // SmartSubAgent は小型 LLM を使って多段タスクを自律実行するサブエージェント。
 type SmartSubAgent struct {
-	br     brain.Brain
-	runner *tools.CommandRunner
-	mcpMgr *mcp.MCPManager
-	events chan<- Event
+	br         brain.Brain
+	runner     *tools.CommandRunner
+	mcpMgr     *mcp.MCPManager
+	events     chan<- Event
+	reconTree  *ReconTree
+	targetHost string
 }
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
-func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event) *SmartSubAgent {
+func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, reconTree *ReconTree, targetHost string) *SmartSubAgent {
 	return &SmartSubAgent{
-		br:     br,
-		runner: runner,
-		mcpMgr: mcpMgr,
-		events: events,
+		br:         br,
+		runner:     runner,
+		mcpMgr:     mcpMgr,
+		events:     events,
+		reconTree:  reconTree,
+		targetHost: targetHost,
 	}
 }
 
@@ -93,8 +98,9 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		switch action.Action {
 		case schema.ActionRun:
-			lastCommand = action.Command
-			linesCh, resultCh := sa.runner.ForceRun(ctx, action.Command)
+			cmd := EnsureFfufSilent(action.Command)
+			lastCommand = cmd
+			linesCh, resultCh := sa.runner.ForceRun(ctx, cmd)
 
 			// ストリーム出力を収集
 			for line := range linesCh {
@@ -107,6 +113,17 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 			result := <-resultCh
 			lastExitCode = result.ExitCode
 			lastOutput = result.Truncated
+
+			// ReconTree にパース結果を反映
+			if sa.reconTree != nil {
+				parseOutput := result.Truncated
+				if ffufPath := ExtractFfufOutputPath(cmd); ffufPath != "" {
+					if data, err := os.ReadFile(ffufPath); err == nil {
+						parseOutput = string(data)
+					}
+				}
+				_ = DetectAndParse(cmd, parseOutput, sa.reconTree, sa.targetHost)
+			}
 
 			// Entity 抽出結果をタスクに追加
 			if result.Entities != nil {

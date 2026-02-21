@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -313,30 +314,30 @@ func TestRenderTree(t *testing.T) {
 	}
 }
 
-func TestRenderQueue(t *testing.T) {
+func TestRenderIntel(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
-	output := tree.RenderQueue()
+	output := tree.RenderIntel()
 
 	checks := []string{
-		"RECON QUEUE",
-		"pending",
-		"max_parallel=2",
+		"RECON INTEL",
+		"ATTACK SURFACE",
+		"80/http",
 	}
 	for _, check := range checks {
 		if !strings.Contains(output, check) {
-			t.Errorf("RenderQueue missing %q\noutput:\n%s", check, output)
+			t.Errorf("RenderIntel missing %q\noutput:\n%s", check, output)
 		}
 	}
 }
 
-func TestRenderQueue_Empty(t *testing.T) {
+func TestRenderIntel_Empty(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
-	output := tree.RenderQueue()
+	output := tree.RenderIntel()
 	if output != "" {
-		t.Errorf("empty tree should return empty queue, got: %q", output)
+		t.Errorf("empty tree should return empty intel, got: %q", output)
 	}
 }
 
@@ -385,29 +386,6 @@ func TestReconTree_StaysLocked_WithPending(t *testing.T) {
 	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
 	if !tree.IsLocked() {
 		t.Error("should still be locked with remaining pending tasks")
-	}
-}
-
-func TestRenderQueue_LockedMessage(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
-	tree.AddPort(80, "http", "Apache")
-
-	output := tree.RenderQueue()
-	// locked 状態では強制文言が含まれる
-	if !strings.Contains(output, "MANDATORY") {
-		t.Errorf("locked RenderQueue should contain MANDATORY, got:\n%s", output)
-	}
-}
-
-func TestRenderQueue_UnlockedNoForceMessage(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
-	tree.AddPort(80, "http", "Apache")
-	tree.Unlock()
-
-	output := tree.RenderQueue()
-	// unlocked 状態では強制文言が含まれない
-	if strings.Contains(output, "MANDATORY") {
-		t.Errorf("unlocked RenderQueue should NOT contain MANDATORY, got:\n%s", output)
 	}
 }
 
@@ -558,7 +536,7 @@ func TestRenderTree_WithFindings(t *testing.T) {
 	}
 }
 
-// --- renderActiveTasks カバレッジ ---
+// --- RenderIntel active タスクカバレッジ ---
 
 func TestRenderTree_WithActiveTasks(t *testing.T) {
 	// StartTask で in_progress にした後、RenderTree に "[>]" と "[active]" が含まれること
@@ -579,10 +557,10 @@ func TestRenderTree_WithActiveTasks(t *testing.T) {
 		t.Errorf("RenderTree should contain '[>]' for active task\noutput:\n%s", output)
 	}
 
-	// RenderQueue で "[active]" が含まれること
-	queue := tree.RenderQueue()
-	if !strings.Contains(queue, "[active]") {
-		t.Errorf("RenderQueue should contain '[active]' for in-progress task\noutput:\n%s", queue)
+	// RenderIntel で "HTTPAgent active" が含まれること
+	intel := tree.RenderIntel()
+	if !strings.Contains(intel, "HTTPAgent active") {
+		t.Errorf("RenderIntel should contain 'HTTPAgent active' for in-progress task\noutput:\n%s", intel)
 	}
 }
 
@@ -682,21 +660,17 @@ func TestCompleteAllPortTasks_Basic(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
-	// StartTask で全タスクを InProgress にする
+	// SubAgent 単位で active を設定（SpawnWebReconForPort と同等）
 	node := tree.Ports[0]
 	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-		task := &ReconTask{Type: tt, Node: node, Host: node.Host, Port: node.Port}
-		tree.StartTask(task)
+		node.setReconStatus(tt, StatusInProgress)
 	}
-
-	if tree.active != 4 {
-		t.Fatalf("active = %d, want 4", tree.active)
-	}
+	tree.active = 1 // SubAgent 1つ分
 
 	// CompleteAllPortTasks で全タスクを Complete にする
 	tree.CompleteAllPortTasks(80)
 
-	// active が 0 になること
+	// active が 0 になること（SubAgent 単位で -1）
 	if tree.active != 0 {
 		t.Errorf("active = %d, want 0 after CompleteAllPortTasks", tree.active)
 	}
@@ -716,16 +690,12 @@ func TestCompleteAllPortTasks_OnlyInProgress(t *testing.T) {
 
 	node := tree.Ports[0]
 	// EndpointEnum だけ InProgress にする
-	task := &ReconTask{Type: TaskEndpointEnum, Node: node, Host: node.Host, Port: node.Port}
-	tree.StartTask(task)
-
-	if tree.active != 1 {
-		t.Fatalf("active = %d, want 1", tree.active)
-	}
+	node.setReconStatus(TaskEndpointEnum, StatusInProgress)
+	tree.active = 1
 
 	tree.CompleteAllPortTasks(80)
 
-	// active が 0 になること
+	// active が 0 になること（SubAgent 単位で -1）
 	if tree.active != 0 {
 		t.Errorf("active = %d, want 0", tree.active)
 	}
@@ -746,8 +716,8 @@ func TestCompleteAllPortTasks_NoMatchingPort(t *testing.T) {
 	tree.AddPort(80, "http", "Apache")
 
 	node := tree.Ports[0]
-	task := &ReconTask{Type: TaskEndpointEnum, Node: node, Host: node.Host, Port: node.Port}
-	tree.StartTask(task)
+	node.setReconStatus(TaskEndpointEnum, StatusInProgress)
+	tree.active = 1
 
 	// 存在しないポートを指定 → 何も変わらない
 	tree.CompleteAllPortTasks(443)
@@ -765,20 +735,16 @@ func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(443, "https", "nginx")
 
-	// 両方の EndpointEnum を InProgress にする
+	// 両方を SubAgent 単位で InProgress にする（各1 SubAgent）
 	for _, node := range tree.Ports {
-		task := &ReconTask{Type: TaskEndpointEnum, Node: node, Host: node.Host, Port: node.Port}
-		tree.StartTask(task)
+		node.setReconStatus(TaskEndpointEnum, StatusInProgress)
 	}
-
-	if tree.active != 2 {
-		t.Fatalf("active = %d, want 2", tree.active)
-	}
+	tree.active = 2 // 2 SubAgents
 
 	// port 80 だけ Complete にする
 	tree.CompleteAllPortTasks(80)
 
-	// active は 1（port 443 の分だけ残る）
+	// active は 1（port 443 の SubAgent だけ残る）
 	if tree.active != 1 {
 		t.Errorf("active = %d, want 1", tree.active)
 	}
@@ -791,5 +757,133 @@ func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
 	// port 443 は InProgress のまま
 	if tree.Ports[1].EndpointEnum != StatusInProgress {
 		t.Errorf("port 443 EndpointEnum = %d, want in_progress", tree.Ports[1].EndpointEnum)
+	}
+}
+
+func TestAddPort_Dedup(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "")
+	tree.AddPort(80, "http", "Apache 2.4.49")
+
+	if len(tree.Ports) != 1 {
+		t.Fatalf("Ports count = %d, want 1 (dedup)", len(tree.Ports))
+	}
+	// 2回目の banner で更新されている
+	if tree.Ports[0].Banner != "Apache 2.4.49" {
+		t.Errorf("Banner = %q, want 'Apache 2.4.49'", tree.Ports[0].Banner)
+	}
+}
+
+func TestAddPort_Dedup_KeepLongerBanner(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache httpd 2.4.49 ((Unix))")
+	tree.AddPort(80, "http", "Apache")
+
+	// 短い banner では上書きされない
+	if tree.Ports[0].Banner != "Apache httpd 2.4.49 ((Unix))" {
+		t.Errorf("Banner = %q, want original longer banner", tree.Ports[0].Banner)
+	}
+}
+
+func TestReconTree_ConcurrentAccess(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 4)
+	var wg sync.WaitGroup
+
+	// 並行で AddPort
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			tree.AddPort(port, "http", "Apache")
+		}(8000 + i)
+	}
+
+	// 並行で AddEndpoint
+	tree.AddPort(80, "http", "Apache")
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			tree.AddEndpoint("10.10.11.100", 80, "/", "/path-"+string(rune('a'+idx)))
+		}(i)
+	}
+
+	// 並行で Read 系
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = tree.RenderTree()
+			_ = tree.CountPending()
+			_ = tree.CountComplete()
+			_ = tree.CountTotal()
+			_ = tree.CountFindings()
+			_ = tree.HasPending()
+			_ = tree.IsLocked()
+			_ = tree.PortCount()
+		}()
+	}
+
+	wg.Wait()
+
+	// パニックせずに完了すれば OK（-race で検証）
+	if tree.PortCount() == 0 {
+		t.Error("expected ports to be added")
+	}
+}
+
+func TestRenderIntel_WithActiveAgents(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	// Simulate HTTPAgent active
+	batch := tree.NextBatch()
+	if len(batch) > 0 {
+		tree.StartTask(batch[0])
+	}
+	output := tree.RenderIntel()
+	if !strings.Contains(output, "RECON INTEL") {
+		t.Errorf("should contain RECON INTEL header\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "HTTPAgent active on ports: 80") {
+		t.Errorf("should show HTTPAgent active on port 80\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "ATTACK SURFACE") {
+		t.Errorf("should contain ATTACK SURFACE section\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_WithFindings(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+	tree.AddFinding("10.10.11.100", 80, "/login", Finding{
+		Param:    "user",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error",
+		Severity: "high",
+	})
+	output := tree.RenderIntel()
+	if !strings.Contains(output, "FINDINGS") {
+		t.Errorf("should contain FINDINGS section\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "sqli") {
+		t.Errorf("should contain sqli finding\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_AttackSurface(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.AddPort(80, "http", "Apache")
+	output := tree.RenderIntel()
+	if !strings.Contains(output, "22/ssh") {
+		t.Errorf("should list ssh port\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "80/http") {
+		t.Errorf("should list http port\noutput:\n%s", output)
+	}
+	if !strings.Contains(output, "not tested") {
+		// ssh should show "not tested"
+		t.Errorf("ssh should show 'not tested'\noutput:\n%s", output)
 	}
 }

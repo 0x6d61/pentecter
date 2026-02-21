@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // ReconStatus は偵察タスクの状態
@@ -141,6 +142,7 @@ type ReconTask struct {
 
 // ReconTree はターゲットの偵察状態を管理するツリー
 type ReconTree struct {
+	mu          sync.RWMutex
 	Host        string
 	MaxParallel int
 	active      int
@@ -163,7 +165,23 @@ func NewReconTree(host string, maxParallel int) *ReconTree {
 
 // AddPort は nmap で発見したポートをツリーに追加する。
 // HTTP 系なら EndpointEnum + VhostDiscov を pending にする。
+// 同じポート番号が既に存在する場合は banner/service を更新し、重複追加しない。
 func (t *ReconTree) AddPort(port int, service, banner string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// 重複チェック
+	for _, existing := range t.Ports {
+		if existing.Port == port {
+			// banner/service を更新（より詳しい情報で上書き）
+			if banner != "" && len(banner) > len(existing.Banner) {
+				existing.Banner = banner
+			}
+			if service != "" {
+				existing.Service = service
+			}
+			return
+		}
+	}
 	node := &ReconNode{
 		Host:    t.Host,
 		Port:    port,
@@ -180,6 +198,8 @@ func (t *ReconTree) AddPort(port int, service, banner string) {
 // AddEndpoint は ffuf で発見した endpoint を親ノードの子として追加する。
 // EndpointEnum + ParamFuzz + Profiling を pending にする。
 func (t *ReconTree) AddEndpoint(host string, port int, parentPath, newPath string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	parent := t.findNode(host, port, parentPath)
 	if parent == nil {
 		return
@@ -198,6 +218,8 @@ func (t *ReconTree) AddEndpoint(host string, port int, parentPath, newPath strin
 // AddVhost は ffuf で発見した仮想ホストをツリーに追加する。
 // VhostDiscov + EndpointEnum を pending にする。
 func (t *ReconTree) AddVhost(parentHost string, port int, vhostName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	node := &ReconNode{
 		Host:         vhostName,
 		Port:         port,
@@ -211,6 +233,8 @@ func (t *ReconTree) AddVhost(parentHost string, port int, vhostName string) {
 // CompleteTask は指定タスクを完了にする。
 // path が空文字列の場合はポートレベルノードを対象とする。
 func (t *ReconTree) CompleteTask(host string, port int, path string, taskType ReconTaskType) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	node := t.findNode(host, port, path)
 	if node == nil {
 		return
@@ -220,11 +244,19 @@ func (t *ReconTree) CompleteTask(host string, port int, path string, taskType Re
 
 // HasPending はツリーに pending タスクがあるか
 func (t *ReconTree) HasPending() bool {
-	return t.CountPending() > 0
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.countPendingLocked() > 0
 }
 
 // CountPending は pending タスクの総数
 func (t *ReconTree) CountPending() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.countPendingLocked()
+}
+
+func (t *ReconTree) countPendingLocked() int {
 	pending := 0
 	for _, node := range t.Ports {
 		p, _, _ := node.countTasks()
@@ -239,6 +271,12 @@ func (t *ReconTree) CountPending() int {
 
 // CountComplete は完了タスクの総数
 func (t *ReconTree) CountComplete() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.countCompleteLocked()
+}
+
+func (t *ReconTree) countCompleteLocked() int {
 	complete := 0
 	for _, node := range t.Ports {
 		_, c, _ := node.countTasks()
@@ -253,6 +291,12 @@ func (t *ReconTree) CountComplete() int {
 
 // CountTotal は全タスクの総数
 func (t *ReconTree) CountTotal() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.countTotalLocked()
+}
+
+func (t *ReconTree) countTotalLocked() int {
 	total := 0
 	for _, node := range t.Ports {
 		_, _, tt := node.countTasks()
@@ -268,7 +312,9 @@ func (t *ReconTree) CountTotal() int {
 // IsLocked は RECON フェーズがロックされているか返す。
 // タスクが存在し、かつ pending がなければ自動解除する。
 func (t *ReconTree) IsLocked() bool {
-	if t.locked && t.CountTotal() > 0 && !t.HasPending() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.locked && t.countTotalLocked() > 0 && t.countPendingLocked() == 0 {
 		t.locked = false
 	}
 	return t.locked
@@ -276,12 +322,16 @@ func (t *ReconTree) IsLocked() bool {
 
 // Unlock は RECON フェーズロックを手動解除する。
 func (t *ReconTree) Unlock() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.locked = false
 }
 
 // NextBatch は MaxParallel - active 個の pending タスクを優先順で返す。
 // 優先順: endpoint_enum > param_fuzz > profiling > vhost_discovery
 func (t *ReconTree) NextBatch() []*ReconTask {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	available := t.MaxParallel - t.active
 	if available <= 0 {
 		return nil
@@ -341,12 +391,16 @@ func (t *ReconTree) collectPendingFromNode(tasks *[]*ReconTask, node *ReconNode,
 
 // StartTask はタスクを実行中にし、active カウントを増やす
 func (t *ReconTree) StartTask(task *ReconTask) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	task.Node.setReconStatus(task.Type, StatusInProgress)
 	t.active++
 }
 
 // FinishTask はタスクを完了にし、active カウントを減らす
 func (t *ReconTree) FinishTask(task *ReconTask) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	task.Node.setReconStatus(task.Type, StatusComplete)
 	if t.active > 0 {
 		t.active--
@@ -355,18 +409,24 @@ func (t *ReconTree) FinishTask(task *ReconTask) {
 
 // CompleteAllPortTasks は指定ポートの InProgress な全タスクを Complete にする。
 // SubAgent がポート単位で全 recon を担当するため、完了時に一括で更新する。
+// active カウントは SubAgent 単位で管理するため -1 のみ。
 func (t *ReconTree) CompleteAllPortTasks(port int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	found := false
 	for _, node := range t.Ports {
 		if node.Port == port {
 			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
 				if node.getReconStatus(tt) == StatusInProgress {
 					node.setReconStatus(tt, StatusComplete)
-					if t.active > 0 {
-						t.active--
-					}
+					found = true
 				}
 			}
 		}
+	}
+	// SubAgent 単位で -1（タスクタイプ数ではない）
+	if found && t.active > 0 {
+		t.active--
 	}
 }
 
@@ -435,6 +495,8 @@ func statusIcon(s ReconStatus) string {
 // AddFinding はエンドポイントノードに finding を追加する。
 // ノードが見つからない場合は何もしない。
 func (t *ReconTree) AddFinding(host string, port int, path string, finding Finding) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	node := t.findNode(host, port, path)
 	if node == nil {
 		return
@@ -444,6 +506,8 @@ func (t *ReconTree) AddFinding(host string, port int, path string, finding Findi
 
 // CountFindings は全ノードの finding 数を返す
 func (t *ReconTree) CountFindings() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	count := 0
 	for _, node := range t.allNodes() {
 		count += len(node.Findings)
@@ -453,6 +517,8 @@ func (t *ReconTree) CountFindings() int {
 
 // RenderTree は ASCII ツリーを返す（/recontree 用）
 func (t *ReconTree) RenderTree() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	var sb strings.Builder
 	sb.WriteString(t.Host)
 	sb.WriteString("\n")
@@ -478,8 +544,8 @@ func (t *ReconTree) RenderTree() string {
 	}
 
 	// Progress 行
-	complete := t.CountComplete()
-	total := t.CountTotal()
+	complete := t.countCompleteLocked()
+	total := t.countTotalLocked()
 	if total > 0 {
 		pct := complete * 100 / total
 		fmt.Fprintf(&sb, "\nProgress: %d/%d tasks complete (%d%%)\n", complete, total, pct)
@@ -578,75 +644,106 @@ func renderEndpointNode(sb *strings.Builder, node *ReconNode, prefix, childPrefi
 	}
 }
 
-// RenderQueue は RECON QUEUE をプロンプト注入用に返す。
-// pending がない場合は空文字列を返す。
-func (t *ReconTree) RenderQueue() string {
-	if !t.HasPending() {
+// RenderIntel は RECON INTEL をプロンプト注入用に返す。
+// ポートがない場合は空文字列を返す。
+func (t *ReconTree) RenderIntel() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.Ports) == 0 && len(t.Vhosts) == 0 {
 		return ""
 	}
 
-	pending := t.CountPending()
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "RECON QUEUE (%d pending, %d active, max_parallel=%d):\n",
-		pending, t.active, t.MaxParallel)
+	sb.WriteString("=== RECON INTEL ===\n")
 
-	if t.locked {
-		sb.WriteString("MANDATORY: You MUST complete ALL pending recon tasks before proceeding to RECORD/ANALYZE.\n")
-		sb.WriteString("Execute the [next] task below. Do NOT skip to other workflow phases.\n\n")
-	}
-
-	// active タスクを表示
-	t.renderActiveTasks(&sb)
-
-	// pending タスクを優先順で表示（最大10個）
-	shown := 0
-	first := true
-	for _, taskType := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-		for _, node := range t.allNodes() {
-			if shown >= 10 {
-				break
-			}
-			if node.getReconStatus(taskType) == StatusPending {
-				label := "queued"
-				if first {
-					label = "next"
-					first = false
+	// [BACKGROUND]: InProgress タスクがあるポートを表示
+	var activePorts []string
+	for _, node := range t.Ports {
+		if node.isHTTP() {
+			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+				if node.getReconStatus(tt) == StatusInProgress {
+					activePorts = append(activePorts, fmt.Sprintf("%d", node.Port))
+					break
 				}
-				host := node.Host
-				if host == "" {
-					host = t.Host
-				}
-				path := node.Path
-				if path == "" {
-					path = "/"
-				}
-				fmt.Fprintf(&sb, "  [%s]  %s: %s on %s:%d\n",
-					label, taskType, path, host, node.Port)
-				shown++
 			}
 		}
+	}
+	if len(activePorts) > 0 {
+		fmt.Fprintf(&sb, "[BACKGROUND] HTTPAgent active on ports: %s — do NOT run ffuf/dirb yourself\n\n",
+			strings.Join(activePorts, ", "))
+	}
+
+	// [FINDINGS]: 全ノードの findings を表示
+	hasFindings := false
+	for _, node := range t.Ports {
+		t.renderNodeFindings(&sb, node, &hasFindings)
+	}
+	for _, node := range t.Vhosts {
+		t.renderNodeFindings(&sb, node, &hasFindings)
+	}
+	if hasFindings {
+		sb.WriteString("\n")
+	}
+
+	// [ATTACK SURFACE]: 全ポート + ステータス
+	sb.WriteString("[ATTACK SURFACE]\n")
+	for _, node := range t.Ports {
+		status := "not tested"
+		if node.isHTTP() {
+			// Check if any task is InProgress
+			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+				if node.getReconStatus(tt) == StatusInProgress {
+					status = "HTTPAgent active"
+					break
+				}
+			}
+			if status == "not tested" {
+				// Check if all tasks are complete
+				allComplete := true
+				anyTask := false
+				for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+					st := node.getReconStatus(tt)
+					if st != StatusNone {
+						anyTask = true
+						if st != StatusComplete {
+							allComplete = false
+						}
+					}
+				}
+				if anyTask && allComplete {
+					status = "recon complete"
+				} else if anyTask {
+					status = "recon pending"
+				}
+			}
+		}
+		banner := node.Banner
+		if banner != "" {
+			banner = " " + banner
+		}
+		fmt.Fprintf(&sb, "  %d/%s%s — %s\n", node.Port, node.Service, banner, status)
 	}
 
 	return sb.String()
 }
 
-// renderActiveTasks は実行中のタスクを表示する
-func (t *ReconTree) renderActiveTasks(sb *strings.Builder) {
-	for _, taskType := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-		for _, node := range t.allNodes() {
-			if node.getReconStatus(taskType) == StatusInProgress {
-				host := node.Host
-				if host == "" {
-					host = t.Host
-				}
-				path := node.Path
-				if path == "" {
-					path = "/"
-				}
-				fmt.Fprintf(sb, "  [active] %s: %s on %s:%d\n",
-					taskType, path, host, node.Port)
-			}
+// renderNodeFindings はノードとその子の findings を再帰的にレンダリングする。
+func (t *ReconTree) renderNodeFindings(sb *strings.Builder, node *ReconNode, hasFindings *bool) {
+	if len(node.Findings) > 0 {
+		if !*hasFindings {
+			sb.WriteString("[FINDINGS]\n")
+			*hasFindings = true
 		}
+		for _, f := range node.Findings {
+			path := node.Path
+			if path == "" {
+				path = "/"
+			}
+			fmt.Fprintf(sb, "  Port %d: %s — %s on %s (%s)\n", node.Port, path, f.Category, f.Param, f.Severity)
+		}
+	}
+	for _, child := range node.Children {
+		t.renderNodeFindings(sb, child, hasFindings)
 	}
 }
 
@@ -662,6 +759,65 @@ func (t *ReconTree) allNodes() []*ReconNode {
 		collectAllChildren(&nodes, node)
 	}
 	return nodes
+}
+
+// SetReconStatusForTest はテスト用エクスポートヘルパー（外部パッケージからステータス設定用）。
+func (n *ReconNode) SetReconStatusForTest(taskType ReconTaskType, status ReconStatus) {
+	n.setReconStatus(taskType, status)
+}
+
+// SetActiveForTest はテスト用エクスポートヘルパー（外部パッケージから active 設定用）。
+func (t *ReconTree) SetActiveForTest(n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.active = n
+}
+
+// PortCount はポート数を返す（ロック付き）。
+func (t *ReconTree) PortCount() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.Ports)
+}
+
+// NewHTTPPortsSince は index 以降の新規 HTTP ポートを返す。
+func (t *ReconTree) NewHTTPPortsSince(startIdx int) []*ReconNode {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if startIdx >= len(t.Ports) {
+		return nil
+	}
+	var result []*ReconNode
+	for _, port := range t.Ports[startIdx:] {
+		if port.isHTTP() && port.EndpointEnum == StatusPending {
+			result = append(result, port)
+		}
+	}
+	return result
+}
+
+// StartPortRecon は max_parallel チェック + Pending タスクの InProgress マークを原子的に行う。
+// spawn 可能なら true を返し active を +1、不可なら false を返す。
+func (t *ReconTree) StartPortRecon(port *ReconNode) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active >= t.MaxParallel {
+		return false
+	}
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+		if port.getReconStatus(tt) == StatusPending {
+			port.setReconStatus(tt, StatusInProgress)
+		}
+	}
+	t.active++
+	return true
+}
+
+// Active は現在の active カウントを返す（TUI 表示用）。
+func (t *ReconTree) Active() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.active
 }
 
 func collectAllChildren(nodes *[]*ReconNode, node *ReconNode) {

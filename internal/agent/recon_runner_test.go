@@ -2,66 +2,10 @@ package agent
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
-
-func TestReconRunner_RunInitialScans(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
-	events := make(chan Event, 100)
-
-	rr := NewReconRunner(ReconRunnerConfig{
-		Tree:         tree,
-		Events:       events,
-		InitialScans: []string{"echo '<nmaprun><host><ports><port protocol=\"tcp\" portid=\"80\"><state state=\"open\"/><service name=\"http\" product=\"Apache\"/></port></ports></host></nmaprun>'"},
-		TargetHost:   "10.10.11.100",
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	rr.RunInitialScans(ctx)
-
-	// nmap XML パースで port 80 が追加される
-	if len(tree.Ports) != 1 {
-		t.Fatalf("Ports count = %d, want 1", len(tree.Ports))
-	}
-	if tree.Ports[0].Port != 80 {
-		t.Errorf("Port = %d, want 80", tree.Ports[0].Port)
-	}
-}
-
-func TestReconRunner_RunInitialScans_Placeholder(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
-	events := make(chan Event, 100)
-
-	rr := NewReconRunner(ReconRunnerConfig{
-		Tree:         tree,
-		Events:       events,
-		InitialScans: []string{"echo {target}"},
-		TargetHost:   "10.10.11.100",
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	rr.RunInitialScans(ctx)
-
-	// {target} が置換されたことを確認（イベントログから）
-	found := false
-	for len(events) > 0 {
-		e := <-events
-		if strings.Contains(e.Message, "10.10.11.100") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("target placeholder should be replaced in command")
-	}
-}
 
 func TestReconRunner_FindHTTPPorts(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
@@ -104,7 +48,7 @@ func TestReconRunner_BuildWebReconPrompt(t *testing.T) {
 		t.Error("prompt should require json output format")
 	}
 
-	// Phase 2: VALUE FUZZING セクションの確認
+	// VALUE FUZZING セクションの確認
 	if !strings.Contains(prompt, "VALUE FUZZING") {
 		t.Error("prompt should contain VALUE FUZZING section")
 	}
@@ -122,30 +66,7 @@ func TestReconRunner_BuildWebReconPrompt(t *testing.T) {
 	}
 }
 
-func TestReconRunner_RunInitialScans_ContextCancel(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
-	events := make(chan Event, 100)
-
-	rr := NewReconRunner(ReconRunnerConfig{
-		Tree:         tree,
-		Events:       events,
-		InitialScans: []string{"sleep 10", "echo done"},
-		TargetHost:   "10.10.11.100",
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	// 即キャンセルして2つ目のコマンドが実行されないことを確認
-	cancel()
-
-	rr.RunInitialScans(ctx)
-
-	// キャンセル済みなので何もパースされない
-	if len(tree.Ports) != 0 {
-		t.Errorf("Ports count = %d, want 0 (context was cancelled)", len(tree.Ports))
-	}
-}
-
-func TestReconRunner_SpawnWebRecon_NoTaskMgr(t *testing.T) {
+func TestReconRunner_SpawnWebReconForPort_NoTaskMgr(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	events := make(chan Event, 100)
@@ -160,7 +81,7 @@ func TestReconRunner_SpawnWebRecon_NoTaskMgr(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rr.SpawnWebRecon(ctx)
+	rr.SpawnWebReconForPort(ctx, tree.Ports[0])
 
 	// TaskManager が nil なのでスキップログが出る
 	found := false
@@ -176,13 +97,18 @@ func TestReconRunner_SpawnWebRecon_NoTaskMgr(t *testing.T) {
 	}
 }
 
-func TestReconRunner_SpawnWebRecon_NoHTTPPorts(t *testing.T) {
+func TestReconRunner_SpawnWebReconForPort_MaxParallel(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
-	tree.AddPort(22, "ssh", "OpenSSH")
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(8080, "http", "Jetty")
 	events := make(chan Event, 100)
+
+	// active を MaxParallel に設定 → spawn されない
+	tree.SetActiveForTest(2)
 
 	rr := NewReconRunner(ReconRunnerConfig{
 		Tree:       tree,
+		TaskMgr:    &TaskManager{}, // non-nil but no SubBrain → SpawnTask will fail
 		Events:     events,
 		TargetHost: "10.10.11.100",
 	})
@@ -190,19 +116,24 @@ func TestReconRunner_SpawnWebRecon_NoHTTPPorts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rr.SpawnWebRecon(ctx)
+	rr.SpawnWebReconForPort(ctx, tree.Ports[0])
 
-	// HTTP ポートがないのでスキップログが出る
+	// max_parallel 到達のログが出る
 	found := false
 	for len(events) > 0 {
 		e := <-events
-		if strings.Contains(e.Message, "No HTTP ports found") {
+		if strings.Contains(e.Message, "Max parallel reached") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("should emit log about no HTTP ports found")
+		t.Error("should emit log about max parallel reached")
+	}
+
+	// active は変わらない（spawn されていない）
+	if tree.Active() != 2 {
+		t.Errorf("active = %d, want 2 (should not change)", tree.Active())
 	}
 }
 
@@ -232,6 +163,48 @@ func TestBuildWebReconPrompt_ContainsAllFuzzCategories(t *testing.T) {
 		if !strings.Contains(prompt, cat.Description) {
 			t.Errorf("prompt missing description for %q", cat.Name)
 		}
+	}
+}
+
+func TestBuildWebReconPrompt_NoRecursion(t *testing.T) {
+	prompt := buildWebReconPrompt("10.10.11.100", 80)
+	if strings.Contains(prompt, "-recursion-depth 3") {
+		t.Error("prompt should NOT contain -recursion-depth 3")
+	}
+	if !strings.Contains(prompt, "Do NOT use -recursion") {
+		t.Error("prompt should instruct not to use recursion")
+	}
+}
+
+func TestBuildWebReconPrompt_StaticFileSkip(t *testing.T) {
+	prompt := buildWebReconPrompt("10.10.11.100", 80)
+	if !strings.Contains(prompt, "static file") {
+		t.Error("prompt should mention static file skipping")
+	}
+	if !strings.Contains(prompt, "js/css/jpg") {
+		t.Error("prompt should list static file extensions to skip")
+	}
+}
+
+func TestBuildWebReconPrompt_SequentialTaskInstructions(t *testing.T) {
+	prompt := buildWebReconPrompt("10.10.11.100", 80)
+	if !strings.Contains(prompt, "sequentially") || !strings.Contains(prompt, "each directory") {
+		// Check for sequential task processing instructions
+		if !strings.Contains(prompt, "separately") {
+			t.Error("prompt should instruct sequential/separate task processing for each directory")
+		}
+	}
+	if !strings.Contains(prompt, `"complete" action`) {
+		t.Error("prompt should mention complete action for finishing")
+	}
+}
+
+func TestBuildWebReconPrompt_VhostSubdomainChain(t *testing.T) {
+	prompt := buildWebReconPrompt("10.10.11.100", 80)
+
+	// vhost 発見後のエンドポイント列挙指示
+	if !strings.Contains(prompt, "vhost") || !strings.Contains(prompt, "endpoint enumeration") {
+		t.Error("prompt should instruct endpoint enumeration on discovered vhosts")
 	}
 }
 
@@ -275,122 +248,29 @@ func TestBuildWebReconPrompt_Phase2Instructions(t *testing.T) {
 	}
 }
 
-
-// --- Run() ラッパーのカバレッジ ---
-
-func TestReconRunner_Run(t *testing.T) {
-	// Run() は RunInitialScans + SpawnWebRecon を呼ぶ。
-	// echo で nmap XML を出力 → ツリーにポートが追加されることを確認。
-	// TaskMgr は nil なので SpawnWebRecon はスキップされる。
-	tree := NewReconTree("10.10.11.100", 2)
-	events := make(chan Event, 100)
-
-	rr := NewReconRunner(ReconRunnerConfig{
-		Tree:         tree,
-		Events:       events,
-		InitialScans: []string{"echo '<nmaprun><host><ports><port protocol=\"tcp\" portid=\"8080\"><state state=\"open\"/><service name=\"http\" product=\"Jetty\"/></port></ports></host></nmaprun>'"},
-		TargetHost:   "10.10.11.100",
-		// TaskMgr は nil → SpawnWebRecon はスキップ
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	rr.Run(ctx)
-
-	// nmap XML パースで port 8080 が追加される
-	if len(tree.Ports) != 1 {
-		t.Fatalf("Ports count = %d, want 1", len(tree.Ports))
-	}
-	if tree.Ports[0].Port != 8080 {
-		t.Errorf("Port = %d, want 8080", tree.Ports[0].Port)
-	}
-	if tree.Ports[0].Service != "http" {
-		t.Errorf("Service = %q, want http", tree.Ports[0].Service)
-	}
-
-	// TaskMgr nil → SpawnWebRecon がスキップログを出すこと
-	foundSkip := false
-	for len(events) > 0 {
-		e := <-events
-		if strings.Contains(e.Message, "TaskManager not configured") {
-			foundSkip = true
-			break
-		}
-	}
-	if !foundSkip {
-		t.Error("Run() should emit TaskManager not configured message via SpawnWebRecon")
-	}
-}
-
-// --- RunInitialScans raw output 保存のカバレッジ ---
-
-func TestReconRunner_RunInitialScans_RawOutput(t *testing.T) {
-	// memDir を設定して RunInitialScans を実行し、raw output ファイルが保存されることを確認
-	tree := NewReconTree("10.10.11.100", 2)
-	events := make(chan Event, 100)
-	tmpDir := t.TempDir()
-
-	rr := NewReconRunner(ReconRunnerConfig{
-		Tree:         tree,
-		Events:       events,
-		InitialScans: []string{"echo '<nmaprun><host><ports><port protocol=\"tcp\" portid=\"22\"><state state=\"open\"/><service name=\"ssh\" product=\"OpenSSH\" version=\"8.2\"/></port></ports></host></nmaprun>'"},
-		TargetHost:   "10.10.11.100",
-		MemDir:       tmpDir,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	rr.RunInitialScans(ctx)
-
-	// ポートが追加されたこと
-	if len(tree.Ports) != 1 {
-		t.Fatalf("Ports count = %d, want 1", len(tree.Ports))
-	}
-	if tree.Ports[0].Port != 22 {
-		t.Errorf("Port = %d, want 22", tree.Ports[0].Port)
-	}
-
-	// raw output ファイルが保存されたこと（SaveRawOutput は <host>/raw/ 配下にファイルを作る）
-	// ファイルが存在するかどうかを確認
-	rawDir := tmpDir + "/10.10.11.100/raw"
-	entries, err := os.ReadDir(rawDir)
-	if err != nil {
-		t.Fatalf("failed to read raw output dir %q: %v", rawDir, err)
-	}
-	if len(entries) == 0 {
-		t.Errorf("raw output dir %q is empty, expected at least 1 file", rawDir)
-	}
-}
-
-func TestReconRunner_SpawnWebRecon_StartsReconTasks(t *testing.T) {
-	// SpawnWebRecon が ReconTree の全タスクを InProgress にマークすることを確認
+func TestReconRunner_SpawnWebReconForPort_StartsReconTasks(t *testing.T) {
+	// SpawnWebReconForPort が ReconTree の Pending タスクを InProgress にマークすることを確認
 	tree := NewReconTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
-	tree.AddPort(443, "https", "nginx")
 	events := make(chan Event, 100)
 
-	// SubBrain 付き TaskManager（SpawnTask が成功するよう）
-	// ただし実際の SubAgent 実行は不要 — タスクの ReconTree 状態だけ確認
+	// TaskMgr が nil の場合、StartTask は呼ばれず SpawnWebReconForPort はスキップされる。
+	// ここでは nil のときは active が変わらないことを確認。
 	rr := NewReconRunner(ReconRunnerConfig{
 		Tree:       tree,
-		TaskMgr:    nil, // nil だと SpawnTask はスキップされるが StartTask テストのため後で追加
+		TaskMgr:    nil,
 		Events:     events,
 		TargetHost: "10.10.11.100",
 		TargetID:   1,
 	})
 
-	// TaskMgr が nil のときは StartTask だけ呼ばれず SpawnWebRecon がスキップされる。
-	// StartTask テストは recon_tree_test.go の CompleteAllPortTasks テストでカバー済み。
-	// ここでは SpawnWebRecon が TaskMgr nil のとき active を変えないことを確認。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rr.SpawnWebRecon(ctx)
+	rr.SpawnWebReconForPort(ctx, tree.Ports[0])
 
 	// TaskMgr nil → active は 0 のまま
-	if tree.active != 0 {
-		t.Errorf("active = %d, want 0 (TaskMgr nil, StartTask should not be called)", tree.active)
+	if tree.Active() != 0 {
+		t.Errorf("active = %d, want 0 (TaskMgr nil, StartTask should not be called)", tree.Active())
 	}
 }

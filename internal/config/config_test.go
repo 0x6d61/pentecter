@@ -136,52 +136,6 @@ recon:
 	}
 }
 
-func TestLoad_ReconInitialScans(t *testing.T) {
-	yaml := `
-recon:
-  max_parallel: 3
-  initial_scans:
-    - "nmap -p- -sV -Pn -oX - {target}"
-    - "nmap -sU --top-ports 1000 -sV -Pn -oX - {target}"
-`
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(yaml), 0644)
-
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Recon.InitialScans) != 2 {
-		t.Fatalf("InitialScans count = %d, want 2", len(cfg.Recon.InitialScans))
-	}
-	if cfg.Recon.InitialScans[0] != "nmap -p- -sV -Pn -oX - {target}" {
-		t.Errorf("InitialScans[0] = %q", cfg.Recon.InitialScans[0])
-	}
-	if cfg.Recon.MaxParallel != 3 {
-		t.Errorf("MaxParallel = %d, want 3", cfg.Recon.MaxParallel)
-	}
-}
-
-func TestLoad_ReconInitialScans_Default(t *testing.T) {
-	yaml := `
-recon:
-  max_parallel: 2
-`
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(yaml), 0644)
-
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// デフォルトでは initial_scans は空
-	if len(cfg.Recon.InitialScans) != 0 {
-		t.Errorf("default InitialScans should be empty, got %v", cfg.Recon.InitialScans)
-	}
-}
-
 func TestLoad_ReconConfig_Default(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

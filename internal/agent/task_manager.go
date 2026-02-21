@@ -33,6 +33,7 @@ type SpawnTaskRequest struct {
 	TargetID   int
 	TargetHost string
 	MaxTurns   int
+	ReconTree  *ReconTree
 }
 
 // NewTaskManager は TaskManager を構築する。
@@ -72,7 +73,7 @@ func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (str
 		cancel()
 		return id, fmt.Errorf("sub-brain is not configured for smart tasks")
 	}
-	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events)
+	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events, req.ReconTree, req.TargetHost)
 	go func() {
 		sa.Run(taskCtx, task, req.TargetHost)
 		select {

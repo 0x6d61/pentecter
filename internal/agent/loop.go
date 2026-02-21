@@ -52,8 +52,8 @@ type Loop struct {
 	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
 	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
 	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
-	reconTree      *ReconTree       // 構造的偵察制御（nil = 無効）
-	initialScans   []string           // 自動実行する初期スキャンコマンド
+	reconTree    *ReconTree    // 構造的偵察制御（nil = 無効）
+	reconRunner  *ReconRunner // リアクティブ偵察オーケストレーター（nil = 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -131,12 +131,6 @@ func (l *Loop) WithReconTree(rt *ReconTree) *Loop {
 	return l
 }
 
-// WithInitialScans は初期スキャンコマンドをセットする（メソッドチェーン用）。
-func (l *Loop) WithInitialScans(scans []string) *Loop {
-	l.initialScans = scans
-	return l
-}
-
 // SetBrain は実行中の Loop の Brain を差し替える（/model コマンド対応）。
 // TUI goroutine から呼ばれるため mutex で保護。
 func (l *Loop) SetBrain(br brain.Brain) {
@@ -151,26 +145,20 @@ func (l *Loop) Run(ctx context.Context) {
 		Message: fmt.Sprintf("Agent started: %s", l.target.Host)})
 	l.target.SetStatusSafe(StatusScanning)
 
-	// Phase 0+1: ReconRunner による自動偵察
-	if l.reconTree != nil && len(l.initialScans) > 0 {
+	// ReconRunner 初期化（リアクティブモデル: evaluateResult から自動 spawn）
+	if l.reconTree != nil {
 		memDir := ""
 		if l.memoryStore != nil {
 			memDir = l.memoryStore.BaseDir()
 		}
-		rr := NewReconRunner(ReconRunnerConfig{
-			Tree:         l.reconTree,
-			TaskMgr:      l.taskMgr,
-			Events:       l.events,
-			InitialScans: l.initialScans,
-			TargetHost:   l.target.Host,
-			TargetID:     l.target.ID,
-			MemDir:       memDir,
+		l.reconRunner = NewReconRunner(ReconRunnerConfig{
+			Tree:       l.reconTree,
+			TaskMgr:    l.taskMgr,
+			Events:     l.events,
+			TargetHost: l.target.Host,
+			TargetID:   l.target.ID,
+			MemDir:     memDir,
 		})
-		// Phase 0: nmap 自動実行（ブロッキング）
-		rr.RunInitialScans(ctx)
-		// Phase 1: web recon SubAgent spawn（タスク起動自体は即座に完了、SubAgent は goroutine で実行）
-		rr.SpawnWebRecon(ctx)
-		// Target に ReconTree を反映
 		l.target.SetReconTree(l.reconTree)
 	}
 
@@ -329,6 +317,20 @@ func (l *Loop) Run(ctx context.Context) {
 	}
 }
 
+// isWebReconCommand は web recon ツールのコマンドかどうかを判定する。
+// リアクティブモード有効時、メイン Agent からの web recon を HTTPAgent に委譲するために使用。
+func isWebReconCommand(cmd string) bool {
+	cmdLower := strings.ToLower(cmd)
+	// コマンド名を先頭またはパスの末尾で検出
+	webTools := []string{"ffuf", "dirb", "gobuster", "nikto"}
+	for _, tool := range webTools {
+		if strings.Contains(cmdLower, tool) {
+			return true
+		}
+	}
+	return false
+}
+
 // runCommand は CommandRunner でコマンドを実行する。
 // needsProposal が true のとき Brain が誤って run を使った場合の安全ネット。
 func (l *Loop) runCommand(ctx context.Context, command string) {
@@ -336,6 +338,18 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "run: command is empty"})
 		return
 	}
+
+	// リアクティブモード有効時: web recon ツールは HTTPAgent が担当 → メイン Agent はブロック
+	if l.reconRunner != nil && isWebReconCommand(command) {
+		blockMsg := "Web recon tools (ffuf/dirb/gobuster/nikto) are handled by HTTPAgent. Focus on non-HTTP services."
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: blockMsg})
+		l.lastToolOutput = blockMsg
+		l.lastExitCode = 1
+		return
+	}
+
+	// ffuf コマンド正規化: -s（プログレス抑制）
+	command = EnsureFfufSilent(command)
 
 	l.lastCommand = command
 	l.cmdStartTime = time.Now()
@@ -558,10 +572,28 @@ func (l *Loop) evaluateResult() {
 			}
 		}
 
+		// nmap -oX <file> / -oN <file> / -oA <base> の場合、ファイルから読み取る
+		if nmapPath := ExtractNmapOutputFile(l.lastCommand); nmapPath != "" {
+			if data, err := os.ReadFile(nmapPath); err == nil {
+				parseOutput = string(data)
+			}
+		}
+
+		// パース前のポート数を記録（自動 spawn 判定用）
+		portsBefore := l.reconTree.PortCount()
+
 		if err := DetectAndParse(l.lastCommand, parseOutput, l.reconTree, l.target.Host); err != nil {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
 				Message: fmt.Sprintf("ReconTree parse warning: %v", err)})
 		}
+
+		// リアクティブ spawn: 新規 HTTP ポートが検出されたら SubAgent を自動起動
+		if l.reconRunner != nil {
+			for _, port := range l.reconTree.NewHTTPPortsSince(portsBefore) {
+				l.reconRunner.SpawnWebReconForPort(context.Background(), port)
+			}
+		}
+
 		// Target にも反映（TUI から参照可能にする）
 		l.target.SetReconTree(l.reconTree)
 	}
@@ -679,12 +711,25 @@ func bytesContains(s, sub []byte) bool {
 }
 
 // streamAndCollect は実行結果をストリームして TUI に表示する。
+// 出力が高速な場合（ffuf 等）、100ms ごとにスロットルして TUI フリーズを防止する。
+// LLM に渡すデータ（result.Truncated）は影響を受けない。
 func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.OutputLine, resultCh <-chan *tools.ToolResult) {
+	lastEmit := time.Now()
+	var lastLine string
 	for line := range linesCh {
 		if line.Content == "" {
 			continue
 		}
-		l.emit(Event{Type: EventCmdOutput, OutputLine: line.Content})
+		lastLine = line.Content
+		now := time.Now()
+		if now.Sub(lastEmit) >= 100*time.Millisecond {
+			l.emit(Event{Type: EventCmdOutput, OutputLine: lastLine})
+			lastEmit = now
+		}
+	}
+	// 最終行は必ず表示（コマンド完了直前の出力を見逃さない）
+	if lastLine != "" {
+		l.emit(Event{Type: EventCmdOutput, OutputLine: lastLine})
 	}
 
 	result := <-resultCh
@@ -777,7 +822,7 @@ func (l *Loop) buildReconQueue() string {
 	if l.reconTree == nil {
 		return ""
 	}
-	return l.reconTree.RenderQueue()
+	return l.reconTree.RenderIntel()
 }
 
 func (l *Loop) buildSnapshot() string {

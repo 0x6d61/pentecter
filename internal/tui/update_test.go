@@ -1888,10 +1888,10 @@ func TestUpdate_DebounceMsg_NotDirty(t *testing.T) {
 }
 
 // ===========================================================================
-// Update() — AgentEventMsg handling
+// Update() — AgentEventBatchMsg handling
 // ===========================================================================
 
-func TestUpdate_AgentEventMsg_WithChannel(t *testing.T) {
+func TestUpdate_AgentEventBatchMsg_WithChannel(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
@@ -1901,12 +1901,12 @@ func TestUpdate_AgentEventMsg_WithChannel(t *testing.T) {
 	ch := make(chan agent.Event, 1)
 	m.agentEvents = ch
 
-	result, cmd := m.Update(AgentEventMsg(agent.Event{
+	result, cmd := m.Update(AgentEventBatchMsg([]agent.Event{{
 		TargetID: 1,
 		Type:     agent.EventLog,
 		Source:   agent.SourceSystem,
 		Message:  "test message",
-	}))
+	}}))
 	rm := result.(Model)
 	_ = rm
 
@@ -1917,23 +1917,23 @@ func TestUpdate_AgentEventMsg_WithChannel(t *testing.T) {
 
 	// Block should have been added
 	if len(t1.Blocks) == 0 {
-		t.Error("expected at least one block after AgentEventMsg")
+		t.Error("expected at least one block after AgentEventBatchMsg")
 	}
 }
 
-func TestUpdate_AgentEventMsg_NilChannel(t *testing.T) {
+func TestUpdate_AgentEventBatchMsg_NilChannel(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
 	m.ready = true
 	m.agentEvents = nil // no channel
 
-	_, cmd := m.Update(AgentEventMsg(agent.Event{
+	_, cmd := m.Update(AgentEventBatchMsg([]agent.Event{{
 		TargetID: 1,
 		Type:     agent.EventLog,
 		Source:   agent.SourceSystem,
 		Message:  "no channel test",
-	}))
+	}}))
 
 	// With nil agentEvents, cmd may still be non-nil if spinnerCmd is returned,
 	// but AgentEventCmd should not be in the batch.
@@ -1941,7 +1941,7 @@ func TestUpdate_AgentEventMsg_NilChannel(t *testing.T) {
 	_ = cmd
 }
 
-func TestUpdate_AgentEventMsg_WithSpinnerCmd(t *testing.T) {
+func TestUpdate_AgentEventBatchMsg_WithSpinnerCmd(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
@@ -1951,10 +1951,10 @@ func TestUpdate_AgentEventMsg_WithSpinnerCmd(t *testing.T) {
 	m.agentEvents = ch
 
 	// ThinkStart event returns a spinner cmd
-	result, cmd := m.Update(AgentEventMsg(agent.Event{
+	result, cmd := m.Update(AgentEventBatchMsg([]agent.Event{{
 		TargetID: 1,
 		Type:     agent.EventThinkStart,
-	}))
+	}}))
 	rm := result.(Model)
 
 	if !rm.spinning {
@@ -1962,6 +1962,31 @@ func TestUpdate_AgentEventMsg_WithSpinnerCmd(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("expected non-nil batch cmd (spinner tick + event cmd)")
+	}
+}
+
+func TestUpdate_AgentEventBatchMsg_MultipleEvents(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	m := NewWithTargets([]*agent.Target{t1})
+	m.handleResize(120, 40)
+	m.ready = true
+
+	ch := make(chan agent.Event, 1)
+	m.agentEvents = ch
+
+	// 複数イベントを1バッチで処理
+	_, cmd := m.Update(AgentEventBatchMsg([]agent.Event{
+		{TargetID: 1, Type: agent.EventLog, Source: agent.SourceSystem, Message: "msg1"},
+		{TargetID: 1, Type: agent.EventLog, Source: agent.SourceSystem, Message: "msg2"},
+		{TargetID: 1, Type: agent.EventLog, Source: agent.SourceSystem, Message: "msg3"},
+	}))
+
+	if cmd == nil {
+		t.Error("expected non-nil cmd")
+	}
+	// 3つのブロックが追加されること
+	if len(t1.Blocks) != 3 {
+		t.Errorf("expected 3 blocks, got %d", len(t1.Blocks))
 	}
 }
 
@@ -3015,7 +3040,7 @@ func TestHandleAgentEvent_EventSubTaskLog(t *testing.T) {
 // handleAgentEvent — EventCmdOutput debounce behavior
 // ===========================================================================
 
-func TestHandleAgentEvent_EventCmdOutput_Debounce_NotSpinning(t *testing.T) {
+func TestHandleAgentEvent_EventCmdOutput_SetsDirty_NotSpinning(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
@@ -3033,13 +3058,13 @@ func TestHandleAgentEvent_EventCmdOutput_Debounce_NotSpinning(t *testing.T) {
 	if !m.viewportDirty {
 		t.Error("expected viewportDirty=true after CmdOutput")
 	}
-	// When not spinning, debounce timer should be returned
-	if cmd == nil {
-		t.Error("expected non-nil debounce cmd when not spinning")
+	// handleAgentEvent no longer returns debounce timer; batch handler does the rebuild
+	if cmd != nil {
+		t.Error("expected nil cmd from CmdOutput (viewport rebuild deferred to batch handler)")
 	}
 }
 
-func TestHandleAgentEvent_EventCmdOutput_Debounce_WhileSpinning(t *testing.T) {
+func TestHandleAgentEvent_EventCmdOutput_SetsDirty_WhileSpinning(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	m := NewWithTargets([]*agent.Target{t1})
 	m.handleResize(120, 40)
@@ -3057,9 +3082,9 @@ func TestHandleAgentEvent_EventCmdOutput_Debounce_WhileSpinning(t *testing.T) {
 	if !m.viewportDirty {
 		t.Error("expected viewportDirty=true after CmdOutput")
 	}
-	// When spinning, next spinner tick will flush — no debounce cmd needed
+	// handleAgentEvent no longer returns debounce timer; batch handler does the rebuild
 	if cmd != nil {
-		t.Error("expected nil cmd (debounce deferred to spinner tick) when spinning")
+		t.Error("expected nil cmd from CmdOutput (viewport rebuild deferred to batch handler)")
 	}
 }
 
@@ -3398,29 +3423,44 @@ func TestLogSystem_WithActiveTarget(t *testing.T) {
 // AgentEventCmd — basic functionality
 // ===========================================================================
 
-func TestAgentEventCmd_ReturnsCmd(t *testing.T) {
-	ch := make(chan agent.Event, 1)
+func TestAgentEventCmd_ReturnsBatch(t *testing.T) {
+	ch := make(chan agent.Event, 3)
 	cmd := AgentEventCmd(ch)
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd from AgentEventCmd")
 	}
 
-	// Push an event to the channel so the cmd can resolve
-	ch <- agent.Event{
-		TargetID: 1,
-		Type:     agent.EventLog,
-		Source:   agent.SourceSystem,
-		Message:  "test",
-	}
+	// Push multiple events to the channel
+	ch <- agent.Event{TargetID: 1, Type: agent.EventLog, Source: agent.SourceSystem, Message: "msg1"}
+	ch <- agent.Event{TargetID: 1, Type: agent.EventLog, Source: agent.SourceSystem, Message: "msg2"}
 
-	// Execute the cmd and verify it returns an AgentEventMsg
+	// Execute the cmd and verify it returns an AgentEventBatchMsg
 	msg := cmd()
-	eventMsg, ok := msg.(AgentEventMsg)
+	batchMsg, ok := msg.(AgentEventBatchMsg)
 	if !ok {
-		t.Fatalf("expected AgentEventMsg, got %T", msg)
+		t.Fatalf("expected AgentEventBatchMsg, got %T", msg)
 	}
-	if agent.Event(eventMsg).Message != "test" {
-		t.Errorf("expected message 'test', got %q", agent.Event(eventMsg).Message)
+	if len(batchMsg) < 1 {
+		t.Fatal("expected at least 1 event in batch")
+	}
+	if batchMsg[0].Message != "msg1" {
+		t.Errorf("expected first message 'msg1', got %q", batchMsg[0].Message)
+	}
+}
+
+func TestAgentEventCmd_SingleEvent(t *testing.T) {
+	ch := make(chan agent.Event, 1)
+	cmd := AgentEventCmd(ch)
+
+	ch <- agent.Event{TargetID: 1, Type: agent.EventLog, Source: agent.SourceSystem, Message: "only"}
+
+	msg := cmd()
+	batchMsg, ok := msg.(AgentEventBatchMsg)
+	if !ok {
+		t.Fatalf("expected AgentEventBatchMsg, got %T", msg)
+	}
+	if len(batchMsg) != 1 {
+		t.Errorf("expected 1 event in batch, got %d", len(batchMsg))
 	}
 }
 

@@ -139,6 +139,113 @@ func TestParseFfufJSON_Vhost(t *testing.T) {
 	}
 }
 
+const testFfufRecursiveJSON = `{"commandline":"ffuf -w wordlist -u http://10.10.11.100/api/FUZZ -recursion -recursion-depth 3","results":[{"input":{"FUZZ":"v1"},"status":301,"length":0,"url":"http://10.10.11.100/api/v1"},{"input":{"FUZZ":"users"},"status":200,"length":1234,"url":"http://10.10.11.100/api/v1/users"}]}`
+
+func TestParseFfufJSON_RecursiveURL(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	// /api ノードを事前に追加（親として必要）
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	err := ParseFfufJSON(testFfufRecursiveJSON, tree, "10.10.11.100", 80, "/api", TaskEndpointEnum)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// /api ノードの子に /api/v1 が追加される
+	apiNode := tree.Ports[0].Children[0] // /api
+	if len(apiNode.Children) != 1 {
+		t.Fatalf("api Children count = %d, want 1 (/api/v1)", len(apiNode.Children))
+	}
+	if apiNode.Children[0].Path != "/api/v1" {
+		t.Errorf("child path = %q, want /api/v1", apiNode.Children[0].Path)
+	}
+
+	// /api/v1 の子に /api/v1/users が追加される
+	v1Node := apiNode.Children[0]
+	if len(v1Node.Children) != 1 {
+		t.Fatalf("v1 Children count = %d, want 1 (/api/v1/users)", len(v1Node.Children))
+	}
+	if v1Node.Children[0].Path != "/api/v1/users" {
+		t.Errorf("child path = %q, want /api/v1/users", v1Node.Children[0].Path)
+	}
+}
+
+func TestParseFfufJSON_EndpointEnumChildrenStayPending(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	jsonData := `{"commandline":"ffuf -u http://10.10.11.100/FUZZ -of json","results":[
+		{"input":{"FUZZ":"admin"},"status":200,"length":1234,"url":"http://10.10.11.100/admin"},
+		{"input":{"FUZZ":"api"},"status":200,"length":5678,"url":"http://10.10.11.100/api"}
+	]}`
+
+	err := ParseFfufJSON(jsonData, tree, "10.10.11.100", 80, "/", TaskEndpointEnum)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Parent endpoint_enum should be complete
+	portNode := tree.Ports[0]
+	if portNode.EndpointEnum != StatusComplete {
+		t.Errorf("parent EndpointEnum = %d, want StatusComplete", portNode.EndpointEnum)
+	}
+
+	// Children stay pending for HTTPAgent to process
+	for _, child := range portNode.Children {
+		if child.EndpointEnum != StatusPending {
+			t.Errorf("child %s EndpointEnum = %d, want StatusPending", child.Path, child.EndpointEnum)
+		}
+		// ParamFuzz and Profiling should still be Pending
+		if child.ParamFuzz != StatusPending {
+			t.Errorf("child %s ParamFuzz = %d, want StatusPending", child.Path, child.ParamFuzz)
+		}
+		if child.Profiling != StatusPending {
+			t.Errorf("child %s Profiling = %d, want StatusPending", child.Path, child.Profiling)
+		}
+	}
+}
+
+func TestParseFfufJSON_RecursiveChildrenStayPending(t *testing.T) {
+	tree := NewReconTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	// Recursive ffuf result: /api/v1 and /api/v1/users discovered
+	err := ParseFfufJSON(testFfufRecursiveJSON, tree, "10.10.11.100", 80, "/api", TaskEndpointEnum)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	apiNode := tree.Ports[0].Children[0] // /api
+	// /api endpoint_enum should be complete (parent)
+	if apiNode.EndpointEnum != StatusComplete {
+		t.Errorf("/api EndpointEnum = %d, want StatusComplete", apiNode.EndpointEnum)
+	}
+
+	// /api/v1 endpoint_enum should stay pending (HTTPAgent processes each directory separately)
+	v1Node := apiNode.Children[0]
+	if v1Node.EndpointEnum != StatusPending {
+		t.Errorf("/api/v1 EndpointEnum = %d, want StatusPending", v1Node.EndpointEnum)
+	}
+
+	// /api/v1/users endpoint_enum should stay pending (HTTPAgent processes each directory separately)
+	usersNode := v1Node.Children[0]
+	if usersNode.EndpointEnum != StatusPending {
+		t.Errorf("/api/v1/users EndpointEnum = %d, want StatusPending", usersNode.EndpointEnum)
+	}
+
+	// ParamFuzz and Profiling should still be Pending on all children
+	for _, node := range []*ReconNode{v1Node, usersNode} {
+		if node.ParamFuzz != StatusPending {
+			t.Errorf("%s ParamFuzz = %d, want StatusPending", node.Path, node.ParamFuzz)
+		}
+		if node.Profiling != StatusPending {
+			t.Errorf("%s Profiling = %d, want StatusPending", node.Path, node.Profiling)
+		}
+	}
+}
+
 func TestDetectAndParse_Nmap(t *testing.T) {
 	tree := NewReconTree("10.10.11.100", 2)
 	err := DetectAndParse("nmap -sV -sC 10.10.11.100", testNmapXML, tree, "10.10.11.100")
@@ -549,6 +656,72 @@ func TestExtractDomainFromFfufCmd_NoFUZZ(t *testing.T) {
 		t.Errorf("extractDomainFromFfufCmd = %q, want 'unknown'", got)
 	}
 }
+
+// --- EnsureFfufSilent テスト ---
+
+func TestEnsureFfufSilent(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{
+			"add -s to ffuf",
+			`ffuf -w wordlist -u http://10.10.11.100/FUZZ -of json`,
+			`ffuf -s -w wordlist -u http://10.10.11.100/FUZZ -of json`,
+		},
+		{
+			"already has -s",
+			`ffuf -s -w wordlist -u http://10.10.11.100/FUZZ -of json`,
+			`ffuf -s -w wordlist -u http://10.10.11.100/FUZZ -of json`,
+		},
+		{
+			"not ffuf",
+			`nmap -sV 10.10.11.100`,
+			`nmap -sV 10.10.11.100`,
+		},
+		{
+			"param fuzz also gets -s",
+			`ffuf -w params.txt -u "http://10.10.11.100/api?FUZZ=value" -of json`,
+			`ffuf -s -w params.txt -u "http://10.10.11.100/api?FUZZ=value" -of json`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EnsureFfufSilent(tt.command)
+			if got != tt.want {
+				t.Errorf("EnsureFfufSilent(%q)\n  got:  %q\n  want: %q", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- ExtractNmapOutputFile テスト ---
+
+func TestExtractNmapOutputFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"-oX file", "nmap -sV -oX /tmp/scan.xml 10.10.11.100", "/tmp/scan.xml"},
+		{"-oN file", "nmap -sV -oN /tmp/scan.txt 10.10.11.100", "/tmp/scan.txt"},
+		{"-oA base", "nmap -sV -oA /tmp/scan 10.10.11.100", "/tmp/scan.xml"},
+		{"-oX stdout", "nmap -sV -oX - 10.10.11.100", ""},
+		{"no output flag", "nmap -sV 10.10.11.100", ""},
+		{"not nmap", "ffuf -w wordlist -u http://10.10.11.100/FUZZ", ""},
+		{"quoted path", `nmap -sV -oX "/tmp/scan_out.xml" 10.10.11.100`, "/tmp/scan_out.xml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractNmapOutputFile(tt.command)
+			if got != tt.want {
+				t.Errorf("ExtractNmapOutputFile(%q) = %q, want %q", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
 
 // --- ExtractFfufOutputPath テスト ---
 

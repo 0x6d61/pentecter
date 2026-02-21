@@ -452,13 +452,13 @@ func TestBuildTaskResult_WebReconUpdatesReconTree(t *testing.T) {
 	// ReconTree をセットアップ
 	tree := agent.NewReconTree("10.0.0.1", 2)
 	tree.AddPort(80, "http", "Apache")
-	// Pending なタスクだけ InProgress にマーク（SpawnWebRecon の実際の動作を再現）
+	// SubAgent 単位で InProgress にマーク（SpawnWebReconForPort の実際の動作を再現）
 	// AddPort(http) は EndpointEnum + VhostDiscov を Pending にする
 	node := tree.Ports[0]
 	for _, tt := range []agent.ReconTaskType{agent.TaskEndpointEnum, agent.TaskVhostDiscov} {
-		task := &agent.ReconTask{Type: tt, Node: node, Host: node.Host, Port: node.Port}
-		tree.StartTask(task)
+		node.SetReconStatusForTest(tt, agent.StatusInProgress)
 	}
+	tree.SetActiveForTest(1) // SubAgent 1つ分
 	loop.WithReconTree(tree)
 
 	// web_recon phase の SubTask を注入

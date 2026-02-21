@@ -536,7 +536,7 @@ func TestBuildMemory_WithStore(t *testing.T) {
 	}
 }
 
-func TestBuildReconQueue_NilTree(t *testing.T) {
+func TestBuildReconIntel_NilTree(t *testing.T) {
 	l := &Loop{
 		target:    NewTarget(1, "10.0.0.1"),
 		events:    make(chan Event, 32),
@@ -616,6 +616,32 @@ func TestEvaluateResult_EmptyOutput_Failure(t *testing.T) {
 	l.evaluateResult()
 	if l.consecutiveFailures != 1 {
 		t.Errorf("consecutiveFailures: got %d, want 1 (empty output = failure)", l.consecutiveFailures)
+	}
+}
+
+func TestIsWebReconCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		want bool
+	}{
+		{"ffuf command", "ffuf -w wordlist -u http://10.10.11.100/FUZZ", true},
+		{"dirb command", "dirb http://10.10.11.100/", true},
+		{"gobuster command", "gobuster dir -u http://10.10.11.100/ -w wordlist", true},
+		{"nikto command", "nikto -h 10.10.11.100", true},
+		{"nmap command", "nmap -sV 10.10.11.100", false},
+		{"curl command", "curl http://10.10.11.100/", false},
+		{"uppercase FFUF", "FFUF -w wordlist -u http://10.10.11.100/FUZZ", true},
+		{"path to ffuf", "/usr/bin/ffuf -w wordlist -u http://10.10.11.100/FUZZ", true},
+		{"empty command", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWebReconCommand(tt.cmd)
+			if got != tt.want {
+				t.Errorf("isWebReconCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+			}
+		})
 	}
 }
 

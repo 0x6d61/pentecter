@@ -161,8 +161,8 @@ func TestBuildPrompt_ContainsReconQueue(t *testing.T) {
 		ReconQueue:     "RECON QUEUE (3 pending, 0 active, max_parallel=2):\n  [next]  endpoint_enum: /api on 10.10.11.100:80\n",
 	}
 	got := buildPrompt(input)
-	if !strings.Contains(got, "Reconnaissance Queue") {
-		t.Error("buildPrompt should contain Reconnaissance Queue section")
+	if !strings.Contains(got, "Reconnaissance Intel") {
+		t.Error("buildPrompt should contain Reconnaissance Intel section")
 	}
 	if !strings.Contains(got, "RECON QUEUE") {
 		t.Error("buildPrompt should contain RECON QUEUE content")
@@ -178,8 +178,8 @@ func TestBuildPrompt_EmptyReconQueue(t *testing.T) {
 		ReconQueue:     "",
 	}
 	got := buildPrompt(input)
-	if strings.Contains(got, "Reconnaissance Queue") {
-		t.Error("buildPrompt should NOT contain Reconnaissance Queue when empty")
+	if strings.Contains(got, "Reconnaissance Intel") {
+		t.Error("buildPrompt should NOT contain Reconnaissance Intel when empty")
 	}
 }
 
