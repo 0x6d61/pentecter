@@ -436,3 +436,114 @@ func TestTaskManager_SpawnTask_Smart_NoBrain(t *testing.T) {
 		t.Errorf("Error should mention sub-brain, got: %q", err.Error())
 	}
 }
+
+// --- ActiveTasks / DoneCh テスト ---
+
+func TestTaskManager_ActiveTasks_Empty(t *testing.T) {
+	// タスクが存在しない場合は nil/empty を返すこと
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	tm := agent.NewTaskManager(runner, nil, events, nil)
+
+	active := tm.ActiveTasks(1)
+	if len(active) != 0 {
+		t.Errorf("ActiveTasks on empty manager: got %d, want 0", len(active))
+	}
+}
+
+func TestTaskManager_ActiveTasks_FiltersByTarget(t *testing.T) {
+	// InjectTask を使って直接タスクを注入し、TargetID でフィルタリングされることを確認
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	tm := agent.NewTaskManager(runner, nil, events, nil)
+
+	// Target 1 の pending タスク
+	task1 := agent.NewSubTask("task-inject-1", agent.TaskKindSmart, "scan ports")
+	task1.TargetID = 1
+	task1.Status = agent.TaskStatusPending
+	tm.InjectTask("task-inject-1", task1)
+
+	// Target 1 の running タスク
+	task2 := agent.NewSubTask("task-inject-2", agent.TaskKindSmart, "enumerate services")
+	task2.TargetID = 1
+	task2.Status = agent.TaskStatusRunning
+	tm.InjectTask("task-inject-2", task2)
+
+	// Target 1 の completed タスク（active には含まれないはず）
+	task3 := agent.NewSubTask("task-inject-3", agent.TaskKindSmart, "exploit vuln")
+	task3.TargetID = 1
+	task3.Status = agent.TaskStatusCompleted
+	tm.InjectTask("task-inject-3", task3)
+
+	// Target 2 の pending タスク（Target 1 の結果に含まれないはず）
+	task4 := agent.NewSubTask("task-inject-4", agent.TaskKindSmart, "other target scan")
+	task4.TargetID = 2
+	task4.Status = agent.TaskStatusPending
+	tm.InjectTask("task-inject-4", task4)
+
+	// Target 1 の active タスクを取得
+	active := tm.ActiveTasks(1)
+	if len(active) != 2 {
+		t.Fatalf("ActiveTasks(1): got %d, want 2", len(active))
+	}
+
+	// active に含まれるのは pending と running のみ
+	ids := make(map[string]bool)
+	for _, task := range active {
+		ids[task.ID] = true
+	}
+	if !ids["task-inject-1"] {
+		t.Error("ActiveTasks(1) should contain task-inject-1 (pending)")
+	}
+	if !ids["task-inject-2"] {
+		t.Error("ActiveTasks(1) should contain task-inject-2 (running)")
+	}
+	if ids["task-inject-3"] {
+		t.Error("ActiveTasks(1) should NOT contain task-inject-3 (completed)")
+	}
+	if ids["task-inject-4"] {
+		t.Error("ActiveTasks(1) should NOT contain task-inject-4 (target 2)")
+	}
+
+	// Target 2 の active タスクを取得
+	active2 := tm.ActiveTasks(2)
+	if len(active2) != 1 {
+		t.Fatalf("ActiveTasks(2): got %d, want 1", len(active2))
+	}
+	if active2[0].ID != "task-inject-4" {
+		t.Errorf("ActiveTasks(2)[0].ID: got %q, want %q", active2[0].ID, "task-inject-4")
+	}
+
+	// 存在しない Target のタスクは空
+	active3 := tm.ActiveTasks(999)
+	if len(active3) != 0 {
+		t.Errorf("ActiveTasks(999): got %d, want 0", len(active3))
+	}
+}
+
+func TestTaskManager_DoneCh(t *testing.T) {
+	// DoneCh は非 nil のチャネルを返すこと
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	tm := agent.NewTaskManager(runner, nil, events, nil)
+
+	ch := tm.DoneCh()
+	if ch == nil {
+		t.Fatal("DoneCh: got nil, want non-nil channel")
+	}
+
+	// InjectDone で送信した値が DoneCh から読み取れること
+	go tm.InjectDone("test-done-id")
+
+	select {
+	case id := <-ch:
+		if id != "test-done-id" {
+			t.Errorf("DoneCh received: got %q, want %q", id, "test-done-id")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DoneCh: timed out waiting for value")
+	}
+}

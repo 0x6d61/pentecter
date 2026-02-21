@@ -442,3 +442,26 @@ func TestStore_Record_TimestampFormat(t *testing.T) {
 		t.Errorf("Expected timestamp starting with [20, got:\n%s", content)
 	}
 }
+
+// --- BaseDir テスト ---
+
+func TestStore_BaseDir(t *testing.T) {
+	dir := t.TempDir()
+	s := memory.NewStore(dir)
+
+	got := s.BaseDir()
+	if got != dir {
+		t.Errorf("BaseDir: got %q, want %q", got, dir)
+	}
+}
+
+func TestStore_BaseDir_CustomPath(t *testing.T) {
+	// 任意のパス文字列がそのまま返ることを確認（ディレクトリの存在は問わない）
+	customDir := "/tmp/pentecter-test-nonexistent-12345"
+	s := memory.NewStore(customDir)
+
+	got := s.BaseDir()
+	if got != customDir {
+		t.Errorf("BaseDir: got %q, want %q", got, customDir)
+	}
+}
