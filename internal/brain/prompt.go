@@ -335,6 +335,12 @@ func buildPrompt(input Input) string {
 	sb.WriteString(input.TargetSnapshot)
 	sb.WriteString("\n```\n")
 
+	if input.TaskInstruction != "" {
+		sb.WriteString("\n## Task Instructions (persistent)\n")
+		sb.WriteString(input.TaskInstruction)
+		sb.WriteString("\n")
+	}
+
 	if input.Memory != "" {
 		sb.WriteString("\n## Previous Findings (from memory)\n")
 		sb.WriteString(input.Memory)

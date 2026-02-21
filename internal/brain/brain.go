@@ -81,6 +81,9 @@ type Input struct {
 	Memory string
 	// ReconQueue は構造的偵察キューのプロンプト注入テキスト。空でも可。
 	ReconQueue string
+	// TaskInstruction は SubAgent 用の永続タスク指示。毎ターン注入される。
+	// UserMessage とは異なり、対話的な指示ではなく永続的なワークフロー指示に使用。
+	TaskInstruction string
 }
 
 // Brain は LLM との対話インターフェース。

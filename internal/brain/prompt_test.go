@@ -807,3 +807,36 @@ func TestParseActionJSON_SpawnTask(t *testing.T) {
 		t.Errorf("TaskPhase: got %q, want %q", action.TaskPhase, "recon")
 	}
 }
+
+func TestBuildPrompt_TaskInstruction(t *testing.T) {
+	input := Input{
+		TargetSnapshot:  `{"host":"10.0.0.1"}`,
+		TaskInstruction: "Run ffuf on port 80 with -of json",
+		ToolOutput:      "previous output",
+		TurnCount:       3,
+	}
+	prompt := buildPrompt(input)
+	if !strings.Contains(prompt, "## Task Instructions (persistent)") {
+		t.Error("prompt should contain Task Instructions section")
+	}
+	if !strings.Contains(prompt, "Run ffuf on port 80") {
+		t.Error("prompt should contain task instruction text")
+	}
+	// TaskInstruction should appear before Last Assessment Output
+	instrIdx := strings.Index(prompt, "Task Instructions")
+	outputIdx := strings.Index(prompt, "Last Assessment Output")
+	if instrIdx > outputIdx {
+		t.Error("Task Instructions should appear before Last Assessment Output")
+	}
+}
+
+func TestBuildPrompt_TaskInstruction_Empty(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.0.0.1"}`,
+		TurnCount:      1,
+	}
+	prompt := buildPrompt(input)
+	if strings.Contains(prompt, "Task Instructions") {
+		t.Error("prompt should NOT contain Task Instructions when empty")
+	}
+}

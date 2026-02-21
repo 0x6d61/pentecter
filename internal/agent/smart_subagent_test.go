@@ -358,3 +358,42 @@ func TestSmartSubAgent_UpdatesReconTree(t *testing.T) {
 		t.Errorf("Status: got %q, want completed", task.Status)
 	}
 }
+
+func TestSmartSubAgent_Run_TaskInstructionEveryTurn(t *testing.T) {
+	// Create a SubAgent that runs 3 turns: run → run → complete
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Action: schema.ActionRun, Command: "echo turn1"},
+			{Action: schema.ActionRun, Command: "echo turn2"},
+			{Action: schema.ActionComplete, Thought: "done"},
+		},
+	}
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 32)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+
+	task := agent.NewSubTask("test-persist", agent.TaskKindSmart, "Test persistent instructions")
+	task.Command = "These are my detailed workflow instructions"
+	task.MaxTurns = 10
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	// All 3 Think() calls should have TaskInstruction set
+	if len(mb.inputs) < 3 {
+		t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+	}
+	for i, inp := range mb.inputs {
+		if inp.TaskInstruction != "These are my detailed workflow instructions" {
+			t.Errorf("Turn %d: TaskInstruction should be set, got %q", i+1, inp.TaskInstruction)
+		}
+	}
+}

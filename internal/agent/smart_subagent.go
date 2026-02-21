@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
@@ -47,6 +48,12 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 	sa.emitLog(task, SourceSystem, fmt.Sprintf("SmartSubAgent %s started: %s", task.ID, task.Goal))
 
+	type cmdRecord struct {
+		cmd      string
+		exitCode int
+	}
+	var history []cmdRecord
+
 	var lastCommand string
 	var lastOutput string
 	var lastExitCode int
@@ -67,19 +74,31 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		task.TurnCount = turn
 
-		// Brain に渡す Input を構築
-		// 初回ターンのみ task.Command をユーザーメッセージとして注入（詳細な指示プロンプト）
-		userMsg := ""
-		if turn == 1 && task.Command != "" {
-			userMsg = task.Command
+		// ReconTree の intel を取得（nil チェック済み）
+		var reconQueue string
+		if sa.reconTree != nil {
+			reconQueue = sa.reconTree.RenderIntel()
 		}
+
+		// CommandHistory を構築（直近の履歴要約）
+		var historyText string
+		if len(history) > 0 {
+			var hb strings.Builder
+			for _, h := range history {
+				fmt.Fprintf(&hb, "- `%s` → exit %d\n", h.cmd, h.exitCode)
+			}
+			historyText = hb.String()
+		}
+
 		input := brain.Input{
-			TargetSnapshot: fmt.Sprintf(`{"host":%q,"task_goal":%q}`, targetHost, task.Goal),
-			ToolOutput:     lastOutput,
-			LastCommand:    lastCommand,
-			LastExitCode:   lastExitCode,
-			TurnCount:      turn,
-			UserMessage:    userMsg,
+			TargetSnapshot:  fmt.Sprintf(`{"host":%q,"task_goal":%q}`, targetHost, task.Goal),
+			TaskInstruction: task.Command,
+			ToolOutput:      lastOutput,
+			LastCommand:     lastCommand,
+			LastExitCode:    lastExitCode,
+			TurnCount:       turn,
+			ReconQueue:      reconQueue,
+			CommandHistory:  historyText,
 		}
 
 		// Brain に思考を依頼
@@ -118,6 +137,12 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 			result := <-resultCh
 			lastExitCode = result.ExitCode
 			lastOutput = result.Truncated
+
+			// コマンド履歴を記録（直近10件）
+			history = append(history, cmdRecord{cmd: cmd, exitCode: result.ExitCode})
+			if len(history) > 10 {
+				history = history[len(history)-10:]
+			}
 
 			// ReconTree にパース結果を反映
 			if sa.reconTree != nil {
