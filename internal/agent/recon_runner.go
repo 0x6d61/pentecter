@@ -48,16 +48,17 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *ReconNode
 		return
 	}
 
-	// max_parallel チェック + Pending → InProgress を原子的に実行
-	if !rr.tree.StartPortRecon(port) {
-		rr.emitLog(fmt.Sprintf("[RECON] Max parallel reached — deferring port %d", port.Port))
-		return
-	}
-
+	// コンテキストキャンセルチェック（StartPortRecon で active を消費する前に確認）
 	select {
 	case <-ctx.Done():
 		return
 	default:
+	}
+
+	// max_parallel チェック + Pending → InProgress を原子的に実行
+	if !rr.tree.StartPortRecon(port) {
+		rr.emitLog(fmt.Sprintf("[RECON] Max parallel reached — deferring port %d", port.Port))
+		return
 	}
 
 	prompt := buildWebReconPrompt(rr.targetHost, port.Port)
@@ -172,17 +173,17 @@ WORKFLOW — Execute tasks in this order for each endpoint:
    After discovering parameters in step 4, you MUST test EACH parameter.
 
    For each discovered parameter:
-   a. Send baseline: curl -s -w "\n%%%%{http_code} %%%%{size_download} %%%%{time_total}" "%s/<endpoint>?param=normalvalue"
+   a. Send baseline: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=normalvalue"
    b. Record baseline: status_code, content_length, response_time
 
    MANDATORY categories to test (ALL required):
 %s
    For each category:
    1. Choose 2-5 payloads appropriate for the parameter name context
-   2. Send: curl -s -w "\n%%%%{http_code} %%%%{size_download} %%%%{time_total}" "%s/<endpoint>?param=PAYLOAD"
+   2. Send: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=PAYLOAD"
    3. Compare against baseline:
       - Status code changed → flag
-      - Content-length differs by >10%%%% → flag
+      - Content-length differs by >10%% → flag
       - Response time >5x baseline → flag (time-based injection)
       - Response body contains error messages, different data, or template output → flag
    4. Report EACH anomaly with "memory" action:
