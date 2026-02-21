@@ -68,13 +68,18 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 		task.TurnCount = turn
 
 		// Brain に渡す Input を構築
+		// 初回ターンのみ task.Command をユーザーメッセージとして注入（詳細な指示プロンプト）
+		userMsg := ""
+		if turn == 1 && task.Command != "" {
+			userMsg = task.Command
+		}
 		input := brain.Input{
 			TargetSnapshot: fmt.Sprintf(`{"host":%q,"task_goal":%q}`, targetHost, task.Goal),
 			ToolOutput:     lastOutput,
 			LastCommand:    lastCommand,
 			LastExitCode:   lastExitCode,
 			TurnCount:      turn,
-			UserMessage:    "", // SubAgent はユーザーメッセージを受け取らない
+			UserMessage:    userMsg,
 		}
 
 		// Brain に思考を依頼
