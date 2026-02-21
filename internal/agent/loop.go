@@ -344,8 +344,9 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	if l.reconRunner != nil && l.taskMgr.CanSpawnSmart() && isWebReconCommand(command) {
 		blockMsg := "Web recon tools (ffuf/dirb/gobuster/nikto) are handled by HTTPAgent. Focus on non-HTTP services."
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: blockMsg})
+		l.lastCommand = command
 		l.lastToolOutput = blockMsg
-		l.lastExitCode = 1
+		l.lastExitCode = 0
 		return
 	}
 
