@@ -33,6 +33,7 @@ type SpawnTaskRequest struct {
 	TargetID   int
 	TargetHost string
 	MaxTurns   int
+	ReconTree  *ReconTree
 }
 
 // NewTaskManager は TaskManager を構築する。
@@ -45,6 +46,12 @@ func NewTaskManager(runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events 
 		subBrain: subBrain,
 		doneCh:   make(chan string, 64),
 	}
+}
+
+// CanSpawnSmart は SmartSubAgent を起動可能かどうかを返す。
+// SubBrain が設定されていない場合は false を返す。
+func (tm *TaskManager) CanSpawnSmart() bool {
+	return tm != nil && tm.subBrain != nil
 }
 
 // SpawnTask は新しいサブタスクを生成し、バックグラウンドで実行する。
@@ -72,7 +79,7 @@ func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (str
 		cancel()
 		return id, fmt.Errorf("sub-brain is not configured for smart tasks")
 	}
-	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events)
+	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events, req.ReconTree, req.TargetHost)
 	go func() {
 		sa.Run(taskCtx, task, req.TargetHost)
 		select {

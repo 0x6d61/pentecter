@@ -161,8 +161,8 @@ func TestBuildPrompt_ContainsReconQueue(t *testing.T) {
 		ReconQueue:     "RECON QUEUE (3 pending, 0 active, max_parallel=2):\n  [next]  endpoint_enum: /api on 10.10.11.100:80\n",
 	}
 	got := buildPrompt(input)
-	if !strings.Contains(got, "Reconnaissance Queue") {
-		t.Error("buildPrompt should contain Reconnaissance Queue section")
+	if !strings.Contains(got, "Reconnaissance Intel") {
+		t.Error("buildPrompt should contain Reconnaissance Intel section")
 	}
 	if !strings.Contains(got, "RECON QUEUE") {
 		t.Error("buildPrompt should contain RECON QUEUE content")
@@ -178,8 +178,8 @@ func TestBuildPrompt_EmptyReconQueue(t *testing.T) {
 		ReconQueue:     "",
 	}
 	got := buildPrompt(input)
-	if strings.Contains(got, "Reconnaissance Queue") {
-		t.Error("buildPrompt should NOT contain Reconnaissance Queue when empty")
+	if strings.Contains(got, "Reconnaissance Intel") {
+		t.Error("buildPrompt should NOT contain Reconnaissance Intel when empty")
 	}
 }
 
@@ -573,25 +573,17 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
 func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
 	prompt := buildSystemPrompt(nil, nil, false)
 
-	// RECON ステップに ffuf が含まれること
-	if !strings.Contains(prompt, "ffuf") {
-		t.Error("RECON step should reference ffuf for web reconnaissance")
+	// HTTPAgent に web recon を委譲する指示
+	if !strings.Contains(prompt, "HTTPAgent") {
+		t.Error("RECON step should reference HTTPAgent for web reconnaissance")
 	}
-	// 再帰的 endpoint 列挙が ZERO results まで続くこと
-	if !strings.Contains(prompt, "ZERO new results") {
-		t.Error("RECON step should instruct recursive enumeration until zero results")
+	// ffuf/dirb を自分で実行しない指示
+	if !strings.Contains(prompt, "Do NOT run ffuf") {
+		t.Error("RECON step should prohibit running ffuf directly")
 	}
-	// vhost に対しても endpoint 列挙が指示されていること
-	if !strings.Contains(prompt, "discovered vhost") {
-		t.Error("RECON step should instruct endpoint enumeration on discovered vhosts")
-	}
-	// 全エンドポイントに対するパラメータ fuzz が含まれること
-	if !strings.Contains(prompt, "Parameter fuzzing on ALL endpoints") {
-		t.Error("RECON step should include parameter fuzzing on ALL endpoints")
-	}
-	// エンドポイントプロファイリングが含まれること
-	if !strings.Contains(prompt, "Endpoint profiling") {
-		t.Error("RECON step should include endpoint profiling with curl")
+	// Reconnaissance Intel を参照する指示
+	if !strings.Contains(prompt, "Reconnaissance Intel") {
+		t.Error("RECON step should reference Reconnaissance Intel for HTTPAgent progress")
 	}
 	// spawn_task 禁止が明記されていること
 	if !strings.Contains(prompt, "do NOT use spawn_task during reconnaissance") {
@@ -813,5 +805,38 @@ func TestParseActionJSON_SpawnTask(t *testing.T) {
 	}
 	if action.TaskPhase != "recon" {
 		t.Errorf("TaskPhase: got %q, want %q", action.TaskPhase, "recon")
+	}
+}
+
+func TestBuildPrompt_TaskInstruction(t *testing.T) {
+	input := Input{
+		TargetSnapshot:  `{"host":"10.0.0.1"}`,
+		TaskInstruction: "Run ffuf on port 80 with -of json",
+		ToolOutput:      "previous output",
+		TurnCount:       3,
+	}
+	prompt := buildPrompt(input)
+	if !strings.Contains(prompt, "## Task Instructions (persistent)") {
+		t.Error("prompt should contain Task Instructions section")
+	}
+	if !strings.Contains(prompt, "Run ffuf on port 80") {
+		t.Error("prompt should contain task instruction text")
+	}
+	// TaskInstruction should appear before Last Assessment Output
+	instrIdx := strings.Index(prompt, "Task Instructions")
+	outputIdx := strings.Index(prompt, "Last Assessment Output")
+	if instrIdx > outputIdx {
+		t.Error("Task Instructions should appear before Last Assessment Output")
+	}
+}
+
+func TestBuildPrompt_TaskInstruction_Empty(t *testing.T) {
+	input := Input{
+		TargetSnapshot: `{"host":"10.0.0.1"}`,
+		TurnCount:      1,
+	}
+	prompt := buildPrompt(input)
+	if strings.Contains(prompt, "Task Instructions") {
+		t.Error("prompt should NOT contain Task Instructions when empty")
 	}
 }

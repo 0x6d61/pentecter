@@ -34,4 +34,4 @@ blacklist:
 recon:
   max_parallel: 2
   initial_scans:
-    - "nmap -p- -sV -Pn -oX - -T5 {target}"
+    - "nmap -p- -sV -Pn -oX - -T4 {target}"

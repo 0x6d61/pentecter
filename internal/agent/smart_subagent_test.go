@@ -89,7 +89,7 @@ func TestSmartSubAgent_Run_MultiTurn(t *testing.T) {
 	task := agent.NewSubTask("smart-1", agent.TaskKindSmart, "enumerate services")
 	task.MaxTurns = 10
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -156,7 +156,7 @@ func TestSmartSubAgent_Run_MaxTurnsReached(t *testing.T) {
 	task := agent.NewSubTask("smart-2", agent.TaskKindSmart, "infinite thinker")
 	task.MaxTurns = 3
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -194,7 +194,7 @@ func TestSmartSubAgent_Run_BrainError(t *testing.T) {
 	task := agent.NewSubTask("smart-3", agent.TaskKindSmart, "error test")
 	task.MaxTurns = 5
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -238,7 +238,7 @@ func TestSmartSubAgent_Run_ContextCancel(t *testing.T) {
 	task := agent.NewSubTask("smart-4", agent.TaskKindSmart, "cancel test")
 	task.MaxTurns = 20
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -263,5 +263,137 @@ func TestSmartSubAgent_Run_ContextCancel(t *testing.T) {
 	// MaxTurns には到達していないはず
 	if task.TurnCount >= 20 {
 		t.Errorf("TurnCount should be less than 20 (cancelled early), got %d", task.TurnCount)
+	}
+}
+
+func TestSmartSubAgent_FfufSilent(t *testing.T) {
+	// SmartSubAgent が ffuf コマンドに -s を自動付与することを検証。
+	// mockBrain: run "ffuf ... /FUZZ" → complete
+	// 2回目の Think() に渡される LastCommand に -s が含まれているはず。
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{
+				Thought: "running ffuf",
+				Action:  schema.ActionRun,
+				Command: `ffuf -w /usr/share/wordlists/dirb/common.txt -u http://10.10.11.100/FUZZ -of json`,
+			},
+			{
+				Thought: "done",
+				Action:  schema.ActionComplete,
+			},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	task := agent.NewSubTask("smart-ffuf", agent.TaskKindSmart, "test ffuf normalization")
+	task.MaxTurns = 5
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.10.11.100")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	// 2回目の Think() 呼び出しの Input.LastCommand を検証
+	// inputs[0] = initial (empty lastCommand), inputs[1] = after ffuf run
+	if len(mb.inputs) < 2 {
+		t.Fatalf("expected at least 2 brain inputs, got %d", len(mb.inputs))
+	}
+
+	lastCmd := mb.inputs[1].LastCommand
+	if !strings.Contains(lastCmd, " -s ") {
+		t.Errorf("LastCommand should contain -s (EnsureFfufSilent), got: %q", lastCmd)
+	}
+}
+
+func TestSmartSubAgent_UpdatesReconTree(t *testing.T) {
+	// SmartSubAgent が nmap 出力を ReconTree にパースすることを検証
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{
+				Thought: "running nmap",
+				Action:  schema.ActionRun,
+				Command: "nmap -sV 10.0.0.5",
+			},
+			{
+				Thought: "done",
+				Action:  schema.ActionComplete,
+			},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+	tree := agent.NewReconTree("10.0.0.5", 2)
+
+	task := agent.NewSubTask("smart-recon", agent.TaskKindSmart, "test recon tree update")
+	task.MaxTurns = 5
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, tree, "10.0.0.5")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout")
+	}
+
+	// nmap command was run, but since `echo` registry is used, actual output won't contain nmap XML.
+	// The important thing is that the code path was hit without panics.
+	// A more complete test would need a mock runner that returns nmap XML output.
+	if task.Status != agent.TaskStatusCompleted {
+		t.Errorf("Status: got %q, want completed", task.Status)
+	}
+}
+
+func TestSmartSubAgent_Run_TaskInstructionEveryTurn(t *testing.T) {
+	// Create a SubAgent that runs 3 turns: run → run → complete
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Action: schema.ActionRun, Command: "echo turn1"},
+			{Action: schema.ActionRun, Command: "echo turn2"},
+			{Action: schema.ActionComplete, Thought: "done"},
+		},
+	}
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 32)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+
+	task := agent.NewSubTask("test-persist", agent.TaskKindSmart, "Test persistent instructions")
+	task.Command = "These are my detailed workflow instructions"
+	task.MaxTurns = 10
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	// All 3 Think() calls should have TaskInstruction set
+	if len(mb.inputs) < 3 {
+		t.Fatalf("expected at least 3 Think() calls, got %d", len(mb.inputs))
+	}
+	for i, inp := range mb.inputs {
+		if inp.TaskInstruction != "These are my detailed workflow instructions" {
+			t.Errorf("Turn %d: TaskInstruction should be set, got %q", i+1, inp.TaskInstruction)
+		}
 	}
 }

@@ -547,3 +547,23 @@ func TestTaskManager_DoneCh(t *testing.T) {
 		t.Fatal("DoneCh: timed out waiting for value")
 	}
 }
+
+func TestTaskManager_CanSpawnSmart(t *testing.T) {
+	// nil TaskManager
+	var tm *agent.TaskManager
+	if tm.CanSpawnSmart() {
+		t.Error("nil TaskManager should return false")
+	}
+
+	// TaskManager with nil subBrain
+	tm2 := agent.NewTaskManager(nil, nil, make(chan agent.Event, 1), nil)
+	if tm2.CanSpawnSmart() {
+		t.Error("TaskManager with nil subBrain should return false")
+	}
+
+	// TaskManager with subBrain
+	tm3 := agent.NewTaskManager(nil, nil, make(chan agent.Event, 1), &mockBrain{})
+	if !tm3.CanSpawnSmart() {
+		t.Error("TaskManager with subBrain should return true")
+	}
+}

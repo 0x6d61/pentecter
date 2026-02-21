@@ -5,7 +5,6 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -84,10 +83,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// Agent ループからのイベントを処理する。
-	case AgentEventMsg:
-		spinnerCmd := m.handleAgentEvent(agent.Event(msg))
-		// 次のイベントを待つコマンドを再登録（Bubble Tea の非同期ループパターン）
+	// Agent ループからのバッチイベントを処理する。
+	case AgentEventBatchMsg:
+		var spinnerCmd tea.Cmd
+		for _, e := range msg {
+			if sc := m.handleAgentEvent(e); sc != nil {
+				spinnerCmd = sc
+			}
+		}
+		// Batch 全体の処理後に1回だけ viewport を更新
+		if m.viewportDirty {
+			m.viewportDirty = false
+			m.rebuildViewport()
+		}
+		// 次のバッチを待つコマンドを再登録
 		var batchCmds []tea.Cmd
 		if spinnerCmd != nil {
 			batchCmds = append(batchCmds, spinnerCmd)
@@ -719,18 +728,7 @@ func (m *Model) handleAgentEvent(e agent.Event) tea.Cmd {
 	}
 
 	if needsViewportUpdate {
-		// EventCmdOutput はデバウンス: スピナーが動いていれば次の TickMsg でフラッシュ、
-		// 停止中は debounceMsg タイマーで 100ms 後にフラッシュ。
-		if e.Type == agent.EventCmdOutput {
-			m.viewportDirty = true
-			if !m.spinning {
-				return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
-					return debounceMsg{}
-				})
-			}
-		} else {
-			m.rebuildViewport()
-		}
+		m.viewportDirty = true
 	}
 	return spinnerCmd
 }

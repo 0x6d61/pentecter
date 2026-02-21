@@ -142,15 +142,30 @@ func ParseFfufJSON(jsonData string, tree *ReconTree, host string, port int, pare
 	switch taskType {
 	case TaskEndpointEnum:
 		for _, r := range output.Results {
-			fuzz := r.Input["FUZZ"]
-			if fuzz == "" {
-				continue
+			// URL フィールドからフルパスを抽出（再帰対応）
+			var newPath string
+			if r.URL != "" {
+				if parsed, err := url.Parse(r.URL); err == nil && parsed.Path != "" {
+					newPath = parsed.Path
+				}
 			}
-			newPath := path.Join(parentPath, fuzz)
+			// URL パースに失敗した場合は FUZZ + parentPath にフォールバック
+			if newPath == "" {
+				fuzz := r.Input["FUZZ"]
+				if fuzz == "" {
+					continue
+				}
+				newPath = path.Join(parentPath, fuzz)
+			}
 			if !strings.HasPrefix(newPath, "/") {
 				newPath = "/" + newPath
 			}
-			tree.AddEndpoint(host, port, parentPath, newPath)
+			// 親パスは URL から算出（再帰 ffuf でも正しい親に配置される）
+			parent := path.Dir(newPath)
+			if parent == "." {
+				parent = "/"
+			}
+			tree.AddEndpoint(host, port, parent, newPath)
 		}
 		// 親のenum完了（結果あり = 列挙できた）
 		tree.CompleteTask(host, port, parentPath, TaskEndpointEnum)
@@ -293,6 +308,34 @@ func parseCurlCommand(command string) (port int, curlPath string) {
 	return 0, ""
 }
 
+// ExtractNmapOutputFile は nmap コマンドから出力ファイルパスを抽出する。
+// -oX <file> / -oN <file> の場合はそのまま返す。
+// -oA <base> の場合は <base>.xml を返す（XML 優先）。
+// nmap でなければ、または出力フラグがなければ空文字を返す。
+// "-oX -" はパイプ出力なので空文字を返す。
+func ExtractNmapOutputFile(command string) string {
+	if !strings.Contains(strings.ToLower(command), "nmap") {
+		return ""
+	}
+	parts := strings.Fields(command)
+	for i, p := range parts {
+		if i+1 >= len(parts) {
+			continue
+		}
+		val := strings.Trim(parts[i+1], `"'`)
+		switch p {
+		case "-oX", "-oN":
+			if val == "-" {
+				return "" // stdout 出力
+			}
+			return val
+		case "-oA":
+			return val + ".xml"
+		}
+	}
+	return ""
+}
+
 // ExtractFfufOutputPath は ffuf コマンドから -o フラグの出力ファイルパスを抽出する。
 // ffuf でなければ、または -o がなければ空文字を返す。
 // -of（output format）は -o とは別フラグなので混同しない。
@@ -307,6 +350,19 @@ func ExtractFfufOutputPath(command string) string {
 		}
 	}
 	return ""
+}
+
+// EnsureFfufSilent は ffuf コマンドに -s フラグを自動付与する。
+// プログレスバー出力を抑制し、TUI のフリーズを防止する。
+func EnsureFfufSilent(command string) string {
+	if !strings.Contains(command, "ffuf") {
+		return command
+	}
+	if strings.Contains(command, " -s ") || strings.HasSuffix(command, " -s") {
+		return command
+	}
+	// "ffuf" の直後に "-s" を挿入
+	return strings.Replace(command, "ffuf ", "ffuf -s ", 1)
 }
 
 // extractURLFromFlag はコマンドから指定フラグの値を抽出する。

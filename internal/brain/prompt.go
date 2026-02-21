@@ -57,7 +57,7 @@ ACTION TYPES:
 - memory:     Record a finding (vulnerability, credential, artifact, or note)
 - add_target: Add a newly discovered host for lateral movement
 - call_mcp:   Call an MCP tool (browser automation, API tools, etc.)
-- spawn_task: Start a background sub-agent task (non-blocking, returns task ID immediately). Uses a small LLM for multi-step autonomous execution. Results are automatically delivered when the task completes — no need to poll. IMPORTANT: Do NOT use spawn_task during the RECON phase — reconnaissance results must be available before ANALYZE. Use "run" for all recon commands (nmap, ffuf, searchsploit). spawn_task is allowed from ANALYZE through EXECUTE.
+- spawn_task: Start a background sub-agent task (non-blocking, returns task ID immediately). Uses a small LLM for multi-step autonomous execution. Results are automatically delivered when the task completes — no need to poll. IMPORTANT: Do NOT use spawn_task during the RECON phase — reconnaissance results must be available before ANALYZE. Use "run" for all recon commands (nmap, searchsploit). spawn_task is allowed from ANALYZE through EXECUTE.
 - wait:       Block until a background task completes. Optionally specify task_id.
 - kill_task:  Cancel a running task. Requires task_id.
 - search_knowledge: Search pentesting knowledge base (HackTricks) for attack techniques, exploits, or methodologies. Set knowledge_query to your search terms (e.g., "vsftpd 2.3.4 exploit", "sql injection union based", "privilege escalation linux"). Use this BEFORE attempting unfamiliar attacks.
@@ -86,37 +86,16 @@ Use "run" (blocking) for ALL commands in RECON — do NOT use spawn_task during 
    a. Port/service scan:
       nmap -sV -sC <target>
 
-   b. IF HTTP/HTTPS services found — MANDATORY web reconnaissance:
-      i.   Endpoint enumeration: ffuf -w /usr/share/wordlists/dirb/common.txt -u http://<target>/FUZZ -e .php,.html,.txt,.bak
-      ii.  Recursive deep scan — repeat until ZERO new results:
-           For EACH directory found (e.g., /api → /api/v1 → /api/v1/user):
-             ffuf -w wordlist -u http://<target>/<found-path>/FUZZ
-           Keep digging deeper until ffuf returns NO new results at any level.
-           Example: / finds /api → /api/ finds /api/v1 → /api/v1/ finds /api/v1/user → /api/v1/user/ returns nothing → STOP.
-      iii. Virtual host discovery: ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u http://<target> -H "Host: FUZZ.<domain>" -fs <default-size>
-      iv.  For EACH discovered vhost: repeat full endpoint enumeration (steps i-ii) on the new vhost.
-           Then check if the new vhost has its own sub-vhosts. Continue until no new vhosts or endpoints are found.
-      v.   Endpoint profiling: For EACH discovered endpoint (not just APIs — include /login,
-           /user, /contact, /forgot-password, etc.), use curl to inspect:
-           curl -ik <url>  — check response body (forms, JSON, redirects), headers, cookies
-           Identify: input method (GET params, POST form, JSON body), technology indicators,
-           authentication requirements.
-      vi.  Parameter fuzzing on ALL endpoints: Test EVERY endpoint that accepts input
-           (forms, APIs, query strings) — not just a subset. For each:
-           GET: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "http://<target>/endpoint?FUZZ=value" -fs <default-size>
-           POST: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u http://<target>/endpoint -X POST -d "FUZZ=value" -fs <default-size>
-           Do NOT skip endpoints — every input point is a potential attack surface.
+   b. IF HTTP/HTTPS services found — web reconnaissance is handled AUTOMATICALLY by HTTPAgent.
+      Do NOT run ffuf, dirb, gobuster, or nikto yourself — HTTPAgent runs them in the background.
+      Check the "Reconnaissance Intel" section for HTTPAgent progress and findings.
+      Focus your effort on non-HTTP services while HTTPAgent works.
 
 2. RECORD: Use "memory" action to record ALL reconnaissance results in detail:
    - Service table: Port | Service | Version | Notes
      Record EVERY open port — not just the ones you plan to attack.
-   - For EACH web endpoint, record:
-     Endpoint | Method | Parameters | Input Type | Response | Notes
-     e.g., "/login | POST | username, password | HTML form | 200 4340B | PHPSESSID cookie, PHP app"
-     e.g., "/api/v1/user | GET | id (query) | JSON | 200 35B | Returns user object, possible IDOR"
-     e.g., "/forgot-password | POST | email | HTML form | 200 3099B | May leak user existence"
-   - Discovered virtual hosts and their technology stack
-   - Parameters discovered by ffuf that produced different responses
+   - Web findings are recorded automatically by HTTPAgent (check Reconnaissance Intel).
+     When HTTPAgent reports findings, incorporate them into your analysis.
    - Technology indicators: cookies, headers (X-Powered-By, Server), framework signatures
 
 3. ANALYZE: For EACH discovered service:
@@ -356,6 +335,12 @@ func buildPrompt(input Input) string {
 	sb.WriteString(input.TargetSnapshot)
 	sb.WriteString("\n```\n")
 
+	if input.TaskInstruction != "" {
+		sb.WriteString("\n## Task Instructions (persistent)\n")
+		sb.WriteString(input.TaskInstruction)
+		sb.WriteString("\n")
+	}
+
 	if input.Memory != "" {
 		sb.WriteString("\n## Previous Findings (from memory)\n")
 		sb.WriteString(input.Memory)
@@ -363,7 +348,7 @@ func buildPrompt(input Input) string {
 	}
 
 	if input.ReconQueue != "" {
-		sb.WriteString("\n## Reconnaissance Queue\n")
+		sb.WriteString("\n## Reconnaissance Intel\n")
 		sb.WriteString(input.ReconQueue)
 		sb.WriteString("\n")
 	}

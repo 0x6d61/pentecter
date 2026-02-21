@@ -39,11 +39,14 @@ type SelectOption struct {
 	Value string
 }
 
-// AgentEventMsg は Agent ループから届く Bubble Tea メッセージ。
-type AgentEventMsg agent.Event
+// AgentEventBatchMsg は Agent ループから届くバッチ化された Bubble Tea メッセージ。
+// 1回の Cmd で最大 maxBatchSize 個のイベントを回収し、KeyMsg のスターベーションを防止する。
+type AgentEventBatchMsg []agent.Event
 
 // debounceMsg はビューポート再描画のデバウンスタイマー完了メッセージ。
 type debounceMsg struct{}
+
+const maxBatchSize = 50
 
 // Model is the root Bubble Tea model for the Pentecter Commander Console.
 type Model struct {
@@ -93,10 +96,23 @@ type Model struct {
 	selectCallback func(m *Model, value string)
 }
 
-// AgentEventCmd は次の Agent イベントを待つ Bubble Tea コマンド。
+// AgentEventCmd は Agent イベントをバッチで回収する Bubble Tea コマンド。
+// 最初のイベントはブロッキングで待ち、その後は非ブロッキングで最大 maxBatchSize 個まで回収する。
+// これにより KeyMsg が AgentEventMsg にスターブされるのを防止する。
 func AgentEventCmd(ch <-chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
-		return AgentEventMsg(<-ch)
+		first := <-ch
+		batch := make([]agent.Event, 1, maxBatchSize)
+		batch[0] = first
+		for len(batch) < maxBatchSize {
+			select {
+			case e := <-ch:
+				batch = append(batch, e)
+			default:
+				return AgentEventBatchMsg(batch)
+			}
+		}
+		return AgentEventBatchMsg(batch)
 	}
 }
 

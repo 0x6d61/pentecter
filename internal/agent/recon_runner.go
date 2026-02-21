@@ -3,135 +3,83 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
 // ReconRunnerConfig は ReconRunner の構築パラメーター。
 type ReconRunnerConfig struct {
-	Tree         *ReconTree
-	TaskMgr      *TaskManager // SubAgent 用（nil = SubAgent 無効）
-	Events       chan<- Event
-	InitialScans []string // nmap コマンドリスト
-	TargetHost   string
-	TargetID     int    // TUI イベント用
-	MemDir       string // raw output 保存先（空 = 保存しない）
+	Tree       *ReconTree
+	TaskMgr    *TaskManager // SubAgent 用（nil = SubAgent 無効）
+	Events     chan<- Event
+	TargetHost string
+	TargetID   int    // TUI イベント用
+	MemDir     string // raw output 保存先（空 = 保存しない）
 }
 
 // ReconRunner は自動偵察を実行するオーケストレーター。
+// リアクティブモデル: evaluateResult が新 HTTP ポートを検出するたびに SpawnWebReconForPort を呼ぶ。
 type ReconRunner struct {
-	tree         *ReconTree
-	taskMgr      *TaskManager
-	events       chan<- Event
-	initialScans []string
-	targetHost   string
-	targetID     int
-	memDir       string
+	tree       *ReconTree
+	taskMgr    *TaskManager
+	events     chan<- Event
+	targetHost string
+	targetID   int
+	memDir     string
 }
 
 // NewReconRunner は ReconRunner を構築する。
 func NewReconRunner(cfg ReconRunnerConfig) *ReconRunner {
 	return &ReconRunner{
-		tree:         cfg.Tree,
-		taskMgr:      cfg.TaskMgr,
-		events:       cfg.Events,
-		initialScans: cfg.InitialScans,
-		targetHost:   cfg.TargetHost,
-		targetID:     cfg.TargetID,
-		memDir:       cfg.MemDir,
+		tree:       cfg.Tree,
+		taskMgr:    cfg.TaskMgr,
+		events:     cfg.Events,
+		targetHost: cfg.TargetHost,
+		targetID:   cfg.TargetID,
+		memDir:     cfg.MemDir,
 	}
 }
 
-// Run は自動偵察を実行する（Phase 0 + Phase 1）。
-// Loop.Run() から goroutine で呼び出される。
-func (rr *ReconRunner) Run(ctx context.Context) {
-	rr.RunInitialScans(ctx)
-	rr.SpawnWebRecon(ctx)
-}
-
-// RunInitialScans は固定 nmap コマンドを順次実行する（Phase 0）。
-func (rr *ReconRunner) RunInitialScans(ctx context.Context) {
-	for _, scan := range rr.initialScans {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// {target} プレースホルダーを置換
-		cmd := strings.ReplaceAll(scan, "{target}", rr.targetHost)
-
-		rr.emitLog(fmt.Sprintf("[RECON] Running: %s", cmd))
-
-		output, err := rr.execCommand(ctx, cmd)
-		if err != nil {
-			rr.emitLog(fmt.Sprintf("[RECON] Scan error: %v", err))
-			continue
-		}
-
-		// Raw output 保存
-		if rr.memDir != "" {
-			if _, saveErr := SaveRawOutput(rr.memDir, rr.targetHost, cmd, output); saveErr != nil {
-				rr.emitLog(fmt.Sprintf("[RECON] Raw output save warning: %v", saveErr))
-			}
-		}
-
-		// パーサーで ReconTree に反映
-		if parseErr := DetectAndParse(cmd, output, rr.tree, rr.targetHost); parseErr != nil {
-			rr.emitLog(fmt.Sprintf("[RECON] Parse warning: %v", parseErr))
-		}
-
-		rr.emitLog(fmt.Sprintf("[RECON] Scan complete: %d ports found", len(rr.tree.Ports)))
-	}
-}
-
-// SpawnWebRecon は HTTP ポートごとに SubAgent を spawn する（Phase 1）。
-func (rr *ReconRunner) SpawnWebRecon(ctx context.Context) {
-	httpPorts := rr.findHTTPPorts()
-	if len(httpPorts) == 0 {
-		rr.emitLog("[RECON] No HTTP ports found — skipping web recon")
-		return
-	}
-
+// SpawnWebReconForPort は指定ポートの SubAgent を spawn する（リアクティブモデル）。
+// max_parallel チェック: active >= MaxParallel なら spawn しない（次の evaluateResult で再試行）。
+// Pending タスクだけ InProgress にマークし、SubAgent を起動する。
+func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *ReconNode) {
 	if rr.taskMgr == nil {
-		rr.emitLog("[RECON] TaskManager not configured — skipping web recon SubAgents")
+		rr.emitLog("[RECON] TaskManager not configured — skipping web recon SubAgent")
 		return
 	}
 
-	for _, port := range httpPorts {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	// コンテキストキャンセルチェック（StartPortRecon で active を消費する前に確認）
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 
-		// Pending なタスクだけ InProgress にマーク（StatusNone のタスクはスキップ）
-		for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-			if port.getReconStatus(tt) == StatusPending {
-				task := &ReconTask{Type: tt, Node: port, Host: rr.targetHost, Port: port.Port}
-				rr.tree.StartTask(task)
-			}
-		}
+	// max_parallel チェック + Pending → InProgress を原子的に実行
+	if !rr.tree.StartPortRecon(port) {
+		rr.emitLog(fmt.Sprintf("[RECON] Max parallel reached — deferring port %d", port.Port))
+		return
+	}
 
-		prompt := buildWebReconPrompt(rr.targetHost, port.Port)
-		rr.emitLog(fmt.Sprintf("[RECON] Spawning web recon SubAgent for %s:%d", rr.targetHost, port.Port))
+	prompt := buildWebReconPrompt(rr.targetHost, port.Port)
+	rr.emitLog(fmt.Sprintf("[RECON] Spawning web recon SubAgent for %s:%d", rr.targetHost, port.Port))
 
-		_, err := rr.taskMgr.SpawnTask(ctx, SpawnTaskRequest{
-			Kind:       TaskKindSmart,
-			Goal:       fmt.Sprintf("Web reconnaissance on %s:%d", rr.targetHost, port.Port),
-			Command:    prompt,
-			TargetHost: rr.targetHost,
-			TargetID:   rr.targetID,
-			MaxTurns:   50,
-			Metadata: TaskMetadata{
-				Port:    port.Port,
-				Service: port.Service,
-				Phase:   "web_recon",
-			},
-		})
-		if err != nil {
-			rr.emitLog(fmt.Sprintf("[RECON] SubAgent spawn error for :%d: %v", port.Port, err))
-		}
+	_, err := rr.taskMgr.SpawnTask(ctx, SpawnTaskRequest{
+		Kind:       TaskKindSmart,
+		Goal:       fmt.Sprintf("Web reconnaissance on %s:%d", rr.targetHost, port.Port),
+		Command:    prompt,
+		TargetHost: rr.targetHost,
+		TargetID:   rr.targetID,
+		MaxTurns:   50,
+		ReconTree:  rr.tree,
+		Metadata: TaskMetadata{
+			Port:    port.Port,
+			Service: port.Service,
+			Phase:   "web_recon",
+		},
+	})
+	if err != nil {
+		rr.emitLog(fmt.Sprintf("[RECON] SubAgent spawn error for :%d: %v", port.Port, err))
 	}
 }
 
@@ -144,16 +92,6 @@ func (rr *ReconRunner) findHTTPPorts() []*ReconNode {
 		}
 	}
 	return httpPorts
-}
-
-// execCommand はシェルコマンドを実行し、出力を返す。
-// command は設定ファイル (initial_scans) 由来の静的コマンドリストであり、
-// 外部ユーザー入力からのインジェクションリスクはない。
-func (rr *ReconRunner) execCommand(ctx context.Context, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- command is from static config (initial_scans), not user input
-	cmd.Stdin = nil
-	output, err := cmd.CombinedOutput()
-	return string(output), err
 }
 
 // emitLog は TUI にログイベントを送信する。
@@ -185,39 +123,54 @@ func buildWebReconPrompt(host string, port int) string {
 		url = fmt.Sprintf("%s://%s:%d", scheme, host, port)
 	}
 
-	// Phase 2: カテゴリリストを動的に構築
+	// カテゴリリストを動的に構築
 	var catList strings.Builder
 	for _, cat := range MinFuzzCategories {
 		fmt.Fprintf(&catList, "     - %s: %s\n", cat.Name, cat.Description)
 	}
 
 	return fmt.Sprintf(`You are a web reconnaissance agent for %s (port %d).
-Execute these tasks in order using "run" action:
+Your ReconTree is automatically updated as you run commands.
+Check the tree for pending tasks and work through them sequentially.
 
-1. ENDPOINT ENUMERATION (recursive):
-   ffuf -w /usr/share/wordlists/dirb/common.txt -u %s/FUZZ -e .php,.html,.txt,.bak -of json -t 50
-   For EACH directory found, repeat recursively:
-   ffuf -w /usr/share/wordlists/dirb/common.txt -u %s/<found-path>/FUZZ -of json -t 50
-   Continue until ffuf returns ZERO new results at every level.
+CRITICAL — THESE FLAGS ARE MANDATORY ON EVERY ffuf COMMAND:
+  -of json              (structured output for parsing — NEVER omit)
 
-2. VIRTUAL HOST DISCOVERY:
-   First get the default response size:
-   curl -s %s | wc -c
-   Then fuzz:
-   ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u %s -H "Host: FUZZ.%s" -of json -fs <default-size>
+Do NOT use -recursion or -recursion-depth flags. Each directory is a separate task.
+
+WORKFLOW — Execute tasks in this order for each endpoint:
+
+1. TECHNOLOGY DETECTION (do this FIRST):
+   curl -isk %s/
+   Examine: Server header, X-Powered-By, Set-Cookie, response body.
+   Determine the technology stack (PHP, Java/JSP, Python, ASP.NET, Node.js, Ruby, etc.)
+   Choose file extensions based on detected technology. Examples:
+     PHP → -e .php,.phtml,.inc     Java → -e .jsp,.do,.action,.jsf
+     ASP.NET → -e .aspx,.ashx,.asmx     Python → -e .py
+     General → -e .html,.txt,.bak,.xml,.json
+   If uncertain, use: -e .php,.jsp,.html,.txt,.bak
+
+2. ENDPOINT ENUMERATION (for each directory):
+   ffuf -w <wordlist> -u %s/<path>/FUZZ -e <extensions-from-step-1> -of json -t 50
+   When new directories are discovered, enumerate each one separately.
 
 3. ENDPOINT PROFILING:
-   For EACH discovered endpoint, run:
+   For EACH discovered endpoint:
    curl -isk %s/<endpoint>
    Record: response code, headers, body structure, technology indicators.
 
+   After profiling each endpoint:
+   - If static file (js/css/jpg/png/ico/svg/woff/font) or Content-Type indicates
+     non-dynamic content → skip param_fuzz and value_fuzz for that endpoint
+   - If dynamic (PHP/JSP/API/form/redirect/unknown) → proceed with param_fuzz + value_fuzz
+
 4. PARAMETER FUZZING:
-   For EACH endpoint that accepts input (forms, APIs, query strings):
+   For EACH dynamic endpoint:
    GET: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "%s/<endpoint>?FUZZ=value" -of json -fs <default-size>
    POST: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u %s/<endpoint> -X POST -d "FUZZ=value" -of json -fs <default-size>
 
 5. PARAMETER VALUE FUZZING (MANDATORY):
-   After discovering parameters in step 4, you MUST test EACH parameter with value fuzzing.
+   After discovering parameters in step 4, you MUST test EACH parameter.
 
    For each discovered parameter:
    a. Send baseline: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=normalvalue"
@@ -236,14 +189,23 @@ Execute these tasks in order using "run" action:
    4. Report EACH anomaly with "memory" action:
       severity: high/medium/low, title: "param X — category (evidence)"
 
-   Additionally, add context-specific payloads based on the parameter name.
+   Add context-specific payloads based on the parameter name.
    Example: "file" parameter → test OS path payloads, "id" → test more numeric sequences
 
-IMPORTANT RULES:
-- ffuf MUST use -of json flag for structured output
-- Continue recursive enumeration until ZERO new results
+6. VIRTUAL HOST DISCOVERY:
+   First get the default response size:
+   curl -s %s | wc -c
+   Then fuzz:
+   ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u %s -H "Host: FUZZ.%s" -of json -fs <default-size>
+   For each discovered vhost, run endpoint enumeration (step 2) on the vhost.
+
+RULES (VIOLATION = FAILURE):
+- EVERY ffuf command MUST include -of json — no exceptions
+- Do NOT use -recursion or -recursion-depth flags
 - Do NOT skip any endpoint or task
-- ALL fuzz categories in step 5 are MANDATORY — do NOT skip any category
-- Report all findings with "memory" action when complete
-`, host, port, url, url, url, url, host, url, url, url, url, catList.String(), url)
+- ALL fuzz categories in step 5 are MANDATORY
+- Skip param_fuzz/value_fuzz for static files (js/css/jpg/png/ico/svg/woff/font)
+- Report all findings with "memory" action
+- When all tasks are complete, use "complete" action to finish
+`, host, port, url, url, url, url, url, url, catList.String(), url, url, url, host)
 }

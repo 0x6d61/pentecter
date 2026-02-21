@@ -20,10 +20,15 @@ type mockBrain struct {
 	idx     int
 	inputs  []brain.Input // Think() に渡された Input を記録
 	errors  []error       // non-nil entries cause Think() to return error
+	onThink func(callIdx int) // Think() 呼び出し時に実行されるコールバック（テスト同期用）
 }
 
 func (m *mockBrain) Think(_ context.Context, input brain.Input) (*schema.Action, error) {
+	callIdx := m.idx
 	m.inputs = append(m.inputs, input)
+	if m.onThink != nil {
+		m.onThink(callIdx)
+	}
 	if m.idx < len(m.errors) && m.errors[m.idx] != nil {
 		err := m.errors[m.idx]
 		m.idx++
@@ -705,8 +710,8 @@ func TestLoop_Run_TurnCount_PassedToBrain(t *testing.T) {
 
 func TestLoop_Run_PendingUserMsg_DeliveredNextTurn(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-	// Action 1: run echo (during execution, user sends message)
-	// Action 2: think (should receive the pending user message)
+	// Action 1: run echo (during first Think, onThink sends user message)
+	// Action 2: think (should receive the pending user message via post-think drain)
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{Thought: "running command", Action: schema.ActionRun, Command: "echo hello"},
@@ -716,29 +721,23 @@ func TestLoop_Run_PendingUserMsg_DeliveredNextTurn(t *testing.T) {
 
 	loop, events, _, userMsg := newTestLoop(target, mb)
 
+	// 最初の Think() 内でユーザーメッセージをバッファ済みチャネルに送信。
+	// Think() 完了後の post-think drain が確実にメッセージを回収する。
+	mb.onThink = func(callIdx int) {
+		if callIdx == 0 {
+			userMsg <- "change approach please"
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go loop.Run(ctx)
 
-	sentMsg := false
 	deadline := time.After(4 * time.Second)
 	for {
 		select {
 		case e := <-events:
-			// When we see the command output from echo, send a user message
-			// so it gets picked up by post-exec drain
-			if e.Type == agent.EventCmdOutput && !sentMsg {
-				// Send user message while command is running / just after
-				select {
-				case userMsg <- "change approach please":
-					sentMsg = true
-				default:
-				}
-			}
 			if e.Type == agent.EventComplete {
-				if !sentMsg {
-					t.Skip("could not send user message during execution")
-				}
 				// Check that the pending message was delivered in a subsequent Think() call
 				foundUserMsg := false
 				for _, inp := range mb.inputs {

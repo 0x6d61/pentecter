@@ -4,6 +4,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
@@ -14,19 +16,23 @@ import (
 
 // SmartSubAgent は小型 LLM を使って多段タスクを自律実行するサブエージェント。
 type SmartSubAgent struct {
-	br     brain.Brain
-	runner *tools.CommandRunner
-	mcpMgr *mcp.MCPManager
-	events chan<- Event
+	br         brain.Brain
+	runner     *tools.CommandRunner
+	mcpMgr     *mcp.MCPManager
+	events     chan<- Event
+	reconTree  *ReconTree
+	targetHost string
 }
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
-func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event) *SmartSubAgent {
+func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, reconTree *ReconTree, targetHost string) *SmartSubAgent {
 	return &SmartSubAgent{
-		br:     br,
-		runner: runner,
-		mcpMgr: mcpMgr,
-		events: events,
+		br:         br,
+		runner:     runner,
+		mcpMgr:     mcpMgr,
+		events:     events,
+		reconTree:  reconTree,
+		targetHost: targetHost,
 	}
 }
 
@@ -41,6 +47,12 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 	}
 
 	sa.emitLog(task, SourceSystem, fmt.Sprintf("SmartSubAgent %s started: %s", task.ID, task.Goal))
+
+	type cmdRecord struct {
+		cmd      string
+		exitCode int
+	}
+	var history []cmdRecord
 
 	var lastCommand string
 	var lastOutput string
@@ -62,14 +74,31 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		task.TurnCount = turn
 
-		// Brain に渡す Input を構築
+		// ReconTree の intel を取得（nil チェック済み）
+		var reconQueue string
+		if sa.reconTree != nil {
+			reconQueue = sa.reconTree.RenderIntel()
+		}
+
+		// CommandHistory を構築（直近の履歴要約）
+		var historyText string
+		if len(history) > 0 {
+			var hb strings.Builder
+			for _, h := range history {
+				fmt.Fprintf(&hb, "- `%s` → exit %d\n", h.cmd, h.exitCode)
+			}
+			historyText = hb.String()
+		}
+
 		input := brain.Input{
-			TargetSnapshot: fmt.Sprintf(`{"host":%q,"task_goal":%q}`, targetHost, task.Goal),
-			ToolOutput:     lastOutput,
-			LastCommand:    lastCommand,
-			LastExitCode:   lastExitCode,
-			TurnCount:      turn,
-			UserMessage:    "", // SubAgent はユーザーメッセージを受け取らない
+			TargetSnapshot:  fmt.Sprintf(`{"host":%q,"task_goal":%q}`, targetHost, task.Goal),
+			TaskInstruction: task.Command,
+			ToolOutput:      lastOutput,
+			LastCommand:     lastCommand,
+			LastExitCode:    lastExitCode,
+			TurnCount:       turn,
+			ReconQueue:      reconQueue,
+			CommandHistory:  historyText,
 		}
 
 		// Brain に思考を依頼
@@ -93,8 +122,9 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		switch action.Action {
 		case schema.ActionRun:
-			lastCommand = action.Command
-			linesCh, resultCh := sa.runner.ForceRun(ctx, action.Command)
+			cmd := EnsureFfufSilent(action.Command)
+			lastCommand = cmd
+			linesCh, resultCh := sa.runner.ForceRun(ctx, cmd)
 
 			// ストリーム出力を収集
 			for line := range linesCh {
@@ -107,6 +137,23 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 			result := <-resultCh
 			lastExitCode = result.ExitCode
 			lastOutput = result.Truncated
+
+			// コマンド履歴を記録（直近10件）
+			history = append(history, cmdRecord{cmd: cmd, exitCode: result.ExitCode})
+			if len(history) > 10 {
+				history = history[len(history)-10:]
+			}
+
+			// ReconTree にパース結果を反映
+			if sa.reconTree != nil {
+				parseOutput := result.Truncated
+				if ffufPath := ExtractFfufOutputPath(cmd); ffufPath != "" {
+					if data, err := os.ReadFile(ffufPath); err == nil {
+						parseOutput = string(data)
+					}
+				}
+				_ = DetectAndParse(cmd, parseOutput, sa.reconTree, sa.targetHost)
+			}
 
 			// Entity 抽出結果をタスクに追加
 			if result.Entities != nil {

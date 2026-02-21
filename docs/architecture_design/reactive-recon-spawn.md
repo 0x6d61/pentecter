@@ -1,218 +1,201 @@
-# Reactive ReconTree Spawn — 設計ドキュメント
+# Reactive ReconTree Spawn — 設計ドキュメント (v2)
 
 ## 概要
 
-現在の ReconRunner は `initial_scans` で固定 nmap コマンドを実行し、完了後に `SpawnWebRecon` で SubAgent を起動する。この設計には以下の問題がある:
+ReconRunner を「リアクティブ + 協調モデル」に移行する。
 
-- **nmap コマンドが固定のため柔軟性がない**: ターゲットの特性に応じたスキャン戦略を選べない
-- **全ポートスキャン (`-p-`) は遅い**: 数分〜十数分かかり、その間メイン LLM がブロックされる
-- **LLM の判断力が活用されていない**: nmap のオプション選択は LLM の得意分野
-
-**新設計**: LLM が自由にスキャン戦略を選び、`evaluateResult` が新 HTTP ポートを検出するたびに SubAgent を自動 spawn する「リアクティブモデル」に移行する。
+**核心的な変更:**
+1. Main Agent は **Coordinator** — nmap 実行 + HTTPAgent spawn + 状況判断。**ffuf/dirb/nikto 等の web recon は実行しない**
+2. HTTPAgent（per HTTP port）が endpoint fuzz → param fuzz → value fuzz → vhost fuzz のサイクルを自律実行
+3. HTTPAgent が **ReconTree を直接更新** — Main と HTTPAgent が共有状態として ReconTree を読み書き
+4. `initial_scans` 廃止 — LLM が自由に nmap 戦略を選択
+5. **ffuf -recursion 廃止** — HTTPAgent が Recon Queue ベースでタスクを順次消化
 
 ## 前提
 
-- ReconRunner は既に Phase 0（nmap 自動実行）と Phase 1（Web Recon SubAgent による ffuf/curl）を実装済み
-- 設計ドキュメント: `docs/architecture_design/recon-runner.md`
 - ReconTree によるポート/エンドポイント/vhost の構造的追跡が稼働中
 - Raw output は `memory/<host>/raw/` に保存済み
+- SubAgent (SmartSubAgent) が TaskManager 経由で spawn 可能
 
-## 現行アーキテクチャ
-
-```
-ReconRunner.RunInitialScans() ← 固定 nmap (-oX - 保証)
-    ↓ XML パーサーで ReconTree にポート追加
-ReconRunner.SpawnWebRecon()   ← HTTP ポートに SubAgent 自動 spawn
-    ↓
-メイン LLM 開始（ReconTree populated）
-```
-
-### 問題点
-
-1. **固定コマンド**: `nmap -p- -sV -Pn -oX - {target}` は全ポートスキャンで遅い
-2. **直列実行**: nmap 完了までメイン LLM が待機（攻撃開始が遅れる）
-3. **戦略の硬直**: top-100 → 全ポートという段階的アプローチが取れない
-4. **コンテキスト無視**: ターゲットの OS/サービスに応じた nmap オプション調整ができない
-
-## 新アーキテクチャ: リアクティブ spawn
+## アーキテクチャ
 
 ```
-LLM 開始（ReconTree 空）
-  ↓ LLM が nmap 実行（ASSESSMENT WORKFLOW が誘導）
-evaluateResult()
-  ↓ DetectAndParse → ReconTree にポート追加
-  ↓ 新規 HTTP ポート検出？ → SubAgent 自動 spawn
-LLM の次ターン（SubAgent と並列で攻撃フェーズへ）
-  ...LLM が追加 nmap 実行 → 新ポート発見 → SubAgent 追加 spawn
+┌─────────────────────────────────────────────┐
+│  Main Agent (Coordinator)                   │
+│  ・nmap 実行 → ReconTree 更新               │
+│  ・ReconTree を見て HTTPAgent を spawn       │
+│  ・非HTTP サービスの攻撃判断                 │
+│  ・ユーザーとのやり取り                      │
+│  ・ffuf/dirb/nikto は実行しない ← 重要      │
+└──────┬──────────────────────────────────────┘
+       │ evaluateResult が新 HTTP ポート検出
+       │ → SpawnWebReconForPort 自動呼び出し
+       ▼
+┌──────────────────────────────────────┐
+│ HTTPAgent (per HTTP port)            │
+│                                      │
+│ 1. endpoint fuzz (ffuf, no recursion)│
+│    ↓ 発見した endpoint を ReconTree に追加
+│ 2. endpoint profiling (curl)         │
+│    ↓                                 │
+│ 3. parameter fuzz (ffuf)             │
+│    ↓ 発見した param を ReconTree に追加
+│ 4. value fuzz (curl)                 │
+│    ↓ 脆弱性を ReconTree に追加       │
+│ 5. vhost fuzz (ffuf)                 │
+│    ↓ 新 vhost 発見 → 1 に戻る        │
+│                                      │
+│ 全タスク complete → 自動終了          │
+└──────────────┬───────────────────────┘
+               │ 読み書き
+               ▼
+┌─────────────────────────────────────────────┐
+│          ReconTree (共有状態)                │
+│  sync.RWMutex で排他制御                    │
+│  ・ポート/エンドポイント/vhost/パラメータ    │
+│  ・脆弱性 findings                          │
+│  ・全エージェントが読み書き                  │
+└─────────────────────────────────────────────┘
 ```
 
-### トリガー条件
+## Main Agent の役割
 
-- `evaluateResult` 後に `EndpointEnum == StatusPending` な HTTP ポートが存在
-- spawn すると `StatusInProgress` になるため二重 spawn しない
-- 既に SubAgent が動いているポートには spawn しない
+### やること
+- nmap 実行（戦略は LLM が判断: top-ports → full → UDP）
+- evaluateResult で nmap 結果パース → ReconTree 更新
+- 新 HTTP ポート検出 → HTTPAgent 自動 spawn
+- 非HTTP サービスの攻撃（SSH brute force, MySQL enum 等）
+- ReconTree の RECON INTEL を見て状況判断
+- ユーザーへの報告・質問対応
 
-### サイクル例
+### やらないこと（禁止）
+- **ffuf, dirb, gobuster, nikto 等の web recon ツール実行**
+- HTTPAgent が担当する web 脆弱性テスト
+- HTTPAgent と重複する作業
 
-```
-LLM: nmap --top-ports 100 -sV -Pn -oX - target  (数秒)
-  → port 22, 80, 443 発見
-  → SubAgent(80) spawn, SubAgent(443) spawn
-LLM: SSH 攻撃開始（SubAgent と並列）
-LLM: nmap -p- -sV -Pn -oX - target  (全ポート、数分)
-  → port 8080 追加発見
-  → SubAgent(8080) spawn
-LLM: 8080 のサービスも考慮した攻撃を継続
-```
+### Main で ffuf 禁止の実装
 
-**メリット:**
-- LLM は top-ports を先に実行して数秒で攻撃開始できる
-- 全ポートスキャンはバックグラウンドで並列実行
-- 新ポートが見つかるたびに SubAgent が自動的に追加される
-
-## 攻撃全体のサイクル: 偵察 ↔ 攻撃
-
-ペンテストは偵察→攻撃の一方通行ではなく、**攻撃の結果が新たな偵察を駆動する**。
-
-```
-          ┌────────────────────────────┐
-          ↓                            │
-  [ 偵察 (RECON) ]               [ 新発見 ]
-    nmap / ffuf / curl                 │
-          │                            │
-          ↓                            │
-  [ 攻撃 (EXPLOIT) ]                   │
-    SQLi / LFI / brute force ──────────┘
-```
-
-### 攻撃 → 偵察に戻る例
-
-| 攻撃結果 | 偵察に戻る理由 |
-|---|---|
-| SQLi で DB ダンプ → 内部ホスト名発見 | 新ターゲットに nmap |
-| LFI で設定ファイル読み取り → 別ポートのサービス発見 | そのポートをスキャン |
-| SSH ブルートフォース成功 → ピボット先ネットワーク | 新セグメントを nmap |
-| value_fuzz で新パスのリダイレクト発見 | そのパスを endpoint_enum |
-
-### リアクティブ設計との統合
-
-この設計の核心: **evaluateResult は常時稼働**。攻撃フェーズ中に LLM が nmap を回しても、
-evaluateResult が新 HTTP ポートを検出すれば SubAgent が即座に spawn される。
-
-RECON phase lock は一方通行ゲートではなく、**全タスク完了で自動解除 → 攻撃フェーズ → 新発見で再び偵察タスクが追加 → リアクティブ spawn** のサイクルを許容する。
-
-## SubAgent 内部のサイクル
-
-SubAgent（web recon）もリニア (1→2→3→4→5) ではなく発見駆動のサイクルにする:
-
-```
-endpoint_enum → profiling → param_fuzz → value_fuzz
-     ↑                                      │
-     └──── 新発見があればここに戻る ─────────┘
-```
-
-- `value_fuzz` でエンドポイントの新しいパスが見つかれば `endpoint_enum` に戻る
-- `profiling` で隠しパスが見つかれば `endpoint_enum` に戻る
-- パラメータ発見で新しいフォーム/API が見つかれば `value_fuzz` に進む
-- 新発見がなくなった（pending == 0）ら SubAgent 終了
-
-## 変更対象
-
-| ファイル | 変更内容 |
-|---|---|
-| `internal/agent/loop.go` | `evaluateResult` に HTTP ポート新規検出 → SubAgent spawn フック追加 |
-| `internal/agent/loop.go` | `Run()` の ReconRunner 呼び出し部分を簡素化（`initial_scans` 不要） |
-| `internal/agent/recon_runner.go` | `RunInitialScans` 削除。`SpawnWebRecon` を `evaluateResult` から呼べるように公開 |
-| `internal/agent/recon_parser.go` | nmap `-oX <file>` のファイル読み取り追加（ffuf の `-o <file>` と同様） |
-| `internal/config/config.go` | `initial_scans` をオプショナルに（後方互換: 設定があれば従来通り動作） |
-| SubAgent プロンプト | リニアからサイクル型に変更 |
-
-## nmap 出力ファイル読み取り
-
-### 背景
-
-LLM が nmap を実行する場合、`-oX -`（stdout に XML 出力）ではなく `-oX <file>` を使う可能性がある。現在のパーサーは stdout の XML のみ対応しているため、ファイル出力にも対応する必要がある。
-
-### 実装
-
-ffuf の `-o <file>` と同様に、コマンドラインから出力ファイルパスを抽出して読み取る:
+`loop.go` の `handlePropose()` または `runCommand()` で ffuf/dirb/gobuster/nikto を検出したら:
+1. ブロックする（実行しない）
+2. "Web recon is handled by HTTPAgent. Focus on non-HTTP services." とログ出力
+3. LLM に返すメッセージで HTTPAgent に委譲済みであることを通知
 
 ```go
-// recon_parser.go に追加
+// loop.go
+var webReconBlockList = []string{"ffuf", "dirb", "gobuster", "nikto"}
 
-// nmap -oX <file> のファイルパス抽出
-func extractNmapOutputFile(cmdLine string) (path string, format string) {
-    // -oX <file> → XML
-    // -oN <file> → テキスト（Normal）
-    // -oG <file> → Grepable
-    // -oA <base> → 全フォーマット（<base>.xml を読む）
-}
-
-// DetectAndParse 内で使用
-func (p *ReconParser) DetectAndParse(cmd string, stdout string, exitCode int) {
-    // 1. stdout に XML が含まれているか → 既存ロジック
-    // 2. なければ、コマンドから -oX/-oN ファイルパスを抽出
-    // 3. ファイルが存在すれば読み取ってパース
-}
-```
-
-### 対応フォーマット
-
-| フラグ | フォーマット | パーサー |
-|--------|------------|---------|
-| `-oX -` | XML (stdout) | 既存 `ParseNmapXML()` |
-| `-oX <file>` | XML (ファイル) | 既存 `ParseNmapXML()` + ファイル読み取り |
-| `-oN <file>` | テキスト (ファイル) | 既存テキストパーサー + ファイル読み取り |
-| `-oG <file>` | Grepable | 将来対応 |
-
-## 後方互換
-
-- `initial_scans` が設定されている場合は従来通り `RunInitialScans` を実行してから LLM を開始
-- `initial_scans` が空 or 未設定の場合はリアクティブモードで動作（LLM が直接 nmap を実行）
-- **デフォルトはリアクティブモード**（`initial_scans` なし）
-
-```yaml
-# config/config.yaml
-
-# リアクティブモード（デフォルト）: initial_scans を設定しない
-recon:
-  max_parallel: 3
-
-# 従来モード: initial_scans を設定すると固定コマンドが先に実行される
-recon:
-  max_parallel: 3
-  initial_scans:
-    - "nmap -p- -sV -Pn -oX - {target}"
-    - "nmap -sU --top-ports 1000 -sV -Pn -oX - {target}"
-```
-
-### 判定ロジック
-
-```go
-func (r *ReconRunner) Start() {
-    if len(r.config.InitialScans) > 0 {
-        // 従来モード: 固定スキャン → SpawnWebRecon → LLM 開始
-        r.RunInitialScans()
-        r.SpawnWebRecon()
+func isWebReconCommand(cmd string) bool {
+    for _, tool := range webReconBlockList {
+        if strings.Contains(cmd, tool) {
+            return true
+        }
     }
-    // リアクティブモード: LLM が直接実行
-    // evaluateResult 内で自動 spawn
+    return false
 }
 ```
+
+## HTTPAgent の動作
+
+### フロー
+
+```
+endpoint fuzz (ffuf -u http://target/FUZZ -of json)
+  ↓ ReconTree に endpoint 追加
+  ↓ 各 endpoint に param_fuzz/profiling タスクが Pending で追加される
+endpoint profiling (curl -isk)
+  ↓ 技術スタック判定
+parameter fuzz (ffuf -u http://target/endpoint?FUZZ=value -of json)
+  ↓ ReconTree に parameter 追加
+  ↓ 各 parameter に value_fuzz タスクが Pending で追加される
+value fuzz (curl with payloads)
+  ↓ 脆弱性を ReconTree に追加
+vhost fuzz (ffuf -H "Host: FUZZ.target")
+  ↓ 新 vhost 発見 → その vhost の endpoint fuzz に戻る
+  ↓ 新 vhost なし → 完了
+```
+
+### 停止条件
+
+HTTPAgent は Recon Queue 方式でタスクを消化する。以下の全条件を満たしたら自動終了:
+- 全 endpoint の endpoint_enum が Complete
+- 全 endpoint の param_fuzz が Complete
+- 全 parameter の value_fuzz が Complete
+- vhost_discov が Complete（新 vhost なし）
+- Pending タスクが 0
+
+### ReconTree 直接更新
+
+HTTPAgent は `SmartSubAgent` 内で ReconTree への参照を持ち、各コマンド実行後に
+`DetectAndParse()` を呼んで ReconTree を更新する。
+
+```go
+// smart_subagent.go — Run() 内
+case schema.ActionRun:
+    // コマンド実行
+    cmd := action.Command
+    linesCh, resultCh := sa.runner.ForceRun(ctx, cmd)
+    // ... 結果取得 ...
+
+    // ReconTree 更新（mutex で排他制御）
+    if sa.reconTree != nil {
+        sa.reconTree.DetectAndParse(cmd, output, exitCode)
+    }
+```
+
+### recursion 廃止の理由
+
+`-recursion-depth 3` を使うと:
+1. 1回の ffuf で全パスが取得されるが、**結果が巨大になりSubAgent のコンテキストを圧迫**
+2. ReconTree への追加が一括になり、**段階的な param_fuzz/value_fuzz ができない**
+3. Main Agent が同じ ffuf を実行してしまう問題の原因にもなっていた
+
+Recon Queue 方式なら:
+1. `/api/` 発見 → ReconTree に追加 → param_fuzz Pending
+2. `/api/` の param_fuzz 実行 → parameter 発見
+3. `/api/` の value_fuzz 実行 → 脆弱性発見
+4. 次のディレクトリ `/docs/` の endpoint_enum へ
+5. **タスクがなくなったら自然に停止**
+
+## RECON INTEL（プロンプト注入）
+
+RECON QUEUE を RECON INTEL に置き換える。Main Agent のプロンプトに注入。
+
+```
+=== RECON INTEL ===
+[BACKGROUND] HTTPAgent active on ports: 80, 443 — do NOT run ffuf/dirb yourself
+
+[FINDINGS]
+  Port 80:
+    /login.php — SQLi on user param (HIGH)
+    /api/v1/users — IDOR suspected (MEDIUM)
+  Port 443:
+    /admin — basic auth, default creds (LOW)
+
+[ATTACK SURFACE]
+  22/tcp SSH OpenSSH 7.2 — not tested
+  80/tcp Apache 2.4 — HTTPAgent active
+  443/tcp nginx 1.18 — HTTPAgent active
+  3306/tcp MySQL 5.7 — not tested
+```
+
+### 表示ルール
+
+- `[BACKGROUND]`: HTTPAgent が動作中のポート一覧。Main に ffuf を使わせないための抑制
+- `[FINDINGS]`: HTTPAgent が ReconTree に書き込んだ脆弱性。Main の攻撃判断材料
+- `[ATTACK SURFACE]`: 全ポート一覧 + ステータス。Main が非HTTP攻撃を計画するための情報
+- HTTPAgent 完了後: `[BACKGROUND]` 行が消え、全 findings が `[FINDINGS]` に表示
 
 ## evaluateResult のフック設計
 
 ```go
 func (l *Loop) evaluateResult(cmd string, stdout string, exitCode int) {
     // 既存: DetectAndParse でツール出力をパース → ReconTree 更新
-    l.parser.DetectAndParse(cmd, stdout, exitCode)
+    l.reconTree.DetectAndParse(cmd, stdout, exitCode)
 
-    // 新規: HTTP ポートの新規検出チェック
-    newHTTPPorts := l.tree.GetPendingHTTPPorts()
-    for _, port := range newHTTPPorts {
-        if port.EndpointEnum == StatusPending {
-            // SubAgent を spawn（二重 spawn 防止: StatusInProgress に変更）
-            l.reconRunner.SpawnWebReconForPort(port)
+    // 新規: HTTP ポートの新規検出チェック → HTTPAgent 自動 spawn
+    for _, port := range l.reconTree.Ports {
+        if port.isHTTP() && port.getReconStatus(TaskEndpointEnum) == StatusPending {
+            l.reconRunner.SpawnWebReconForPort(l.ctx, port)
         }
     }
 }
@@ -222,36 +205,101 @@ func (l *Loop) evaluateResult(cmd string, stdout string, exitCode int) {
 
 - `SpawnWebReconForPort` は最初に `EndpointEnum` を `StatusInProgress` に変更
 - `evaluateResult` は `StatusPending` のポートのみ対象
-- `max_parallel` 制限を超える場合はキューに入れ、空きが出たら spawn
+- `max_parallel` 制限を超える場合は spawn しない（次の evaluateResult で再試行）
+
+## ReconTree の mutex 化
+
+HTTPAgent と Main Agent が同時に ReconTree を読み書きするため、`sync.RWMutex` を追加:
+
+```go
+type ReconTree struct {
+    mu          sync.RWMutex
+    Host        string
+    Ports       []*ReconNode
+    MaxParallel int
+    active      int
+    locked      bool
+}
+
+// 書き込み操作: Lock()
+func (rt *ReconTree) AddPort(port int, service, version string) { ... }
+func (rt *ReconTree) AddEndpoint(host string, port int, parent, path string) { ... }
+
+// 読み取り操作: RLock()
+func (rt *ReconTree) RenderQueue() string { ... }
+func (rt *ReconTree) IsLocked() bool { ... }
+```
+
+## SmartSubAgent への ReconTree 注入
+
+```go
+// task_manager.go — SpawnTask 内
+sa := NewSmartSubAgent(sa.runner, sa.subBrain)
+sa.SetReconTree(reconTree)  // ReconTree 参照を渡す
+
+// smart_subagent.go
+type SmartSubAgent struct {
+    // ... existing fields ...
+    reconTree *ReconTree  // nil = ReconTree 更新なし
+}
+
+func (sa *SmartSubAgent) SetReconTree(tree *ReconTree) {
+    sa.reconTree = tree
+}
+```
+
+## 変更対象
+
+| ファイル | 変更内容 |
+|---|---|
+| `internal/agent/recon_tree.go` | `sync.RWMutex` 追加。全メソッドにロック追加 |
+| `internal/agent/recon_runner.go` | `RunInitialScans` 削除。recursion 関連削除 |
+| `internal/agent/smart_subagent.go` | `reconTree` フィールド追加。実行後に `DetectAndParse` 呼び出し |
+| `internal/agent/task_manager.go` | `SpawnTask` で `SetReconTree` 呼び出し |
+| `internal/agent/loop.go` | `evaluateResult` に自動 spawn。ffuf ブロック。RECON INTEL 生成 |
+| `internal/agent/loop.go` | `initial_scans` 関連削除。`EnsureFfufRecursion` 呼び出し削除 |
+| `internal/agent/recon_parser.go` | `EnsureFfufRecursion` 削除。子 endpoint Complete マーク削除 |
+| `internal/config/config.go` | `InitialScans` フィールド削除 |
+| `internal/agent/team.go` | `InitialScans` フィールド削除 |
+| `cmd/pentecter/main.go` | `InitialScans` 設定行削除 |
 
 ## 実装順序
 
-1. `recon_parser.go` に nmap `-oX <file>` のファイル読み取りを追加
-2. `recon_runner.go` の `SpawnWebRecon` をポート単位で呼び出せるように `SpawnWebReconForPort` を公開
-3. `loop.go` の `evaluateResult` に HTTP ポート新規検出 → SubAgent spawn フックを追加
-4. `loop.go` の `Run()` で `initial_scans` が空の場合のリアクティブモードを実装
-5. SubAgent プロンプトをリニアからサイクル型に変更
-6. `config.go` の `initial_scans` をオプショナルに変更
-7. 各ステップでユニットテストを追加
+1. ReconTree に `sync.RWMutex` 追加
+2. SmartSubAgent に `reconTree` フィールド追加 + `DetectAndParse` 呼び出し
+3. TaskManager で `SetReconTree` 渡し
+4. `EnsureFfufRecursion` 削除 + 子 endpoint Complete マーク削除
+5. `initial_scans` 削除（config, loop, team, runner, main）
+6. `evaluateResult` に自動 spawn フック
+7. Main の ffuf ブロック機構
+8. RECON INTEL 生成（RenderQueue 置き換え）
+9. HTTPAgent プロンプト更新（recursion 削除、タスクベース）
+10. 全テスト + lint 確認
 
 ## 設計根拠
 
-### なぜ LLM にスキャン戦略を任せるか
+### なぜ Main で ffuf を禁止するか
 
-- **段階的スキャン**: top-ports → 全ポートという戦略を LLM が判断できる
-- **文脈依存**: ターゲットの OS やサービスに応じて nmap オプションを調整できる
-- **速度**: top-100 は数秒で完了し、すぐに攻撃フェーズに入れる
-- **柔軟性**: UDP スキャン、特定ポート帯のスキャン等を LLM が状況に応じて選択
+- HTTPAgent が web recon を完全に担当 → Main が ffuf を実行すると重複
+- Main の ffuf 実行は TUI フリーズの原因（大量出力がコンテキストを圧迫）
+- Main は nmap + 非HTTP攻撃 + 状況判断に専念すべき
 
-### なぜ SubAgent spawn を evaluateResult に組み込むか
+### なぜ recursion を廃止するか
 
-- **即応性**: HTTP ポートが見つかった瞬間に web recon が始まる
-- **コード量最小**: 既存の `evaluateResult` → `DetectAndParse` フローに数行追加するだけ
-- **二重 spawn 防止が容易**: ReconTree の StatusPending チェックで自然に防げる
-- **後方互換**: `RunInitialScans` と `evaluateResult` の両方から同じ `SpawnWebReconForPort` を呼べる
+- recursion depth 3 の結果が巨大 → SubAgent コンテキスト圧迫
+- ReconTree の段階的タスク消化と相性が悪い（一括追加 vs 順次追加）
+- Recon Queue 方式なら自然な停止条件がある（Pending=0 → 終了）
 
-### なぜ SubAgent をサイクル型にするか
+### なぜ ReconTree を共有状態にするか
 
-- **発見駆動**: リニアだと profiling で見つけた隠しパスを endpoint_enum に戻して探索できない
-- **網羅性**: 新発見 → 再探索のループで見落としを減らせる
-- **自然な終了条件**: 新発見がなくなったら終了（pending == 0）
+- HTTPAgent の発見を Main が即座に参照可能
+- Main が RECON INTEL で状況を把握し、攻撃戦略を立てられる
+- 将来の AttackAgent も同じ ReconTree を参照できる
+
+## 次のフェーズ: AttackAgent + AttackDataTree
+
+この Issue の後、以下の拡張を予定:
+
+- **AttackAgent**: Main が spawn する攻撃用 SubAgent（SQLi exploit, credential dump 等）
+- **AttackDataTree**: ReconTree を拡張し、CVE/Credential/攻撃試行結果を追跡
+- **NmapAgent**: Main から nmap 実行を分離（純粋 Coordinator 化）
