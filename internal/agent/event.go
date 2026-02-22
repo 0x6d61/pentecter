@@ -39,6 +39,8 @@ const (
 	EventCmdDone EventType = "cmd_done"
 	// EventSubTaskStart はサブタスク開始を示す（スピナー表示）。
 	EventSubTaskStart EventType = "subtask_start"
+	// EventReconComplete は全 Recon（HTTP タスク + 非 HTTP チェックリスト）が完了したとき。
+	EventReconComplete EventType = "recon_complete"
 )
 
 // Event は Agent ループから TUI へ送るメッセージ。

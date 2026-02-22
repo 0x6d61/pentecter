@@ -75,6 +75,8 @@ type Loop struct {
 	// コマンド実行時間計測用
 	cmdStartTime time.Time
 
+	// Recon 完了イベントの重複 emit 防止
+	reconCompleteEmitted bool
 }
 
 // NewLoop は Loop を構築する。
@@ -614,6 +616,13 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 
 		// Target にも反映（TUI から参照可能にする）
 		l.target.SetAttackData(l.attackData)
+
+		// Recon 完了検出: 全タスク + チェックリスト完了時に一度だけイベントを emit
+		if !l.reconCompleteEmitted && l.attackData.IsReconComplete() {
+			l.reconCompleteEmitted = true
+			l.emit(Event{Type: EventReconComplete,
+				Message: "Recon phase complete — all tasks finished"})
+		}
 	}
 }
 

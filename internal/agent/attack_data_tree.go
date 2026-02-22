@@ -53,6 +53,21 @@ type Finding struct {
 	Severity string // 深刻度: "high", "medium", "low", "info"
 }
 
+// TaskProgress は特定タスクタイプの進捗
+type TaskProgress struct {
+	Done  int
+	Total int
+}
+
+// ReconProgress は HTTP 偵察の全体進捗
+type ReconProgress struct {
+	EndpointEnum TaskProgress
+	ParamFuzz    TaskProgress
+	Profiling    TaskProgress
+	VhostDiscov  TaskProgress
+	PendingPaths []string // EndpointEnum == Pending のパス一覧（最大10件）
+}
+
 // AttackDataNode はツリーの各ノード
 type AttackDataNode struct {
 	Host    string // "10.10.11.100" or "dev.example.com" (vhost)
@@ -696,6 +711,98 @@ func (t *AttackDataTree) allChecklistsDoneLocked() bool {
 	return true
 }
 
+
+const maxPendingPaths = 10
+
+// ComputeReconProgress は HTTP 偵察のタスクタイプ別進捗を計算する。
+func (t *AttackDataTree) ComputeReconProgress() ReconProgress {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.computeReconProgressLocked()
+}
+
+func (t *AttackDataTree) computeReconProgressLocked() ReconProgress {
+	var prog ReconProgress
+	for _, node := range t.Ports {
+		if node.isHTTP() {
+			t.accumulateProgress(&prog, node)
+		}
+	}
+	for _, node := range t.Vhosts {
+		t.accumulateProgress(&prog, node)
+	}
+	return prog
+}
+
+func (t *AttackDataTree) accumulateProgress(prog *ReconProgress, node *AttackDataNode) {
+	// Count tasks for this node
+	accumTaskProgress(&prog.EndpointEnum, node.EndpointEnum)
+	accumTaskProgress(&prog.ParamFuzz, node.ParamFuzz)
+	accumTaskProgress(&prog.Profiling, node.Profiling)
+	accumTaskProgress(&prog.VhostDiscov, node.VhostDiscov)
+
+	// Collect pending paths
+	if node.EndpointEnum == StatusPending && len(prog.PendingPaths) < maxPendingPaths {
+		path := node.Path
+		if path == "" {
+			path = "/"
+		}
+		prog.PendingPaths = append(prog.PendingPaths, path)
+	}
+
+	// Recurse into children
+	for _, child := range node.Children {
+		t.accumulateProgress(prog, child)
+	}
+}
+
+func accumTaskProgress(tp *TaskProgress, status AttackDataStatus) {
+	if status == StatusNone {
+		return
+	}
+	tp.Total++
+	if status == StatusComplete {
+		tp.Done++
+	}
+}
+
+// IsReconComplete は全 Recon が完了したかを判定する。
+// HTTP タスク（CountPending==0）+ 非 HTTP チェックリスト（AllChecklistsDone）の両方が完了で true。
+// タスクが1つもない場合は false（まだ nmap していない）。
+func (t *AttackDataTree) IsReconComplete() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	total := t.countTotalLocked()
+	hasChecklist := false
+	for _, node := range t.Ports {
+		if node.Checklist != nil {
+			hasChecklist = true
+			break
+		}
+	}
+	// At least some work must exist
+	if total == 0 && !hasChecklist {
+		return false
+	}
+	// All HTTP tasks complete
+	if t.countPendingLocked() > 0 {
+		return false
+	}
+	// All non-HTTP checklists complete
+	if !t.allChecklistsDoneLocked() {
+		return false
+	}
+	return true
+}
+
+func renderTaskProgress(sb *strings.Builder, name string, tp TaskProgress) {
+	if tp.Total == 0 {
+		return
+	}
+	pct := tp.Done * 100 / tp.Total
+	fmt.Fprintf(sb, "  %s: %d/%d (%d%%)\n", name, tp.Done, tp.Total, pct)
+}
+
 // RenderIntel は RECON INTEL をプロンプト注入用に返す。
 // ポートがない場合は空文字列を返す。
 func (t *AttackDataTree) RenderIntel() string {
@@ -725,6 +832,30 @@ func (t *AttackDataTree) RenderIntel() string {
 			strings.Join(activePorts, ", "))
 	}
 
+
+
+	// [RECON PROGRESS]: HTTP タスクタイプ別進捗
+	prog := t.computeReconProgressLocked()
+	httpTotal := prog.EndpointEnum.Total + prog.ParamFuzz.Total + prog.Profiling.Total + prog.VhostDiscov.Total
+	if httpTotal > 0 {
+		sb.WriteString("[RECON PROGRESS]\n")
+		sb.WriteString("HTTP Recon:\n")
+		renderTaskProgress(&sb, "endpoint_enum", prog.EndpointEnum)
+		renderTaskProgress(&sb, "param_fuzz", prog.ParamFuzz)
+		renderTaskProgress(&sb, "profiling", prog.Profiling)
+		renderTaskProgress(&sb, "vhost_discovery", prog.VhostDiscov)
+		if len(prog.PendingPaths) > 0 {
+			fmt.Fprintf(&sb, "  Pending: %s\n", strings.Join(prog.PendingPaths, ", "))
+		}
+		httpDone := prog.EndpointEnum.Done + prog.ParamFuzz.Done + prog.Profiling.Done + prog.VhostDiscov.Done
+		if httpDone == httpTotal {
+			sb.WriteString("Overall: COMPLETE — ready for exploitation phase\n")
+		} else {
+			pct := httpDone * 100 / httpTotal
+			fmt.Fprintf(&sb, "Overall: %d/%d tasks (%d%%)\n", httpDone, httpTotal, pct)
+		}
+		sb.WriteString("\n")
+	}
 
 	// [RECON CHECKLIST]: 非HTTPポートのチェックリスト
 	hasChecklist := false
@@ -785,11 +916,11 @@ func (t *AttackDataTree) RenderIntel() string {
 				}
 			}
 			if status == "not tested" {
-				anyTask, allComplete := nodeTreeTaskStatus(node)
-				if anyTask && allComplete {
-					status = "recon complete"
-				} else if anyTask {
-					status = "recon pending"
+				_, complete, total := node.countTasks()
+				if total > 0 && complete == total {
+					status = fmt.Sprintf("recon complete (%d/%d)", complete, total)
+				} else if total > 0 {
+					status = fmt.Sprintf("recon: %d/%d tasks", complete, total)
 				}
 			}
 		} else if node.Checklist != nil {
@@ -814,32 +945,6 @@ func (t *AttackDataTree) RenderIntel() string {
 	}
 
 	return sb.String()
-}
-
-// nodeTreeTaskStatus はノードとその子を再帰的に走査し、
-// タスクが1つでもあるか (anyTask) と、すべて完了か (allComplete) を返す。
-func nodeTreeTaskStatus(node *AttackDataNode) (anyTask, allComplete bool) {
-	allComplete = true
-	taskTypes := []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov}
-	for _, tt := range taskTypes {
-		st := node.getAttackDataStatus(tt)
-		if st != StatusNone {
-			anyTask = true
-			if st != StatusComplete {
-				allComplete = false
-			}
-		}
-	}
-	for _, child := range node.Children {
-		childAny, childAll := nodeTreeTaskStatus(child)
-		if childAny {
-			anyTask = true
-			if !childAll {
-				allComplete = false
-			}
-		}
-	}
-	return
 }
 
 // renderNodeFindings はノードとその子の findings を再帰的にレンダリングする。
