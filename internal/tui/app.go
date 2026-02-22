@@ -77,7 +77,6 @@ type App struct {
 	mu               sync.Mutex
 	spinnerActive    atomic.Bool
 	spinnerIdx       atomic.Int32
-	inputProcessing  atomic.Bool
 	interruptPending atomic.Bool
 	drawTimerPending atomic.Bool
 
@@ -1195,9 +1194,8 @@ func drawLine(s tcell.Screen, y int, text string, style tcell.Style, width int) 
 	if y < 0 {
 		return
 	}
-	runes := []rune(text)
 	x := 0
-	for _, r := range runes {
+	for _, r := range text {
 		rw := runewidth.RuneWidth(r)
 		if rw <= 0 {
 			rw = 1
@@ -1211,21 +1209,6 @@ func drawLine(s tcell.Screen, y int, text string, style tcell.Style, width int) 
 	for ; x < width; x++ {
 		s.SetContent(x, y, ' ', nil, style)
 	}
-}
-
-func wrapLines(lines []string, width int) []string {
-	if width <= 0 {
-		return append([]string(nil), lines...)
-	}
-
-	out := make([]string, 0, len(lines))
-	for _, l := range lines {
-		out = append(out, wrapLine(l, width)...)
-	}
-	if len(out) == 0 {
-		return []string{""}
-	}
-	return out
 }
 
 func wrapOutputLines(lines []outputLine, width int) []outputLine {
@@ -1286,41 +1269,6 @@ func wrapLine(line string, width int) []string {
 		out = append(out, "")
 	}
 	return out
-}
-
-func tailLines(lines []string, n int) []string {
-	if n <= 0 {
-		return nil
-	}
-	if len(lines) <= n {
-		return lines
-	}
-	return lines[len(lines)-n:]
-}
-
-func windowLines(lines []string, n int, scroll int) []string {
-	if n <= 0 {
-		return nil
-	}
-	if scroll < 0 {
-		scroll = 0
-	}
-	if len(lines) <= n {
-		return lines
-	}
-
-	end := len(lines) - scroll
-	if end < 0 {
-		end = 0
-	}
-	start := end - n
-	if start < 0 {
-		start = 0
-	}
-	if end < start {
-		end = start
-	}
-	return lines[start:end]
 }
 
 func windowOutputLines(lines []outputLine, n int, scroll int) []outputLine {
@@ -1516,11 +1464,6 @@ func (a *App) getTerminalSize() (int, int) {
 		h = defaultHeight
 	}
 	return w, h
-}
-
-// pollResize is a compatibility no-op (tcell emits EventResize).
-func (a *App) pollResize(ctx context.Context) {
-	<-ctx.Done()
 }
 
 // writer returns a test writer if configured; otherwise discard.
