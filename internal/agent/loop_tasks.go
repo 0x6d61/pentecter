@@ -44,7 +44,7 @@ func (l *Loop) handleSpawnTask(ctx context.Context, action *schema.Action) {
 		TargetHost: l.target.Host,
 		TargetID:   l.target.ID,
 		MaxTurns:   action.TaskMaxTurns,
-		ReconTree:  l.reconTree,
+		AttackDataTree:  l.attackData,
 		Metadata: TaskMetadata{
 			Port:    action.TaskPort,
 			Service: action.TaskService,
@@ -161,12 +161,12 @@ func (l *Loop) buildTaskResult(task *SubTask) string {
 		l.target.AddEntities(task.Entities)
 	}
 
-	// ReconTree 連携: web_recon SubTask 完了時にポートの全タスクを Complete にする
-	if l.reconTree != nil && task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
-		l.reconTree.CompleteAllPortTasks(task.Metadata.Port)
+	// AttackDataTree 連携: web_recon SubTask 完了時にポートの全タスクを Complete にする
+	if l.attackData != nil && task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
+		l.attackData.CompleteAllPortTasks(task.Metadata.Port)
 
-		// Target に最新の ReconTree を反映
-		l.target.SetReconTree(l.reconTree)
+		// Target に最新の AttackDataTree を反映
+		l.target.SetAttackData(l.attackData)
 	}
 
 	return sb.String()

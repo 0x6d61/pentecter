@@ -52,7 +52,7 @@ type Loop struct {
 	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
 	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
 	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
-	reconTree    *ReconTree    // 構造的偵察制御（nil = 無効）
+	attackData   *AttackDataTree    // 構造的偵察制御（nil = 無効）
 	reconRunner  *ReconRunner // リアクティブ偵察オーケストレーター（nil = 無効）
 
 	// TUI との通信チャネル
@@ -125,9 +125,9 @@ func (l *Loop) WithKnowledge(ks *knowledge.Store) *Loop {
 	return l
 }
 
-// WithReconTree は ReconTree をセットする（メソッドチェーン用）。
-func (l *Loop) WithReconTree(rt *ReconTree) *Loop {
-	l.reconTree = rt
+// WithAttackData は AttackDataTree をセットする（メソッドチェーン用）。
+func (l *Loop) WithAttackData(rt *AttackDataTree) *Loop {
+	l.attackData = rt
 	return l
 }
 
@@ -146,20 +146,20 @@ func (l *Loop) Run(ctx context.Context) {
 	l.target.SetStatusSafe(StatusScanning)
 
 	// ReconRunner 初期化（リアクティブモデル: evaluateResult から自動 spawn）
-	if l.reconTree != nil {
+	if l.attackData != nil {
 		memDir := ""
 		if l.memoryStore != nil {
 			memDir = l.memoryStore.BaseDir()
 		}
 		l.reconRunner = NewReconRunner(ReconRunnerConfig{
-			Tree:       l.reconTree,
+			Tree:       l.attackData,
 			TaskMgr:    l.taskMgr,
 			Events:     l.events,
 			TargetHost: l.target.Host,
 			TargetID:   l.target.ID,
 			MemDir:     memDir,
 		})
-		l.target.SetReconTree(l.reconTree)
+		l.target.SetAttackData(l.attackData)
 	}
 
 	for {
@@ -540,7 +540,7 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
 // 2つのシグナルで判定: exit code, 出力パターン。
-// ReconTree が有効な場合、ツール出力をパースして偵察状態を更新する。
+// AttackDataTree が有効な場合、ツール出力をパースして偵察状態を更新する。
 func (l *Loop) evaluateResult(ctx context.Context) {
 	failed := l.lastExitCode != 0
 
@@ -563,8 +563,8 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 		}
 	}
 
-	// ReconTree: ツール出力をパースして偵察状態を更新
-	if l.reconTree != nil && l.lastCommand != "" {
+	// AttackDataTree: ツール出力をパースして偵察状態を更新
+	if l.attackData != nil && l.lastCommand != "" {
 		parseOutput := l.lastToolOutput
 
 		// ffuf -o <file> の場合、ファイルから JSON を読み取る（stdout には JSON が出ないため）
@@ -581,21 +581,21 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 			}
 		}
 
-		if err := DetectAndParse(l.lastCommand, parseOutput, l.reconTree, l.target.Host); err != nil {
+		if err := DetectAndParse(l.lastCommand, parseOutput, l.attackData, l.target.Host); err != nil {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
-				Message: fmt.Sprintf("ReconTree parse warning: %v", err)})
+				Message: fmt.Sprintf("AttackDataTree parse warning: %v", err)})
 		}
 
 		// リアクティブ spawn: Pending な HTTP ポートがあれば SubAgent を自動起動
 		// 新規追加ポートと非HTTP→HTTP 更新ポートの両方を検出する
 		if l.reconRunner != nil {
-			for _, port := range l.reconTree.PendingHTTPPorts() {
+			for _, port := range l.attackData.PendingHTTPPorts() {
 				l.reconRunner.SpawnWebReconForPort(ctx, port)
 			}
 		}
 
 		// Target にも反映（TUI から参照可能にする）
-		l.target.SetReconTree(l.reconTree)
+		l.target.SetAttackData(l.attackData)
 	}
 }
 
@@ -819,10 +819,10 @@ func (l *Loop) buildMemory() string {
 
 // buildReconQueue は RECON QUEUE のプロンプト注入テキストを返す。
 func (l *Loop) buildReconQueue() string {
-	if l.reconTree == nil {
+	if l.attackData == nil {
 		return ""
 	}
-	return l.reconTree.RenderIntel()
+	return l.attackData.RenderIntel()
 }
 
 func (l *Loop) buildSnapshot() string {

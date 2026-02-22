@@ -481,19 +481,19 @@ func TestMultiline_BackspaceExitsMode(t *testing.T) {
 	}
 }
 
-func TestPrintReconTree_BoxOutput(t *testing.T) {
+func TestPrintAttackData_BoxOutput(t *testing.T) {
 	var buf bytes.Buffer
 	a := NewApp(nil)
 	a.testWriter = &buf
 	a.width = 60
 
 	treeOutput := "10.0.0.5\n├── :22 (ssh) [Done]\n└── :80 (http) [InProgress]"
-	a.printReconTree("10.0.0.5", treeOutput)
+	a.printAttackData("10.0.0.5", treeOutput)
 
 	output := buf.String()
 	// Should contain the title
-	if !strings.Contains(output, "RECON TREE") {
-		t.Error("expected output to contain 'RECON TREE'")
+	if !strings.Contains(output, "ATTACK DATA") {
+		t.Error("expected output to contain 'ATTACK DATA'")
 	}
 	if !strings.Contains(output, "10.0.0.5") {
 		t.Error("expected output to contain host '10.0.0.5'")
@@ -511,13 +511,13 @@ func TestPrintReconTree_BoxOutput(t *testing.T) {
 	}
 }
 
-func TestPrintReconTree_NarrowWidth(t *testing.T) {
+func TestPrintAttackData_NarrowWidth(t *testing.T) {
 	var buf bytes.Buffer
 	a := NewApp(nil)
 	a.testWriter = &buf
 	a.width = 30
 
-	a.printReconTree("host", "tree")
+	a.printAttackData("host", "tree")
 
 	output := buf.String()
 	// Should still produce bordered output

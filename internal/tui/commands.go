@@ -26,8 +26,8 @@ func (a *App) handleCommand(fullText string) bool {
 	case "/targets":
 		a.handleTargetsCommand()
 		return true
-	case "/recontree":
-		a.handleReconTreeCommand()
+	case "/attackdata":
+		a.handleAttackDataCommand()
 		return true
 	case "/skip-recon":
 		a.handleSkipReconCommand()
@@ -219,20 +219,20 @@ func (a *App) handleTargetsCommand() {
 	)
 }
 
-// handleReconTreeCommand displays the recon tree for the active target.
-func (a *App) handleReconTreeCommand() {
+// handleAttackDataCommand displays the attack data tree for the active target.
+func (a *App) handleAttackDataCommand() {
 	if a.selected < 0 || a.selected >= len(a.targets) {
 		a.logSystem("No target selected.")
 		return
 	}
 	target := a.targets[a.selected]
-	rt := target.GetReconTree()
+	rt := target.GetAttackData()
 	if rt == nil {
-		a.logSystem("No recon tree available for this target.")
+		a.logSystem("No attack data tree available for this target.")
 		return
 	}
 	output := rt.RenderTree()
-	a.printReconTree(target.Host, output)
+	a.printAttackData(target.Host, output)
 }
 
 // handleSkipReconCommand unlocks the RECON phase for the active target.
@@ -242,9 +242,9 @@ func (a *App) handleSkipReconCommand() {
 		return
 	}
 	target := a.targets[a.selected]
-	rt := target.GetReconTree()
+	rt := target.GetAttackData()
 	if rt == nil {
-		a.logSystem("No recon tree available for this target.")
+		a.logSystem("No attack data tree available for this target.")
 		return
 	}
 	if !rt.IsLocked() {

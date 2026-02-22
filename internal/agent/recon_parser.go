@@ -39,8 +39,8 @@ type nmapService struct {
 	Version string `xml:"version,attr"`
 }
 
-// ParseNmapXML は nmap XML 出力をパースし、open ポートを ReconTree に追加する。
-func ParseNmapXML(xmlData string, tree *ReconTree) error {
+// ParseNmapXML は nmap XML 出力をパースし、open ポートを AttackDataTree に追加する。
+func ParseNmapXML(xmlData string, tree *AttackDataTree) error {
 	// XML 部分を抽出（前後にゴミがある場合）
 	start := strings.Index(xmlData, "<nmaprun")
 	if start < 0 {
@@ -77,9 +77,9 @@ func ParseNmapXML(xmlData string, tree *ReconTree) error {
 
 // --- nmap テキストパーサー ---
 
-// ParseNmapText は nmap テキスト出力をパースし、open ポートを ReconTree に追加する。
+// ParseNmapText は nmap テキスト出力をパースし、open ポートを AttackDataTree に追加する。
 // XML パーサーのフォールバックとして使用。
-func ParseNmapText(output string, tree *ReconTree) error {
+func ParseNmapText(output string, tree *AttackDataTree) error {
 	// Regex: "22/tcp   open   ssh   OpenSSH 8.2p1..."
 	// Format: PORT/PROTO STATE SERVICE VERSION...
 	re := regexp.MustCompile(`(?m)^(\d+)/(tcp|udp)\s+(open)\s+(\S+)\s*(.*)$`)
@@ -115,12 +115,12 @@ type ffufResult struct {
 	URL    string            `json:"url"`
 }
 
-// ParseFfufJSON は ffuf JSON 出力をパースし、結果を ReconTree に追加する。
+// ParseFfufJSON は ffuf JSON 出力をパースし、結果を AttackDataTree に追加する。
 // taskType により追加方法が異なる:
 //   - TaskEndpointEnum: 各結果を endpoint として追加
 //   - TaskVhostDiscov: 各結果を vhost として追加
 //   - TaskParamFuzz: タスクを完了にするのみ
-func ParseFfufJSON(jsonData string, tree *ReconTree, host string, port int, parentPath string, taskType ReconTaskType) error {
+func ParseFfufJSON(jsonData string, tree *AttackDataTree, host string, port int, parentPath string, taskType ReconTaskType) error {
 	// JSON 部分を抽出（前後にゴミがある場合）
 	start := strings.Index(jsonData, "{")
 	if start < 0 {
@@ -216,7 +216,7 @@ func extractDomainFromFfufCmd(cmd string) string {
 
 // DetectAndParse はコマンドと出力からツールを判定し、適切なパーサーを呼ぶ。
 // パーサーが一致しない場合は nil を返す（エラーではない）。
-func DetectAndParse(command string, output string, tree *ReconTree, host string) error {
+func DetectAndParse(command string, output string, tree *AttackDataTree, host string) error {
 	cmdLower := strings.ToLower(command)
 
 	// nmap 検出

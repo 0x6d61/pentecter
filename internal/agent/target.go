@@ -73,9 +73,9 @@ type Target struct {
 	// Entities はツール出力から抽出された発見済みエンティティ（ナレッジグラフ）。
 	// Brain のスナップショット生成に使われる。
 	Entities []tools.Entity
-	// ReconTree は偵察状態を管理するツリー。
-	// Loop goroutine から SetReconTree で設定、TUI goroutine から GetReconTree で読み取る。
-	ReconTree *ReconTree
+	// AttackDataTree は偵察状態を管理するツリー。
+	// Loop goroutine から SetAttackData で設定、TUI goroutine から GetAttackData で読み取る。
+	AttackDataTree *AttackDataTree
 }
 
 // GetStatus は Status をスレッドセーフに返す。
@@ -166,16 +166,16 @@ func (t *Target) ClearProposal() {
 	t.Proposal = nil
 }
 
-// GetReconTree は ReconTree をスレッドセーフに返す。
-func (t *Target) GetReconTree() *ReconTree {
+// GetAttackData は AttackDataTree をスレッドセーフに返す。
+func (t *Target) GetAttackData() *AttackDataTree {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.ReconTree
+	return t.AttackDataTree
 }
 
-// SetReconTree は ReconTree をスレッドセーフに設定する。Loop goroutine から使用。
-func (t *Target) SetReconTree(rt *ReconTree) {
+// SetAttackData は AttackDataTree をスレッドセーフに設定する。Loop goroutine から使用。
+func (t *Target) SetAttackData(rt *AttackDataTree) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.ReconTree = rt
+	t.AttackDataTree = rt
 }
