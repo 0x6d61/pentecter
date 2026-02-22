@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -948,5 +949,230 @@ func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
 	}
 	if !strings.Contains(output, "recon pending") {
 		t.Errorf("should show 'recon pending' when child has pending tasks\noutput:\n%s", output)
+	}
+}
+
+func TestSetChecklist(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
+	tree.SetChecklist(22, cl)
+
+	// Checklist should be set
+	node := tree.Ports[0]
+	if node.Checklist == nil {
+		t.Fatal("Checklist should be set on port 22")
+	}
+	if len(node.Checklist.Items) == 0 {
+		t.Error("Checklist should have items")
+	}
+}
+
+func TestSetChecklist_NoOpIfAlreadySet(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	cl1 := GenerateChecklist("ssh", "OpenSSH 8.2", false)
+	tree.SetChecklist(22, cl1)
+
+	cl2 := GenerateChecklist("ssh", "OpenSSH 8.2", true) // different checklist
+	tree.SetChecklist(22, cl2)
+
+	// Should still have the first checklist (no-op on second set)
+	node := tree.Ports[0]
+	// cl1 has no search-knowledge, cl2 does. If no-op, should NOT have search-knowledge.
+	hasKnowledge := false
+	for _, item := range node.Checklist.Items {
+		if item.ID == "search-knowledge" {
+			hasKnowledge = true
+		}
+	}
+	if hasKnowledge {
+		t.Error("SetChecklist should be no-op if already set")
+	}
+}
+
+func TestSetChecklist_SkipsHTTPPorts(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	cl := GenerateChecklist("http", "", false)
+	tree.SetChecklist(80, cl)
+
+	// HTTP ports should not get a checklist
+	node := tree.Ports[0]
+	if node.Checklist != nil {
+		t.Error("HTTP port should not get a checklist")
+	}
+}
+
+func TestSetChecklist_PortNotFound(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
+	// Port 443 doesn't exist - should not panic
+	tree.SetChecklist(443, cl)
+}
+
+func TestUpdateAllChecklists(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.AddPort(21, "ftp", "vsftpd 2.3.4")
+
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+	tree.SetChecklist(21, GenerateChecklist("ftp", "vsftpd 2.3.4", false))
+
+	commands := []string{
+		"searchsploit ssh OpenSSH 8.2",
+		"nmap --script ssh-auth-methods -p22 10.10.11.100",
+	}
+	tree.UpdateAllChecklists(commands)
+
+	// SSH checklist should have searchsploit and ssh-auth-methods done
+	sshNode := tree.Ports[0]
+	for _, item := range sshNode.Checklist.Items {
+		if item.ID == "searchsploit" && !item.Done {
+			t.Error("searchsploit should be done for ssh")
+		}
+		if item.ID == "ssh-auth-methods" && !item.Done {
+			t.Error("ssh-auth-methods should be done")
+		}
+	}
+
+	// FTP checklist should not be affected (different keywords)
+	ftpNode := tree.Ports[1]
+	for _, item := range ftpNode.Checklist.Items {
+		if item.ID == "searchsploit" && item.Done {
+			t.Error("searchsploit should NOT be done for ftp (commands mention ssh, not ftp)")
+		}
+	}
+}
+
+func TestAllChecklistsDone(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.AddPort(80, "http", "Apache") // HTTP port - no checklist
+
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+
+	// Not all done yet
+	if tree.AllChecklistsDone() {
+		t.Error("should not be all done yet")
+	}
+
+	// Mark all items done manually
+	sshNode := tree.Ports[0]
+	for i := range sshNode.Checklist.Items {
+		sshNode.Checklist.Items[i].Done = true
+	}
+
+	if !tree.AllChecklistsDone() {
+		t.Error("should be all done now")
+	}
+}
+
+func TestAllChecklistsDone_NoChecklists(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache") // HTTP only - no checklists
+
+	// No checklists at all - should return true (vacuously)
+	if !tree.AllChecklistsDone() {
+		t.Error("no checklists = all done (vacuously true)")
+	}
+}
+
+func TestRenderIntel_WithChecklist(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.AddPort(80, "http", "Apache")
+
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+
+	// Mark searchsploit as done
+	commands := []string{"searchsploit ssh OpenSSH 8.2"}
+	tree.UpdateAllChecklists(commands)
+
+	output := tree.RenderIntel()
+
+	checks := []string{
+		"RECON CHECKLIST",
+		"Port 22/ssh",
+		"[x] searchsploit",
+		"[ ] ", // at least one incomplete item
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderIntel missing %q\noutput:\n%s", check, output)
+		}
+	}
+
+	// ATTACK SURFACE should show recon progress
+	if !strings.Contains(output, "22/ssh") {
+		t.Errorf("ATTACK SURFACE should list ssh port\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_ChecklistAllComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+
+	// Mark all items done
+	sshNode := tree.Ports[0]
+	for i := range sshNode.Checklist.Items {
+		sshNode.Checklist.Items[i].Done = true
+	}
+
+	output := tree.RenderIntel()
+
+	if !strings.Contains(output, "ALL ITEMS COMPLETE") {
+		t.Errorf("should show ALL ITEMS COMPLETE when all checklist items are done\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_AllNonHTTPReconComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.AddPort(21, "ftp", "vsftpd 2.3.4")
+
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+	tree.SetChecklist(21, GenerateChecklist("ftp", "vsftpd 2.3.4", false))
+
+	// Mark all items done
+	for _, port := range tree.Ports {
+		if port.Checklist != nil {
+			for i := range port.Checklist.Items {
+				port.Checklist.Items[i].Done = true
+			}
+		}
+	}
+
+	output := tree.RenderIntel()
+
+	if !strings.Contains(output, "ALL NON-HTTP RECON COMPLETE") {
+		t.Errorf("should show ALL NON-HTTP RECON COMPLETE\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_AttackSurface_ChecklistProgress(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
+	tree.SetChecklist(22, cl)
+
+	// Mark 1 item done
+	tree.Ports[0].Checklist.Items[0].Done = true
+
+	output := tree.RenderIntel()
+
+	// Should show progress like "recon: 1/3" or "recon: 1/N"
+	totalItems := len(tree.Ports[0].Checklist.Items)
+	expectedProgress := fmt.Sprintf("recon: 1/%d", totalItems)
+	if !strings.Contains(output, expectedProgress) {
+		t.Errorf("ATTACK SURFACE should show checklist progress %q\noutput:\n%s", expectedProgress, output)
 	}
 }
