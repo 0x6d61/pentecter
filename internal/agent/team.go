@@ -84,7 +84,7 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	approveCh := make(chan bool, 1)
 	userMsgCh := make(chan string, 4)
 
-	attackData := NewAttackDataTree(host, t.maxParallelRecon)
+	attackData := NewAttackDataTree(host, t.maxParallelRecon, 0)
 
 	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
 		WithSkills(t.skillsReg).

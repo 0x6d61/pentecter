@@ -9,7 +9,7 @@ import (
 
 func TestBackupManager_Save(t *testing.T) {
 	dir := t.TempDir()
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -42,7 +42,7 @@ func TestBackupManager_Save(t *testing.T) {
 
 func TestBackupManager_Save_Overwrite(t *testing.T) {
 	dir := t.TempDir()
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	mgr := NewBackupManager(dir, "10.10.11.100", tree)
@@ -73,7 +73,7 @@ func TestBackupManager_Save_Overwrite(t *testing.T) {
 
 func TestBackupManager_SaveBackup(t *testing.T) {
 	dir := t.TempDir()
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	mgr := NewBackupManager(dir, "10.10.11.100", tree)
@@ -100,7 +100,7 @@ func TestBackupManager_SaveBackup(t *testing.T) {
 
 func TestLoadAttackDataTree(t *testing.T) {
 	dir := t.TempDir()
-	tree := NewAttackDataTree("10.10.11.100", 3)
+	tree := NewAttackDataTree("10.10.11.100", 3, 0)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")

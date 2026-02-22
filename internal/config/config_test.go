@@ -136,6 +136,40 @@ recon:
 	}
 }
 
+func TestLoad_ReconConfig_MaxDepth(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+recon:
+  max_depth: 5
+`), 0o644)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Recon.MaxDepth != 5 {
+		t.Errorf("MaxDepth = %d, want 5", cfg.Recon.MaxDepth)
+	}
+}
+
+func TestLoad_ReconConfig_MaxDepth_Default(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+knowledge: []
+`), 0o644)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Default should be 3
+	if cfg.Recon.MaxDepth != 3 {
+		t.Errorf("MaxDepth = %d, want default 3", cfg.Recon.MaxDepth)
+	}
+}
+
 func TestLoad_ReconConfig_Default(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

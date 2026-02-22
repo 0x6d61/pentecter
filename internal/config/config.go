@@ -20,6 +20,7 @@ type KnowledgeEntry struct {
 // ReconConfig は偵察ツリーの動作設定
 type ReconConfig struct {
 	MaxParallel int `yaml:"max_parallel"`
+	MaxDepth    int `yaml:"max_depth"`
 }
 
 // AppConfig は config/config.yaml の統合設定構造
@@ -33,6 +34,9 @@ type AppConfig struct {
 func (c *AppConfig) applyDefaults() {
 	if c.Recon.MaxParallel == 0 {
 		c.Recon.MaxParallel = 2
+	}
+	if c.Recon.MaxDepth == 0 {
+		c.Recon.MaxDepth = 3
 	}
 }
 
