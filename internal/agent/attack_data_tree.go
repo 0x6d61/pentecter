@@ -68,6 +68,7 @@ type AttackDataNode struct {
 	VhostDiscov  AttackDataStatus
 
 	Findings []Finding
+	Checklist *ServiceChecklist
 
 	Children []*AttackDataNode
 }
@@ -649,6 +650,52 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 	}
 }
 
+
+// SetChecklist sets the recon checklist for a non-HTTP port.
+// No-op if the port already has a checklist or if the port is HTTP.
+func (t *AttackDataTree) SetChecklist(port int, checklist *ServiceChecklist) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			if node.isHTTP() || node.Checklist != nil {
+				return
+			}
+			node.Checklist = checklist
+			return
+		}
+	}
+}
+
+// UpdateAllChecklists updates completion state of all port checklists based on command history.
+func (t *AttackDataTree) UpdateAllChecklists(commands []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, node := range t.Ports {
+		if node.Checklist != nil {
+			UpdateChecklistCompletion(node.Checklist, commands)
+		}
+	}
+}
+
+// AllChecklistsDone returns true if all non-HTTP ports' checklists are fully complete.
+// Returns true if no checklists exist (vacuously true).
+func (t *AttackDataTree) AllChecklistsDone() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.allChecklistsDoneLocked()
+}
+
+// allChecklistsDoneLocked is a lock-free helper for use within methods that already hold the lock.
+func (t *AttackDataTree) allChecklistsDoneLocked() bool {
+	for _, node := range t.Ports {
+		if node.Checklist != nil && !ChecklistAllDone(node.Checklist) {
+			return false
+		}
+	}
+	return true
+}
+
 // RenderIntel は RECON INTEL をプロンプト注入用に返す。
 // ポートがない場合は空文字列を返す。
 func (t *AttackDataTree) RenderIntel() string {
@@ -677,6 +724,41 @@ func (t *AttackDataTree) RenderIntel() string {
 		fmt.Fprintf(&sb, "[BACKGROUND] HTTPAgent active on ports: %s — do NOT run ffuf/dirb yourself\n\n",
 			strings.Join(activePorts, ", "))
 	}
+
+
+	// [RECON CHECKLIST]: 非HTTPポートのチェックリスト
+	hasChecklist := false
+	for _, node := range t.Ports {
+		if node.Checklist == nil {
+			continue
+		}
+		if !hasChecklist {
+			sb.WriteString("[RECON CHECKLIST]\n")
+			hasChecklist = true
+		}
+		banner := node.Banner
+		if banner != "" {
+			banner = " (" + banner + ")"
+		}
+		fmt.Fprintf(&sb, "Port %d/%s%s:\n", node.Port, node.Service, banner)
+		for _, item := range node.Checklist.Items {
+			check := "[ ]"
+			if item.Done {
+				check = "[x]"
+			}
+			fmt.Fprintf(&sb, "  %s %s\n", check, item.Description)
+		}
+		if ChecklistAllDone(node.Checklist) {
+			sb.WriteString("  ** ALL ITEMS COMPLETE **\n")
+		}
+	}
+	if hasChecklist && t.allChecklistsDoneLocked() {
+		sb.WriteString("ALL NON-HTTP RECON COMPLETE. Use \"wait\" action or proceed to ANALYZE.\n")
+	}
+	if hasChecklist {
+		sb.WriteString("\n")
+	}
+
 
 	// [FINDINGS]: 全ノードの findings を表示
 	hasFindings := false
@@ -709,6 +791,19 @@ func (t *AttackDataTree) RenderIntel() string {
 				} else if anyTask {
 					status = "recon pending"
 				}
+			}
+		} else if node.Checklist != nil {
+			done := 0
+			for _, item := range node.Checklist.Items {
+				if item.Done {
+					done++
+				}
+			}
+			total := len(node.Checklist.Items)
+			if done == total {
+				status = fmt.Sprintf("recon complete (%d/%d)", done, total)
+			} else {
+				status = fmt.Sprintf("recon: %d/%d", done, total)
 			}
 		}
 		banner := node.Banner
@@ -808,6 +903,19 @@ func (t *AttackDataTree) PendingHTTPPorts() []*AttackDataNode {
 	var result []*AttackDataNode
 	for _, port := range t.Ports {
 		if port.isHTTP() && port.EndpointEnum == StatusPending {
+			result = append(result, port)
+		}
+	}
+	return result
+}
+
+// NonHTTPPortsWithoutChecklist はチェックリスト未設定の非 HTTP ポートを返す。
+func (t *AttackDataTree) NonHTTPPortsWithoutChecklist() []*AttackDataNode {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var result []*AttackDataNode
+	for _, port := range t.Ports {
+		if !port.isHTTP() && port.Checklist == nil {
 			result = append(result, port)
 		}
 	}

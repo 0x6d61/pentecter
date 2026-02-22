@@ -597,6 +597,13 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 				Message: fmt.Sprintf("AttackDataTree parse warning: %v", err)})
 		}
 
+		// 新規非 HTTP ポートにチェックリストを自動生成
+		hasKnowledge := l.knowledgeStore != nil
+		for _, port := range l.attackData.NonHTTPPortsWithoutChecklist() {
+			cl := GenerateChecklist(port.Service, port.Banner, hasKnowledge)
+			l.attackData.SetChecklist(port.Port, cl)
+		}
+
 		// リアクティブ spawn: Pending な HTTP ポートがあれば SubAgent を自動起動
 		// 新規追加ポートと非HTTP→HTTP 更新ポートの両方を検出する
 		if l.reconRunner != nil {
@@ -828,11 +835,22 @@ func (l *Loop) buildMemory() string {
 	return l.memoryStore.Read(l.target.Host)
 }
 
+// extractCommandStrings は履歴からコマンド文字列のスライスを返す。
+func (l *Loop) extractCommandStrings() []string {
+	cmds := make([]string, len(l.history))
+	for i, e := range l.history {
+		cmds[i] = e.Command
+	}
+	return cmds
+}
+
 // buildReconQueue は RECON QUEUE のプロンプト注入テキストを返す。
+// チェックリストの完了状態をコマンド履歴で更新してからレンダリングする。
 func (l *Loop) buildReconQueue() string {
 	if l.attackData == nil {
 		return ""
 	}
+	l.attackData.UpdateAllChecklists(l.extractCommandStrings())
 	return l.attackData.RenderIntel()
 }
 
