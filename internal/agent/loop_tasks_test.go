@@ -438,9 +438,9 @@ func TestDrainCompletedTasks_PushModel(t *testing.T) {
 	}
 }
 
-// TestBuildTaskResult_WebReconUpdatesReconTree tests that completing a web_recon
-// subtask calls CompleteAllPortTasks on the ReconTree.
-func TestBuildTaskResult_WebReconUpdatesReconTree(t *testing.T) {
+// TestBuildTaskResult_WebReconUpdatesAttackDataTree tests that completing a web_recon
+// subtask calls CompleteAllPortTasks on the AttackDataTree.
+func TestBuildTaskResult_WebReconUpdatesAttackDataTree(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	mb := &mockBrain{
 		actions: []*schema.Action{
@@ -449,17 +449,17 @@ func TestBuildTaskResult_WebReconUpdatesReconTree(t *testing.T) {
 	}
 	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
 
-	// ReconTree をセットアップ
-	tree := agent.NewReconTree("10.0.0.1", 2)
+	// AttackDataTree をセットアップ
+	tree := agent.NewAttackDataTree("10.0.0.1", 2)
 	tree.AddPort(80, "http", "Apache")
 	// SubAgent 単位で InProgress にマーク（SpawnWebReconForPort の実際の動作を再現）
 	// AddPort(http) は EndpointEnum + VhostDiscov を Pending にする
 	node := tree.Ports[0]
 	for _, tt := range []agent.ReconTaskType{agent.TaskEndpointEnum, agent.TaskVhostDiscov} {
-		node.SetReconStatusForTest(tt, agent.StatusInProgress)
+		node.SetAttackDataStatusForTest(tt, agent.StatusInProgress)
 	}
 	tree.SetActiveForTest(1) // SubAgent 1つ分
-	loop.WithReconTree(tree)
+	loop.WithAttackData(tree)
 
 	// web_recon phase の SubTask を注入
 	task := agent.NewSubTask("task-inject-recon", agent.TaskKindSmart, "web recon on :80")
@@ -491,7 +491,7 @@ func TestBuildTaskResult_WebReconUpdatesReconTree(t *testing.T) {
 				}
 				// IsLocked が false（全タスク完了で自動解除）
 				if tree.IsLocked() {
-					t.Error("ReconTree should be auto-unlocked after all tasks complete")
+					t.Error("AttackDataTree should be auto-unlocked after all tasks complete")
 				}
 				return
 			}

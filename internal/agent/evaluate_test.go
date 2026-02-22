@@ -541,7 +541,7 @@ func TestBuildReconIntel_NilTree(t *testing.T) {
 	l := &Loop{
 		target:    NewTarget(1, "10.0.0.1"),
 		events:    make(chan Event, 32),
-		reconTree: nil,
+		attackData: nil,
 	}
 	got := l.buildReconQueue()
 	if got != "" {

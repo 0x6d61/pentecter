@@ -1562,7 +1562,7 @@ func (a *App) printWelcome() {
 	if len(a.targets) == 0 {
 		lines = append(lines,
 			"Enter an IP address or domain to begin (e.g. 10.0.0.5, example.com)",
-			"Commands: /targets, /model, /approve, /recontree, /skip-recon, /fold, /status",
+			"Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status",
 		)
 	} else {
 		for _, t := range a.targets {

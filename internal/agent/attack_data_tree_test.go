@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestNewReconTree(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 0)
+func TestNewAttackDataTree(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 0)
 	if tree.Host != "10.10.11.100" {
 		t.Errorf("Host = %q, want %q", tree.Host, "10.10.11.100")
 	}
@@ -16,14 +16,14 @@ func TestNewReconTree(t *testing.T) {
 		t.Errorf("MaxParallel = %d, want 2", tree.MaxParallel)
 	}
 
-	tree2 := NewReconTree("10.10.11.100", 4)
+	tree2 := NewAttackDataTree("10.10.11.100", 4)
 	if tree2.MaxParallel != 4 {
 		t.Errorf("MaxParallel = %d, want 4", tree2.MaxParallel)
 	}
 }
 
 func TestAddPort_HTTP(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 
 	if len(tree.Ports) != 1 {
@@ -43,7 +43,7 @@ func TestAddPort_HTTP(t *testing.T) {
 }
 
 func TestAddPort_NonHTTP(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	if len(tree.Ports) != 1 {
@@ -63,7 +63,7 @@ func TestAddPort_NonHTTP(t *testing.T) {
 }
 
 func TestAddEndpoint(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -87,7 +87,7 @@ func TestAddEndpoint(t *testing.T) {
 }
 
 func TestAddEndpoint_Nested(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/api", "/api/v1")
@@ -115,7 +115,7 @@ func TestAddEndpoint_Nested(t *testing.T) {
 }
 
 func TestAddVhost(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
 
@@ -138,7 +138,7 @@ func TestAddVhost(t *testing.T) {
 }
 
 func TestCompleteTask(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -154,7 +154,7 @@ func TestCompleteTask(t *testing.T) {
 }
 
 func TestHasPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	// 空のツリーには pending なし
 	if tree.HasPending() {
 		t.Error("empty tree should not have pending")
@@ -180,7 +180,7 @@ func TestHasPending(t *testing.T) {
 }
 
 func TestCountPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	// HTTP ポート: EndpointEnum + VhostDiscov = 2 pending
 	if got := tree.CountPending(); got != 2 {
@@ -200,7 +200,7 @@ func TestCountPending(t *testing.T) {
 }
 
 func TestCountTotal(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(22, "ssh", "OpenSSH")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -211,7 +211,7 @@ func TestCountTotal(t *testing.T) {
 }
 
 func TestNextBatch_RespectsMaxParallel(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
@@ -233,7 +233,7 @@ func TestNextBatch_RespectsMaxParallel(t *testing.T) {
 }
 
 func TestNextBatch_Priority(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 10) // 高い max_parallel で全部返す
+	tree := NewAttackDataTree("10.10.11.100", 10) // 高い max_parallel で全部返す
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
@@ -249,7 +249,7 @@ func TestNextBatch_Priority(t *testing.T) {
 }
 
 func TestStartTask_FinishTask(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	batch := tree.NextBatch()
@@ -268,7 +268,7 @@ func TestStartTask_FinishTask(t *testing.T) {
 	if node == nil {
 		t.Fatal("findNode returned nil")
 	}
-	status := node.getReconStatus(task.Type)
+	status := node.getAttackDataStatus(task.Type)
 	if status != StatusInProgress {
 		t.Errorf("status = %d, want in_progress", status)
 	}
@@ -277,14 +277,14 @@ func TestStartTask_FinishTask(t *testing.T) {
 	if tree.active != 0 {
 		t.Errorf("active = %d, want 0", tree.active)
 	}
-	status = node.getReconStatus(task.Type)
+	status = node.getAttackDataStatus(task.Type)
 	if status != StatusComplete {
 		t.Errorf("status = %d, want complete", status)
 	}
 }
 
 func TestRenderTree(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -315,7 +315,7 @@ func TestRenderTree(t *testing.T) {
 }
 
 func TestRenderIntel(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -334,22 +334,22 @@ func TestRenderIntel(t *testing.T) {
 }
 
 func TestRenderIntel_Empty(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	output := tree.RenderIntel()
 	if output != "" {
 		t.Errorf("empty tree should return empty intel, got: %q", output)
 	}
 }
 
-func TestReconTree_LockedByDefault(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+func TestAttackDataTree_LockedByDefault(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	if !tree.IsLocked() {
-		t.Error("new ReconTree should be locked by default")
+		t.Error("new AttackDataTree should be locked by default")
 	}
 }
 
-func TestReconTree_UnlockManual(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+func TestAttackDataTree_UnlockManual(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	// ロック中
 	if !tree.IsLocked() {
@@ -362,8 +362,8 @@ func TestReconTree_UnlockManual(t *testing.T) {
 	}
 }
 
-func TestReconTree_AutoUnlock_WhenNoPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+func TestAttackDataTree_AutoUnlock_WhenNoPending(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	// pending あり → locked
 	if !tree.IsLocked() {
@@ -378,8 +378,8 @@ func TestReconTree_AutoUnlock_WhenNoPending(t *testing.T) {
 	}
 }
 
-func TestReconTree_StaysLocked_WithPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+func TestAttackDataTree_StaysLocked_WithPending(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	// まだ pending がある
@@ -390,7 +390,7 @@ func TestReconTree_StaysLocked_WithPending(t *testing.T) {
 }
 
 func TestAddFinding(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -425,7 +425,7 @@ func TestAddFinding(t *testing.T) {
 }
 
 func TestAddFinding_MultipleFindings(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -458,7 +458,7 @@ func TestAddFinding_MultipleFindings(t *testing.T) {
 }
 
 func TestAddFinding_NonExistentNode(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	// 存在しないパスに追加 — パニックしないこと
@@ -473,7 +473,7 @@ func TestAddFinding_NonExistentNode(t *testing.T) {
 }
 
 func TestCountFindings(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
@@ -501,7 +501,7 @@ func TestCountFindings(t *testing.T) {
 }
 
 func TestRenderTree_WithFindings(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -540,7 +540,7 @@ func TestRenderTree_WithFindings(t *testing.T) {
 
 func TestRenderTree_WithActiveTasks(t *testing.T) {
 	// StartTask で in_progress にした後、RenderTree に "[>]" と "[active]" が含まれること
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	batch := tree.NextBatch()
@@ -569,7 +569,7 @@ func TestRenderTree_WithActiveTasks(t *testing.T) {
 func TestRenderTree_FindingsAndChildren(t *testing.T) {
 	// エンドポイントに finding と子エンドポイントの両方がある場合、
 	// ツリーレンダリングで両方が正しく表示されること
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	// /api の子として /api/v1 を追加
@@ -608,7 +608,7 @@ func TestRenderTree_FindingsAndChildren(t *testing.T) {
 
 func TestFindNode_Vhost(t *testing.T) {
 	// AddVhost で追加した vhost ノードを findNode で見つけられること
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
 
@@ -627,7 +627,7 @@ func TestFindNode_Vhost(t *testing.T) {
 
 func TestFindNode_VhostChild(t *testing.T) {
 	// vhost に子エンドポイントを追加し、CompleteTask で子の findNode が動作すること
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
 
@@ -657,13 +657,13 @@ func TestFindNode_VhostChild(t *testing.T) {
 // --- CompleteAllPortTasks テスト ---
 
 func TestCompleteAllPortTasks_Basic(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	// SubAgent 単位で active を設定（SpawnWebReconForPort と同等）
 	node := tree.Ports[0]
 	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-		node.setReconStatus(tt, StatusInProgress)
+		node.setAttackDataStatus(tt, StatusInProgress)
 	}
 	tree.active = 1 // SubAgent 1つ分
 
@@ -677,20 +677,20 @@ func TestCompleteAllPortTasks_Basic(t *testing.T) {
 
 	// 全タスクが Complete であること
 	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
-		if node.getReconStatus(tt) != StatusComplete {
-			t.Errorf("task %v status = %d, want complete", tt, node.getReconStatus(tt))
+		if node.getAttackDataStatus(tt) != StatusComplete {
+			t.Errorf("task %v status = %d, want complete", tt, node.getAttackDataStatus(tt))
 		}
 	}
 }
 
 func TestCompleteAllPortTasks_OnlyInProgress(t *testing.T) {
 	// InProgress のタスクのみ Complete にし、Pending はスキップすること
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	node := tree.Ports[0]
 	// EndpointEnum だけ InProgress にする
-	node.setReconStatus(TaskEndpointEnum, StatusInProgress)
+	node.setAttackDataStatus(TaskEndpointEnum, StatusInProgress)
 	tree.active = 1
 
 	tree.CompleteAllPortTasks(80)
@@ -712,11 +712,11 @@ func TestCompleteAllPortTasks_OnlyInProgress(t *testing.T) {
 }
 
 func TestCompleteAllPortTasks_NoMatchingPort(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	node := tree.Ports[0]
-	node.setReconStatus(TaskEndpointEnum, StatusInProgress)
+	node.setAttackDataStatus(TaskEndpointEnum, StatusInProgress)
 	tree.active = 1
 
 	// 存在しないポートを指定 → 何も変わらない
@@ -731,13 +731,13 @@ func TestCompleteAllPortTasks_NoMatchingPort(t *testing.T) {
 }
 
 func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 4)
+	tree := NewAttackDataTree("10.10.11.100", 4)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(443, "https", "nginx")
 
 	// 両方を SubAgent 単位で InProgress にする（各1 SubAgent）
 	for _, node := range tree.Ports {
-		node.setReconStatus(TaskEndpointEnum, StatusInProgress)
+		node.setAttackDataStatus(TaskEndpointEnum, StatusInProgress)
 	}
 	tree.active = 2 // 2 SubAgents
 
@@ -761,7 +761,7 @@ func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
 }
 
 func TestAddPort_NonHTTPToHTTP_InitializesTasks(t *testing.T) {
-	tree := NewReconTree("10.0.0.1", 2)
+	tree := NewAttackDataTree("10.0.0.1", 2)
 	// First add as generic TCP
 	tree.AddPort(8080, "tcpwrapped", "")
 	// Port should not have HTTP tasks
@@ -792,7 +792,7 @@ func TestAddPort_NonHTTPToHTTP_InitializesTasks(t *testing.T) {
 func TestAddPort_NonHTTPToHTTP_AlreadyInitialized(t *testing.T) {
 	// HTTP ポートとして追加された後、再度 HTTP で更新されても
 	// すでに初期化済みのタスクステータスが上書きされないこと
-	tree := NewReconTree("10.0.0.1", 2)
+	tree := NewAttackDataTree("10.0.0.1", 2)
 	tree.AddPort(80, "http", "Apache")
 	// EndpointEnum を InProgress に変更
 	tree.Ports[0].EndpointEnum = StatusInProgress
@@ -805,7 +805,7 @@ func TestAddPort_NonHTTPToHTTP_AlreadyInitialized(t *testing.T) {
 }
 
 func TestAddPort_Dedup(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "")
 	tree.AddPort(80, "http", "Apache 2.4.49")
 
@@ -819,7 +819,7 @@ func TestAddPort_Dedup(t *testing.T) {
 }
 
 func TestAddPort_Dedup_KeepLongerBanner(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache httpd 2.4.49 ((Unix))")
 	tree.AddPort(80, "http", "Apache")
 
@@ -829,8 +829,8 @@ func TestAddPort_Dedup_KeepLongerBanner(t *testing.T) {
 	}
 }
 
-func TestReconTree_ConcurrentAccess(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 4)
+func TestAttackDataTree_ConcurrentAccess(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 4)
 	var wg sync.WaitGroup
 
 	// 並行で AddPort
@@ -877,7 +877,7 @@ func TestReconTree_ConcurrentAccess(t *testing.T) {
 }
 
 func TestRenderIntel_WithActiveAgents(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	// Simulate HTTPAgent active
 	batch := tree.NextBatch()
@@ -897,7 +897,7 @@ func TestRenderIntel_WithActiveAgents(t *testing.T) {
 }
 
 func TestRenderIntel_WithFindings(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
 	tree.AddFinding("10.10.11.100", 80, "/login", Finding{
@@ -916,7 +916,7 @@ func TestRenderIntel_WithFindings(t *testing.T) {
 }
 
 func TestRenderIntel_AttackSurface(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(80, "http", "Apache")
 	output := tree.RenderIntel()
@@ -933,7 +933,7 @@ func TestRenderIntel_AttackSurface(t *testing.T) {
 }
 
 func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	// ポートレベルのタスクを complete にする
 	tree.CompleteTask("10.10.11.100", 80, "/", TaskEndpointEnum)

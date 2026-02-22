@@ -23,7 +23,7 @@ const testFfufEmptyJSON = `{"commandline":"ffuf -w wordlist -u http://10.10.11.1
 const testFfufVhostJSON = `{"commandline":"ffuf -w wordlist -u http://10.10.11.100 -H 'Host: FUZZ.example.com'","results":[{"input":{"FUZZ":"dev"},"status":200,"length":1234,"url":"http://10.10.11.100/"},{"input":{"FUZZ":"staging"},"status":200,"length":5678,"url":"http://10.10.11.100/"}]}`
 
 func TestParseNmapXML(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	err := ParseNmapXML(testNmapXML, tree)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestParseNmapXML(t *testing.T) {
 }
 
 func TestParseNmapXML_OnlyOpenPorts(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	_ = ParseNmapXML(testNmapXML, tree)
 	// 443 は filtered なので追加されない
 	for _, p := range tree.Ports {
@@ -63,7 +63,7 @@ func TestParseNmapXML_OnlyOpenPorts(t *testing.T) {
 }
 
 func TestParseNmapXML_HTTPGetsPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	_ = ParseNmapXML(testNmapXML, tree)
 
 	http := tree.Ports[1] // port 80
@@ -81,7 +81,7 @@ func TestParseNmapXML_HTTPGetsPending(t *testing.T) {
 }
 
 func TestParseFfufJSON_Endpoints(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	err := ParseFfufJSON(testFfufDirJSON, tree, "10.10.11.100", 80, "/", TaskEndpointEnum)
@@ -103,7 +103,7 @@ func TestParseFfufJSON_Endpoints(t *testing.T) {
 }
 
 func TestParseFfufJSON_Empty(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -120,7 +120,7 @@ func TestParseFfufJSON_Empty(t *testing.T) {
 }
 
 func TestParseFfufJSON_Vhost(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	err := ParseFfufJSON(testFfufVhostJSON, tree, "10.10.11.100", 80, "", TaskVhostDiscov)
@@ -142,7 +142,7 @@ func TestParseFfufJSON_Vhost(t *testing.T) {
 const testFfufRecursiveJSON = `{"commandline":"ffuf -w wordlist -u http://10.10.11.100/api/FUZZ -recursion -recursion-depth 3","results":[{"input":{"FUZZ":"v1"},"status":301,"length":0,"url":"http://10.10.11.100/api/v1"},{"input":{"FUZZ":"users"},"status":200,"length":1234,"url":"http://10.10.11.100/api/v1/users"}]}`
 
 func TestParseFfufJSON_RecursiveURL(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	// /api ノードを事前に追加（親として必要）
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -172,7 +172,7 @@ func TestParseFfufJSON_RecursiveURL(t *testing.T) {
 }
 
 func TestParseFfufJSON_EndpointEnumChildrenStayPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	jsonData := `{"commandline":"ffuf -u http://10.10.11.100/FUZZ -of json","results":[
@@ -207,7 +207,7 @@ func TestParseFfufJSON_EndpointEnumChildrenStayPending(t *testing.T) {
 }
 
 func TestParseFfufJSON_RecursiveChildrenStayPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -236,7 +236,7 @@ func TestParseFfufJSON_RecursiveChildrenStayPending(t *testing.T) {
 	}
 
 	// ParamFuzz and Profiling should still be Pending on all children
-	for _, node := range []*ReconNode{v1Node, usersNode} {
+	for _, node := range []*AttackDataNode{v1Node, usersNode} {
 		if node.ParamFuzz != StatusPending {
 			t.Errorf("%s ParamFuzz = %d, want StatusPending", node.Path, node.ParamFuzz)
 		}
@@ -247,7 +247,7 @@ func TestParseFfufJSON_RecursiveChildrenStayPending(t *testing.T) {
 }
 
 func TestDetectAndParse_Nmap(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	err := DetectAndParse("nmap -sV -sC 10.10.11.100", testNmapXML, tree, "10.10.11.100")
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestDetectAndParse_Nmap(t *testing.T) {
 }
 
 func TestDetectAndParse_Ffuf(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 
 	err := DetectAndParse(
@@ -275,7 +275,7 @@ func TestDetectAndParse_Ffuf(t *testing.T) {
 }
 
 func TestDetectAndParse_Curl(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
 
@@ -308,7 +308,7 @@ Service detection performed. Please provide correct files.
 Nmap done: 1 IP address (1 host up) scanned in 25.43 seconds`
 
 func TestParseNmapText(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	err := ParseNmapText(testNmapText, tree)
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +342,7 @@ func TestParseNmapText(t *testing.T) {
 }
 
 func TestParseNmapText_HTTPGetsPending(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	_ = ParseNmapText(testNmapText, tree)
 
 	http := tree.Ports[1] // port 80
@@ -360,7 +360,7 @@ func TestParseNmapText_HTTPGetsPending(t *testing.T) {
 }
 
 func TestDetectAndParse_NmapText(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	// nmap command without XML output
 	err := DetectAndParse("nmap -sV -sC 10.10.11.100", testNmapText, tree, "10.10.11.100")
 	if err != nil {
@@ -372,7 +372,7 @@ func TestDetectAndParse_NmapText(t *testing.T) {
 }
 
 func TestDetectAndParse_Unknown(t *testing.T) {
-	tree := NewReconTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2)
 	err := DetectAndParse("echo hello", "hello", tree, "10.10.11.100")
 	if err != nil {
 		t.Errorf("unknown command should not error, got: %v", err)

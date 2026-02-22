@@ -8,7 +8,7 @@ import (
 
 // ReconRunnerConfig は ReconRunner の構築パラメーター。
 type ReconRunnerConfig struct {
-	Tree       *ReconTree
+	Tree       *AttackDataTree
 	TaskMgr    *TaskManager // SubAgent 用（nil = SubAgent 無効）
 	Events     chan<- Event
 	TargetHost string
@@ -19,7 +19,7 @@ type ReconRunnerConfig struct {
 // ReconRunner は自動偵察を実行するオーケストレーター。
 // リアクティブモデル: evaluateResult が新 HTTP ポートを検出するたびに SpawnWebReconForPort を呼ぶ。
 type ReconRunner struct {
-	tree       *ReconTree
+	tree       *AttackDataTree
 	taskMgr    *TaskManager
 	events     chan<- Event
 	targetHost string
@@ -42,7 +42,7 @@ func NewReconRunner(cfg ReconRunnerConfig) *ReconRunner {
 // SpawnWebReconForPort は指定ポートの SubAgent を spawn する（リアクティブモデル）。
 // max_parallel チェック: active >= MaxParallel なら spawn しない（次の evaluateResult で再試行）。
 // Pending タスクだけ InProgress にマークし、SubAgent を起動する。
-func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *ReconNode) {
+func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *AttackDataNode) {
 	if rr.taskMgr == nil {
 		rr.emitLog("[RECON] TaskManager not configured — skipping web recon SubAgent")
 		return
@@ -71,7 +71,7 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *ReconNode
 		TargetHost: rr.targetHost,
 		TargetID:   rr.targetID,
 		MaxTurns:   50,
-		ReconTree:  rr.tree,
+		AttackDataTree:  rr.tree,
 		Metadata: TaskMetadata{
 			Port:    port.Port,
 			Service: port.Service,
@@ -83,9 +83,9 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *ReconNode
 	}
 }
 
-// findHTTPPorts は ReconTree から HTTP ポートを返す。
-func (rr *ReconRunner) findHTTPPorts() []*ReconNode {
-	var httpPorts []*ReconNode
+// findHTTPPorts は AttackDataTree から HTTP ポートを返す。
+func (rr *ReconRunner) findHTTPPorts() []*AttackDataNode {
+	var httpPorts []*AttackDataNode
 	for _, node := range rr.tree.Ports {
 		if node.isHTTP() {
 			httpPorts = append(httpPorts, node)
@@ -130,7 +130,7 @@ func buildWebReconPrompt(host string, port int) string {
 	}
 
 	return fmt.Sprintf(`You are a web reconnaissance agent for %s (port %d).
-Your ReconTree is automatically updated as you run commands.
+Your AttackDataTree is automatically updated as you run commands.
 Check the tree for pending tasks and work through them sequentially.
 
 CRITICAL — THESE FLAGS ARE MANDATORY ON EVERY ffuf COMMAND:

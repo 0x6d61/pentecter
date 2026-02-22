@@ -529,61 +529,61 @@ func TestTarget_ConcurrentEntityAccess(t *testing.T) {
 	wg.Wait()
 }
 
-// --- GetReconTree / SetReconTree テスト ---
+// --- GetAttackData / SetAttackData テスト ---
 
-func TestTarget_GetReconTree_Nil(t *testing.T) {
-	// 新しい Target は ReconTree が nil であること
+func TestTarget_GetAttackData_Nil(t *testing.T) {
+	// 新しい Target は AttackDataTree が nil であること
 	tgt := agent.NewTarget(1, "10.0.0.1")
 
-	rt := tgt.GetReconTree()
+	rt := tgt.GetAttackData()
 	if rt != nil {
-		t.Errorf("GetReconTree on new target: got %v, want nil", rt)
+		t.Errorf("GetAttackData on new target: got %v, want nil", rt)
 	}
 }
 
-func TestTarget_SetReconTree(t *testing.T) {
+func TestTarget_SetAttackData(t *testing.T) {
 	tgt := agent.NewTarget(1, "10.0.0.1")
 
-	// ReconTree を設定して取得
-	rt := agent.NewReconTree("10.0.0.1", 2)
+	// AttackDataTree を設定して取得
+	rt := agent.NewAttackDataTree("10.0.0.1", 2)
 	rt.AddPort(80, "http", "Apache 2.4.49")
 
-	tgt.SetReconTree(rt)
+	tgt.SetAttackData(rt)
 
-	got := tgt.GetReconTree()
+	got := tgt.GetAttackData()
 	if got == nil {
-		t.Fatal("GetReconTree after SetReconTree: got nil, want non-nil")
+		t.Fatal("GetAttackData after SetAttackData: got nil, want non-nil")
 	}
 	if got.Host != "10.0.0.1" {
-		t.Errorf("GetReconTree().Host: got %q, want %q", got.Host, "10.0.0.1")
+		t.Errorf("GetAttackData().Host: got %q, want %q", got.Host, "10.0.0.1")
 	}
 	if len(got.Ports) != 1 {
-		t.Errorf("GetReconTree().Ports: got %d, want 1", len(got.Ports))
+		t.Errorf("GetAttackData().Ports: got %d, want 1", len(got.Ports))
 	}
 
 	// nil で上書きできること
-	tgt.SetReconTree(nil)
-	if got := tgt.GetReconTree(); got != nil {
-		t.Errorf("GetReconTree after SetReconTree(nil): got %v, want nil", got)
+	tgt.SetAttackData(nil)
+	if got := tgt.GetAttackData(); got != nil {
+		t.Errorf("GetAttackData after SetAttackData(nil): got %v, want nil", got)
 	}
 }
 
-func TestTarget_GetReconTree_ConcurrentAccess(t *testing.T) {
+func TestTarget_GetAttackData_ConcurrentAccess(t *testing.T) {
 	tgt := agent.NewTarget(1, "10.0.0.1")
 
 	var wg sync.WaitGroup
 
-	// Writer goroutines: 交互に ReconTree を設定・nil 化
+	// Writer goroutines: 交互に AttackDataTree を設定・nil 化
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				if j%2 == 0 {
-					rt := agent.NewReconTree("10.0.0.1", 2)
-					tgt.SetReconTree(rt)
+					rt := agent.NewAttackDataTree("10.0.0.1", 2)
+					tgt.SetAttackData(rt)
 				} else {
-					tgt.SetReconTree(nil)
+					tgt.SetAttackData(nil)
 				}
 			}
 		}(i)
@@ -595,7 +595,7 @@ func TestTarget_GetReconTree_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				_ = tgt.GetReconTree()
+				_ = tgt.GetAttackData()
 			}
 		}()
 	}

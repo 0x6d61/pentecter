@@ -22,7 +22,7 @@ type TeamConfig struct {
 	MCPManager  *mcp.MCPManager    // nil = MCP 無効
 	SubBrain       brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
 	KnowledgeStore *knowledge.Store   // ナレッジベース検索（nil = 無効）
-	MaxParallelRecon int // ReconTree の並列数（0 = デフォルト 2）
+	MaxParallelRecon int // AttackDataTree の並列数（0 = デフォルト 2）
 }
 
 // Team は複数の Agent Loop を並列実行するオーケストレーター。
@@ -84,7 +84,7 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	approveCh := make(chan bool, 1)
 	userMsgCh := make(chan string, 4)
 
-	reconTree := NewReconTree(host, t.maxParallelRecon)
+	attackData := NewAttackDataTree(host, t.maxParallelRecon)
 
 	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
 		WithSkills(t.skillsReg).
@@ -92,7 +92,7 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 		WithMCP(t.mcpMgr).
 		WithTaskManager(t.taskMgr).
 		WithKnowledge(t.knowledgeStore).
-		WithReconTree(reconTree)
+		WithAttackData(attackData)
 
 	t.loops = append(t.loops, loop)
 

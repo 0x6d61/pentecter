@@ -315,8 +315,8 @@ func TestSmartSubAgent_FfufSilent(t *testing.T) {
 	}
 }
 
-func TestSmartSubAgent_UpdatesReconTree(t *testing.T) {
-	// SmartSubAgent が nmap 出力を ReconTree にパースすることを検証
+func TestSmartSubAgent_UpdatesAttackDataTree(t *testing.T) {
+	// SmartSubAgent が nmap 出力を AttackDataTree にパースすることを検証
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{
@@ -333,7 +333,7 @@ func TestSmartSubAgent_UpdatesReconTree(t *testing.T) {
 
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
-	tree := agent.NewReconTree("10.0.0.5", 2)
+	tree := agent.NewAttackDataTree("10.0.0.5", 2)
 
 	task := agent.NewSubTask("smart-recon", agent.TaskKindSmart, "test recon tree update")
 	task.MaxTurns = 5

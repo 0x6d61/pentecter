@@ -20,18 +20,18 @@ type SmartSubAgent struct {
 	runner     *tools.CommandRunner
 	mcpMgr     *mcp.MCPManager
 	events     chan<- Event
-	reconTree  *ReconTree
+	attackData *AttackDataTree
 	targetHost string
 }
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
-func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, reconTree *ReconTree, targetHost string) *SmartSubAgent {
+func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, attackData *AttackDataTree, targetHost string) *SmartSubAgent {
 	return &SmartSubAgent{
 		br:         br,
 		runner:     runner,
 		mcpMgr:     mcpMgr,
 		events:     events,
-		reconTree:  reconTree,
+		attackData: attackData,
 		targetHost: targetHost,
 	}
 }
@@ -74,10 +74,10 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		task.TurnCount = turn
 
-		// ReconTree の intel を取得（nil チェック済み）
+		// AttackDataTree の intel を取得（nil チェック済み）
 		var reconQueue string
-		if sa.reconTree != nil {
-			reconQueue = sa.reconTree.RenderIntel()
+		if sa.attackData != nil {
+			reconQueue = sa.attackData.RenderIntel()
 		}
 
 		// CommandHistory を構築（直近の履歴要約）
@@ -144,15 +144,15 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 				history = history[len(history)-10:]
 			}
 
-			// ReconTree にパース結果を反映
-			if sa.reconTree != nil {
+			// AttackDataTree にパース結果を反映
+			if sa.attackData != nil {
 				parseOutput := result.Truncated
 				if ffufPath := ExtractFfufOutputPath(cmd); ffufPath != "" {
 					if data, err := os.ReadFile(ffufPath); err == nil {
 						parseOutput = string(data)
 					}
 				}
-				_ = DetectAndParse(cmd, parseOutput, sa.reconTree, sa.targetHost)
+				_ = DetectAndParse(cmd, parseOutput, sa.attackData, sa.targetHost)
 			}
 
 			// Entity 抽出結果をタスクに追加

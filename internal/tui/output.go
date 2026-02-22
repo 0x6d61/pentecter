@@ -125,9 +125,9 @@ func (a *App) printProposal(p *agent.Proposal) {
 	}
 }
 
-// printReconTree appends recon tree output as a system block.
-func (a *App) printReconTree(host, treeOutput string) {
-	title := "RECON TREE - " + host
+// printAttackData appends attack data tree output as a system block.
+func (a *App) printAttackData(host, treeOutput string) {
+	title := "ATTACK DATA - " + host
 	body := strings.Split(treeOutput, "\n")
 	rows := append([]string{title}, body...)
 
@@ -168,7 +168,7 @@ func (a *App) printReconTree(host, treeOutput string) {
 	if t := a.activeTargetLocked(); t != nil {
 		t.AddBlock(agent.NewSystemBlock(msg))
 	} else {
-		a.globalLogs = append(a.globalLogs, "RECON TREE - "+host)
+		a.globalLogs = append(a.globalLogs, "ATTACK DATA - "+host)
 		a.globalLogs = append(a.globalLogs, strings.Split(treeOutput, "\n")...)
 	}
 	a.invalidateOutputCacheLocked()
