@@ -2082,3 +2082,196 @@ func TestTeam_AddTarget_Duplicate_AfterStart(t *testing.T) {
 		t.Errorf("Loops() count after duplicate: got %d, want 1", len(team.Loops()))
 	}
 }
+
+// =============================================================================
+// Phase Gate Tests
+// =============================================================================
+
+// TestLoop_PhaseGate_BlocksDuringRecon tests that Brain.Think() is NOT called
+// while recon SubAgents are active.
+func TestLoop_PhaseGate_BlocksDuringRecon(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	thinkCalled := make(chan struct{}, 10)
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+		onThink: func(_ int) {
+			thinkCalled <- struct{}{}
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	// Set up AttackDataTree with active recon (Active=1)
+	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree.AddPort(80, "http", "Apache")
+	// Simulate an active SubAgent by starting port recon
+	tree.StartPortRecon(tree.Ports[0])
+	loop.WithAttackData(tree)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// Drain events to avoid blocking
+	go func() {
+		for range events {
+		}
+	}()
+
+	// Brain.Think() should NOT be called while recon is active
+	select {
+	case <-thinkCalled:
+		t.Fatal("Brain.Think() was called while recon is active — phase gate should block it")
+	case <-time.After(2 * time.Second):
+		// Good — Think was not called
+	}
+	cancel()
+}
+
+// TestLoop_PhaseGate_UnblocksOnUserMsg tests that user message unblocks the gate.
+func TestLoop_PhaseGate_UnblocksOnUserMsg(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	thinkCalled := make(chan struct{}, 10)
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "responding to user", Action: schema.ActionComplete},
+		},
+		onThink: func(_ int) {
+			thinkCalled <- struct{}{}
+		},
+	}
+
+	loop, events, _, userMsg := newTestLoop(target, mb)
+
+	// Set up AttackDataTree with active recon
+	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.StartPortRecon(tree.Ports[0])
+	loop.WithAttackData(tree)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// Wait a bit, then send user message
+	time.Sleep(500 * time.Millisecond)
+	userMsg <- "what is the status?"
+
+	// Brain.Think() should be called after user message unblocks the gate
+	select {
+	case <-thinkCalled:
+		// Good — user message unblocked the gate
+		// Verify the user message was passed to Brain
+		if len(mb.inputs) > 0 {
+			lastInput := mb.inputs[len(mb.inputs)-1]
+			if lastInput.UserMessage == "" {
+				t.Error("UserMessage should be non-empty after gate unblock")
+			}
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("Brain.Think() was never called — user message should unblock the phase gate")
+	}
+
+	// Wait for completion
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+// TestLoop_PhaseGate_UnblocksWhenReconCompletes tests that the gate unblocks
+// when all recon SubAgents finish (Active goes to 0).
+func TestLoop_PhaseGate_UnblocksWhenReconCompletes(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	thinkCalled := make(chan struct{}, 10)
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "recon done, analyzing", Action: schema.ActionComplete},
+		},
+		onThink: func(_ int) {
+			thinkCalled <- struct{}{}
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+
+	// Set up AttackDataTree with active recon
+	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.StartPortRecon(tree.Ports[0])
+	loop.WithAttackData(tree)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// Wait a bit, then simulate recon completion
+	time.Sleep(500 * time.Millisecond)
+	tree.CompleteAllPortTasks(80)
+
+	// Brain.Think() should be called after recon completes
+	select {
+	case <-thinkCalled:
+		// Good — recon completion unblocked the gate
+	case <-time.After(4 * time.Second):
+		t.Fatal("Brain.Think() was never called — recon completion should unblock the phase gate")
+	}
+
+	// Wait for completion
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+// TestLoop_PhaseGate_NoGateWithoutAttackData tests that the gate does NOT
+// activate when AttackDataTree is nil.
+func TestLoop_PhaseGate_NoGateWithoutAttackData(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "no recon tree", Action: schema.ActionComplete},
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+	// Do NOT set AttackData — no gate should activate
+	_ = loop // suppress unused warning
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	// Should complete normally without blocking
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout — loop should complete normally without AttackData")
+		}
+	}
+}
