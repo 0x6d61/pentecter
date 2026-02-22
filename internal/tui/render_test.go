@@ -155,6 +155,43 @@ func TestRenderCommandBlock_EmptyOutput(t *testing.T) {
 	}
 }
 
+func TestRenderCommandBlock_LongCommandTruncated(t *testing.T) {
+	longCmd := "nmap -sV -sC -p 80,443,8080,8443 --script=http-enum,http-headers,http-methods,http-title 10.0.0.5"
+	b := agent.NewCommandBlock(longCmd)
+	result := renderCommandBlock(b, 60, false)
+	if strings.Contains(result, longCmd) {
+		t.Error("long command should be truncated when not expanded")
+	}
+	if !strings.Contains(result, "...") {
+		t.Error("truncated command should end with ...")
+	}
+	if !strings.Contains(result, "●") {
+		t.Error("should still have bullet prefix")
+	}
+}
+
+func TestRenderCommandBlock_LongCommandExpanded(t *testing.T) {
+	longCmd := "nmap -sV -sC -p 80,443,8080,8443 --script=http-enum,http-headers,http-methods,http-title 10.0.0.5"
+	b := agent.NewCommandBlock(longCmd)
+	result := renderCommandBlock(b, 60, true)
+	if !strings.Contains(result, longCmd) {
+		t.Error("expanded mode should show full command")
+	}
+}
+
+func TestRenderCommandBlock_ShortCommandNotTruncated(t *testing.T) {
+	shortCmd := "nmap -sV 10.0.0.5"
+	b := agent.NewCommandBlock(shortCmd)
+	result := renderCommandBlock(b, 80, false)
+	if !strings.Contains(result, shortCmd) {
+		t.Error("short command should not be truncated")
+	}
+	if strings.Contains(result, "...") {
+		t.Error("short command should not have ...")
+	}
+}
+
+
 // ---------------------------------------------------------------------------
 // renderThinkingBlock
 // ---------------------------------------------------------------------------

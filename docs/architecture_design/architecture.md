@@ -6,7 +6,7 @@
 |---|---|
 | **名称** | `Pentecter`（Penetration + Detector + Specter） |
 | **役割** | 自律型ペネトレーションテストエージェント（TUIベース） |
-| **スタック** | Go (Golang 1.23+), Bubble Tea (TUI), Anthropic/OpenAI API (Brain) |
+| **スタック** | Go (Golang 1.23+), ergochat/readline (TUI), glamour/lipgloss (rendering), Anthropic/OpenAI API (Brain) |
 | **デプロイ** | 単一スタティックバイナリ / Docker (Kali Linux ベース) |
 
 ---
@@ -27,14 +27,15 @@
 }
 ```
 
-### B. The TUI（Bubble Tea）
-- **モデル**: アプリケーション全状態を保持
-- **ビュー構成**:
-  1. **ターゲットリスト**: 左ペイン — 発見済みホスト一覧とステータス
-  2. **メインコンソール**: 右ペイン — 選択中ターゲットのセッションログ
-  3. **プロポーザルバー**: AI提案のApproval表示
-  4. **ログ**: Brain の思考過程 + ツール生出力のストリーム
-- **コマンド**: ツール実行の非同期メッセージパッシング
+### B. The TUI（Hybrid Terminal UI）
+- **アーキテクチャ**: readline ベースのハイブリッドターミナル UI
+- **出力**: stdout 直書き（ターミナルがスクロール管理）
+- **入力**: readline がブロッキング管理
+- **goroutine 構成**:
+  - **goroutine A（入力）**: readline.Readline() ブロッキングループ — ユーザー入力の受け付け、コマンドディスパッチ
+  - **goroutine B（イベント消費）**: agentEvents チャネル受信 → handleAgentEvent() でブロック更新 → rl.Stdout() 経由で即座に印字
+  - **goroutine C（スピナー）**: 100ms ティッカー → スピナーフレーム更新 → readline prompt 再描画
+  - **goroutine D（リサイズ検出）**: 500ms ティッカー → term.GetSize() でターミナル幅ポーリング（Windows 対応）
 
 ### C. The Hands（ツールラッパー）
 - **パターン**: `os/exec` 経由のコマンドパターン実装
@@ -56,7 +57,7 @@
     /brain           # LLM クライアント（Anthropic/OpenAI）
     /graph           # ナレッジグラフ（メモリ）
     /tools           # ツールラッパー（nmap, sqlmap, msf）
-    /tui             # Bubble Tea モデル＆ビュー
+    /tui             # readline ベース TUI（App, Input, Output, Events, Commands）
   /pkg
     /schema          # 共有 JSON 構造体
   /docs              # 設計ドキュメント（本ディレクトリ）
@@ -79,7 +80,7 @@
 
 | フェーズ | 名称 | 内容 |
 |---|---|---|
-| **Phase 1** | The Shell | 基本 Bubble Tea TUI（Commander Console） |
+| **Phase 1** | The Shell | Hybrid Terminal UI（readline + stdout） |
 | **Phase 2** | The Hands | `tools.Nmap` ラッパー実装、チャネル経由の結果受信 |
 | **Phase 3** | The Brain | Claude API 接続、JSON コマンドパース |
 | **Phase 4** | The Loop | Brain → Action → Tool → Result → Brain の完全ループ |

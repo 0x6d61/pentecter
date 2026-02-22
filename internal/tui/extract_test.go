@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/0x6d61/pentecter/internal/agent"
@@ -119,6 +120,13 @@ func TestExtractHostFromText(t *testing.T) {
 	}
 }
 
+// newTestApp creates an App for testing with a bytes.Buffer for output.
+func newTestApp(targets []*agent.Target) *App {
+	a := NewApp(targets)
+	a.testWriter = &bytes.Buffer{}
+	return a
+}
+
 func TestHandleModelCommand_ListProviders(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -127,20 +135,18 @@ func TestHandleModelCommand_ListProviders(t *testing.T) {
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
+	a := newTestApp([]*agent.Target{target})
 
-	m.handleModelCommand("/model")
+	a.handleModelCommand("/model")
 
-	// With providers available, should show select UI instead of log
-	if m.inputMode != InputSelect {
-		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
-	if len(m.selectOptions) < 1 {
+	if len(a.selectOpts) < 1 {
 		t.Error("expected at least 1 provider in select options")
 	}
-	// Verify anthropic is in the options
 	found := false
-	for _, opt := range m.selectOptions {
+	for _, opt := range a.selectOpts {
 		if opt.Value == "anthropic" {
 			found = true
 		}
@@ -158,16 +164,15 @@ func TestHandleModelCommand_WithArgs_ShowsSelectUI(t *testing.T) {
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
-	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
+	a := newTestApp([]*agent.Target{target})
+	a.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
 		return nil, nil
 	}
 
-	// Args are ignored — always shows select UI
-	m.handleModelCommand("/model openai/gpt-4o")
+	a.handleModelCommand("/model openai/gpt-4o")
 
-	if m.inputMode != InputSelect {
-		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
 }
 
@@ -179,12 +184,11 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
+	a := newTestApp([]*agent.Target{target})
 
-	m.handleModelCommand("/model")
+	a.handleModelCommand("/model")
 
-	// No providers → should log message, not show select
-	if m.inputMode == InputSelect {
+	if a.inputMode == ModeSelect {
 		t.Error("should not show select when no providers are available")
 	}
 	found := false
@@ -200,52 +204,48 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 
 func TestHandleApproveCommand_ShowState(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
+	a := newTestApp([]*agent.Target{target})
 	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
-	m.Runner = runner
+	a.Runner = runner
 
-	m.handleApproveCommand("/approve")
+	a.handleApproveCommand("/approve")
 
-	// /approve without args now shows select UI instead of logging state
-	if m.inputMode != InputSelect {
-		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
-	if len(m.selectOptions) != 2 {
-		t.Errorf("expected 2 options (ON/OFF), got %d", len(m.selectOptions))
+	if len(a.selectOpts) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(a.selectOpts))
 	}
 }
 
 func TestHandleApproveCommand_WithArgs_ShowsSelectUI(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
+	a := newTestApp([]*agent.Target{target})
 	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
-	m.Runner = runner
+	a.Runner = runner
 
-	// Args are ignored — always shows select UI
-	m.handleApproveCommand("/approve on")
+	a.handleApproveCommand("/approve on")
 
-	if m.inputMode != InputSelect {
-		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
-	if len(m.selectOptions) != 2 {
-		t.Errorf("expected 2 options (ON/OFF), got %d", len(m.selectOptions))
+	if len(a.selectOpts) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(a.selectOpts))
 	}
 }
 
 func TestHandleApproveCommand_OffArgs_ShowsSelectUI(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
+	a := newTestApp([]*agent.Target{target})
 	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
-	runner.SetAutoApprove(true) // Start with ON
-	m.Runner = runner
+	runner.SetAutoApprove(true)
+	a.Runner = runner
 
-	// Args are ignored — always shows select UI
-	m.handleApproveCommand("/approve off")
+	a.handleApproveCommand("/approve off")
 
-	if m.inputMode != InputSelect {
-		t.Errorf("expected InputSelect mode, got %d", m.inputMode)
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
-	// Auto-approve should still be true (not changed until select callback)
 	if !runner.AutoApprove() {
 		t.Error("auto-approve should remain ON until user selects from UI")
 	}
@@ -253,10 +253,9 @@ func TestHandleApproveCommand_OffArgs_ShowsSelectUI(t *testing.T) {
 
 func TestHandleApproveCommand_NilRunner(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
-	m := NewWithTargets([]*agent.Target{target})
-	// Runner is nil by default
+	a := newTestApp([]*agent.Target{target})
 
-	m.handleApproveCommand("/approve")
+	a.handleApproveCommand("/approve")
 
 	found := false
 	for _, b := range target.Blocks {

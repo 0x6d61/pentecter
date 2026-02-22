@@ -2,8 +2,8 @@
 
 ## 概要
 
-pentecter の TUI ビューポートは **DisplayBlock** を基本単位としたブロックベースレンダリングを採用している。
-Agent ループから送信されるイベントが `DisplayBlock` に変換され、`renderBlocks()` で文字列化されてビューポートに表示される。
+pentecter の TUI は **DisplayBlock** を基本単位としたブロックベースレンダリングを採用している。
+Agent ループから送信されるイベントが `DisplayBlock` に変換され、`renderBlocks()` で変換され、各ブロックは完了時に`rl.Stdout()` 経由で stdout に直接出力される。
 
 ## DisplayBlock モデル
 

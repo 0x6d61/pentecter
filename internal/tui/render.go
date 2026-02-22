@@ -31,8 +31,17 @@ func renderCommandBlock(b *agent.DisplayBlock, width int, expanded bool) string 
 	var sb strings.Builder
 
 	// コマンドヘッダー（● 付き）
+	cmdText := b.Command
+	cmdMaxWidth := width - 6 // "● " prefix (2) + margin (4)
+	if cmdMaxWidth < 20 {
+		cmdMaxWidth = 20
+	}
+	if !expanded && len(cmdText) > cmdMaxWidth {
+		cmdText = cmdText[:cmdMaxWidth-3] + "..."
+	}
+
 	cmdStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
-	sb.WriteString(cmdStyle.Render("● " + b.Command))
+	sb.WriteString(cmdStyle.Render("● " + cmdText))
 	sb.WriteString("\n")
 
 	if len(b.Output) == 0 {
@@ -79,10 +88,10 @@ func renderThinkingBlock(b *agent.DisplayBlock, spinnerFrame string) string {
 	if b.ThinkingDone {
 		dur := formatDuration(b.ThinkDuration)
 		style := lipgloss.NewStyle().Foreground(colorSecondary)
-		return style.Render(fmt.Sprintf("✻ Completed in %s", dur)) + "\n"
+		return "\n" + style.Render(fmt.Sprintf("✻ Completed in %s", dur)) + "\n\n"
 	}
 	style := lipgloss.NewStyle().Foreground(colorSecondary)
-	return style.Render(spinnerFrame + " Thinking...") + "\n"
+	return "\n" + style.Render(spinnerFrame+" Thinking...") + "\n\n"
 }
 
 // renderAIMessageBlock は AI レスポンスブロックをレンダリングする。
@@ -186,15 +195,16 @@ func renderSubTaskBlock(b *agent.DisplayBlock, width int, spinnerFrame string) s
 
 // renderUserInputBlock はユーザー入力ブロックをハイライト背景でレンダリングする。
 // Format: > text
-func renderUserInputBlock(b *agent.DisplayBlock, width int) string {
+func renderUserInputBlock(b *agent.DisplayBlock, _ int) string {
 	style := userInputBlockStyle
-	return style.Render("> " + b.UserText) + "\n"
+	return "\n" + style.Render("> "+b.UserText) + "\n"
 }
 
 // renderSystemBlock はシステムメッセージをレンダリングする。
+// 前後に改行を入れて視覚的に区切る。
 func renderSystemBlock(b *agent.DisplayBlock) string {
 	style := lipgloss.NewStyle().Foreground(colorMuted)
-	return style.Render(b.SystemMsg) + "\n"
+	return "\n" + style.Render(b.SystemMsg) + "\n"
 }
 
 // formatDuration は表示用の時間フォーマットを返す (例: "12s", "1m23s")。
@@ -208,6 +218,29 @@ func formatDuration(d time.Duration) string {
 	m := int(d.Minutes())
 	s := int(d.Seconds()) - m*60
 	return fmt.Sprintf("%dm%ds", m, s)
+}
+
+// renderBlock は単一の DisplayBlock をレンダリングする。
+// spinnerFrame はアクティブな thinking/subtask ブロックに表示するスピナーの現在フレーム。
+func renderBlock(b *agent.DisplayBlock, width int, expanded bool, spinnerFrame string) string {
+	switch b.Type {
+	case agent.BlockCommand:
+		return renderCommandBlock(b, width, expanded)
+	case agent.BlockThinking:
+		return renderThinkingBlock(b, spinnerFrame)
+	case agent.BlockAIMessage:
+		return renderAIMessageBlock(b, width)
+	case agent.BlockMemory:
+		return renderMemoryBlock(b)
+	case agent.BlockSubTask:
+		return renderSubTaskBlock(b, width, spinnerFrame)
+	case agent.BlockUserInput:
+		return renderUserInputBlock(b, width)
+	case agent.BlockSystem:
+		return renderSystemBlock(b)
+	default:
+		return ""
+	}
 }
 
 // renderBlocks は全ての DisplayBlock をビューポート用コンテンツにレンダリングする。
