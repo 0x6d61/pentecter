@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -1370,4 +1371,175 @@ func TestRenderIntel_NoReconProgressForNonHTTPOnly(t *testing.T) {
 	if strings.Contains(output, "RECON PROGRESS") {
 		t.Errorf("should NOT show RECON PROGRESS when no HTTP ports\noutput:\n%s", output)
 	}
+}
+
+func TestSnapshot_Roundtrip(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 3)
+	tree.AddPort(80, "http", "Apache 2.4.49")
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/api", "/api/v1")
+	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+
+	snap1 := tree.Snapshot()
+
+	// JSON marshal/unmarshal roundtrip
+	data, err := json.Marshal(snap1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap2 AttackDataSnapshot
+	if err := json.Unmarshal(data, &snap2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restore from snapshot
+	restored := RestoreAttackDataTree(snap2)
+
+	// Verify
+	if restored.Host != tree.Host {
+		t.Errorf("Host = %q, want %q", restored.Host, tree.Host)
+	}
+	if restored.MaxParallel != tree.MaxParallel {
+		t.Errorf("MaxParallel = %d, want %d", restored.MaxParallel, tree.MaxParallel)
+	}
+	if len(restored.Ports) != len(tree.Ports) {
+		t.Fatalf("Ports count = %d, want %d", len(restored.Ports), len(tree.Ports))
+	}
+	if len(restored.Vhosts) != len(tree.Vhosts) {
+		t.Fatalf("Vhosts count = %d, want %d", len(restored.Vhosts), len(tree.Vhosts))
+	}
+
+	// Port 80 should have EndpointEnum=Complete (not reset since it was Complete)
+	port80 := restored.Ports[0]
+	if port80.EndpointEnum != StatusComplete {
+		t.Errorf("port 80 EndpointEnum = %d, want Complete", port80.EndpointEnum)
+	}
+
+	// Children preserved
+	if len(port80.Children) != 1 {
+		t.Fatalf("port 80 children = %d, want 2", len(port80.Children))
+	}
+	if port80.Children[0].Path != "/api" {
+		t.Errorf("child[0].Path = %q, want /api", port80.Children[0].Path)
+	}
+	// Nested children
+	if len(port80.Children[0].Children) != 1 {
+		t.Fatalf("/api children = %d, want 1", len(port80.Children[0].Children))
+	}
+	if port80.Children[0].Children[0].Path != "/api/v1" {
+		t.Errorf("nested child path = %q, want /api/v1", port80.Children[0].Children[0].Path)
+	}
+}
+
+func TestSnapshot_WithChecklist(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
+	tree.SetChecklist(22, cl)
+	// Mark one item done
+	tree.Ports[0].Checklist.Items[0].Done = true
+
+	snap := tree.Snapshot()
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap2 AttackDataSnapshot
+	if err := json.Unmarshal(data, &snap2); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := RestoreAttackDataTree(snap2)
+	sshNode := restored.Ports[0]
+	if sshNode.Checklist == nil {
+		t.Fatal("Checklist should be preserved")
+	}
+	if len(sshNode.Checklist.Items) != len(cl.Items) {
+		t.Errorf("Checklist items = %d, want %d", len(sshNode.Checklist.Items), len(cl.Items))
+	}
+	if !sshNode.Checklist.Items[0].Done {
+		t.Error("first checklist item should still be Done")
+	}
+}
+
+func TestSnapshot_WithFindings(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param: "id", Category: "sqli", Evidence: "500 + MySQL syntax error", Severity: "high",
+	})
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param: "name", Category: "xss", Evidence: "reflected <script>", Severity: "medium",
+	})
+
+	snap := tree.Snapshot()
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap2 AttackDataSnapshot
+	if err := json.Unmarshal(data, &snap2); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := RestoreAttackDataTree(snap2)
+	port80 := restored.Ports[0]
+	if len(port80.Children) != 1 {
+		t.Fatalf("children count = %d, want 1", len(port80.Children))
+	}
+	apiNode := port80.Children[0]
+	if len(apiNode.Findings) != 2 {
+		t.Fatalf("findings count = %d, want 2", len(apiNode.Findings))
+	}
+	if apiNode.Findings[0].Param != "id" || apiNode.Findings[0].Category != "sqli" {
+		t.Errorf("finding[0] = %+v", apiNode.Findings[0])
+	}
+	if apiNode.Findings[1].Param != "name" || apiNode.Findings[1].Category != "xss" {
+		t.Errorf("finding[1] = %+v", apiNode.Findings[1])
+	}
+}
+
+func TestSnapshot_InProgressResetToPending(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	// Set tasks to InProgress
+	batch := tree.NextBatch()
+	for _, task := range batch {
+		tree.StartTask(task)
+	}
+	// Verify InProgress
+	port80 := tree.Ports[0]
+	if port80.EndpointEnum != StatusInProgress {
+		t.Fatalf("should be InProgress, got %d", port80.EndpointEnum)
+	}
+
+	snap := tree.Snapshot()
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap2 AttackDataSnapshot
+	if err := json.Unmarshal(data, &snap2); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := RestoreAttackDataTree(snap2)
+	// InProgress should be reset to Pending
+	restoredPort := restored.Ports[0]
+	if restoredPort.EndpointEnum != StatusPending {
+		t.Errorf("EndpointEnum should be reset to Pending, got %d", restoredPort.EndpointEnum)
+	}
+	if restoredPort.VhostDiscov != StatusPending {
+		t.Errorf("VhostDiscov should be reset to Pending, got %d", restoredPort.VhostDiscov)
+	}
+	// Active should be 0
+	if restored.Active() != 0 {
+		t.Errorf("Active = %d, want 0", restored.Active())
+	}
+	// Completed tasks should stay Complete
+	// (none in this test, but verify StatusNone stays None)
 }

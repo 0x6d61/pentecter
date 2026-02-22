@@ -54,6 +54,7 @@ type Loop struct {
 	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
 	attackData   *AttackDataTree    // 構造的偵察制御（nil = 無効）
 	reconRunner  *ReconRunner // リアクティブ偵察オーケストレーター（nil = 無効）
+	backupMgr    *BackupManager   // AttackDataTree バックアップ（nil = 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -146,6 +147,19 @@ func (l *Loop) Run(ctx context.Context) {
 	l.emit(Event{Type: EventLog, Source: SourceSystem,
 		Message: fmt.Sprintf("Agent started: %s", l.target.Host)})
 	l.target.SetStatusSafe(StatusScanning)
+
+	// AttackDataTree バックアップからの復元
+	if l.attackData != nil && l.memoryStore != nil {
+		if restored, err := LoadAttackDataTree(l.memoryStore.BaseDir(), l.target.Host); err != nil {
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("AttackDataTree restore warning: %v", err)})
+		} else if restored != nil {
+			l.attackData = restored
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: "AttackDataTree restored from backup"})
+		}
+		l.backupMgr = NewBackupManager(l.memoryStore.BaseDir(), l.target.Host, l.attackData)
+	}
 
 	// ReconRunner 初期化（リアクティブモデル: evaluateResult から自動 spawn）
 	if l.attackData != nil {
@@ -570,7 +584,7 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 
 	// Raw output saving: コマンド出力をファイルに保存
 	if l.lastCommand != "" && l.memoryStore != nil {
-		if _, err := SaveRawOutput(l.memoryStore.BaseDir(), l.target.Host, l.lastCommand, l.lastToolOutput); err != nil {
+		if _, err := SaveRawOutput(l.memoryStore.BaseDir(), l.target.Host, l.lastCommand, l.lastToolOutput, l.lastExitCode); err != nil {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
 				Message: fmt.Sprintf("Raw output save warning: %v", err)})
 		}
@@ -616,6 +630,14 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 
 		// Target にも反映（TUI から参照可能にする）
 		l.target.SetAttackData(l.attackData)
+
+		// AttackDataTree バックアップ保存
+		if l.backupMgr != nil {
+			if err := l.backupMgr.Save(); err != nil {
+				l.emit(Event{Type: EventLog, Source: SourceSystem,
+					Message: fmt.Sprintf("AttackDataTree backup warning: %v", err)})
+			}
+		}
 
 		// Recon 完了検出: 全タスク + チェックリスト完了時に一度だけイベントを emit
 		if !l.reconCompleteEmitted && l.attackData.IsReconComplete() {

@@ -47,10 +47,10 @@ func (t ReconTaskType) String() string {
 
 // Finding はバリューファジングで発見された脆弱性の疑い
 type Finding struct {
-	Param    string // パラメーター名 (e.g. "id")
-	Category string // ファジングカテゴリ (e.g. "sqli")
-	Evidence string // 証拠 (e.g. "500 + MySQL syntax error on single quote")
-	Severity string // 深刻度: "high", "medium", "low", "info"
+	Param    string `json:"param"`    // パラメーター名 (e.g. "id")
+	Category string `json:"category"` // ファジングカテゴリ (e.g. "sqli")
+	Evidence string `json:"evidence"` // 証拠 (e.g. "500 + MySQL syntax error on single quote")
+	Severity string `json:"severity"` // 深刻度: "high", "medium", "low", "info"
 }
 
 // TaskProgress は特定タスクタイプの進捗
@@ -1056,4 +1056,120 @@ func collectAllChildren(nodes *[]*AttackDataNode, node *AttackDataNode) {
 		*nodes = append(*nodes, child)
 		collectAllChildren(nodes, child)
 	}
+}
+
+// AttackDataSnapshot は AttackDataTree の JSON シリアライズ用構造体
+type AttackDataSnapshot struct {
+	Host        string              `json:"host"`
+	MaxParallel int                 `json:"max_parallel"`
+	Locked      bool                `json:"locked"`
+	Ports       []AttackDataNodeDTO `json:"ports"`
+	Vhosts      []AttackDataNodeDTO `json:"vhosts"`
+}
+
+// AttackDataNodeDTO はノードの JSON 表現
+type AttackDataNodeDTO struct {
+	Host         string              `json:"host"`
+	Port         int                 `json:"port"`
+	Service      string              `json:"service"`
+	Banner       string              `json:"banner"`
+	Path         string              `json:"path"`
+	EndpointEnum AttackDataStatus    `json:"endpoint_enum"`
+	ParamFuzz    AttackDataStatus    `json:"param_fuzz"`
+	Profiling    AttackDataStatus    `json:"profiling"`
+	VhostDiscov  AttackDataStatus    `json:"vhost_discovery"`
+	Findings     []Finding           `json:"findings,omitempty"`
+	Checklist    *ServiceChecklist   `json:"checklist,omitempty"`
+	Children     []AttackDataNodeDTO `json:"children,omitempty"`
+}
+
+// Snapshot は現在のツリー状態のスナップショットを返す（スレッドセーフ）。
+func (t *AttackDataTree) Snapshot() AttackDataSnapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	snap := AttackDataSnapshot{
+		Host:        t.Host,
+		MaxParallel: t.MaxParallel,
+		Locked:      t.locked,
+	}
+	for _, node := range t.Ports {
+		snap.Ports = append(snap.Ports, nodeToDTO(node))
+	}
+	for _, node := range t.Vhosts {
+		snap.Vhosts = append(snap.Vhosts, nodeToDTO(node))
+	}
+	return snap
+}
+
+// RestoreAttackDataTree はスナップショットから AttackDataTree を復元する。
+// InProgress のタスクは Pending にリセットされる（SubAgent は再起動が必要なため）。
+// active カウンタは 0 にリセットされる。
+func RestoreAttackDataTree(snap AttackDataSnapshot) *AttackDataTree {
+	tree := &AttackDataTree{
+		Host:        snap.Host,
+		MaxParallel: snap.MaxParallel,
+		locked:      snap.Locked,
+		active:      0, // SubAgent は別途再 spawn
+	}
+	if tree.MaxParallel <= 0 {
+		tree.MaxParallel = 2
+	}
+	for _, dto := range snap.Ports {
+		tree.Ports = append(tree.Ports, dtoToNode(dto))
+	}
+	for _, dto := range snap.Vhosts {
+		tree.Vhosts = append(tree.Vhosts, dtoToNode(dto))
+	}
+	return tree
+}
+
+// nodeToDTO は AttackDataNode を DTO に変換する。
+func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
+	dto := AttackDataNodeDTO{
+		Host:         node.Host,
+		Port:         node.Port,
+		Service:      node.Service,
+		Banner:       node.Banner,
+		Path:         node.Path,
+		EndpointEnum: node.EndpointEnum,
+		ParamFuzz:    node.ParamFuzz,
+		Profiling:    node.Profiling,
+		VhostDiscov:  node.VhostDiscov,
+		Findings:     node.Findings,
+		Checklist:    node.Checklist,
+	}
+	for _, child := range node.Children {
+		dto.Children = append(dto.Children, nodeToDTO(child))
+	}
+	return dto
+}
+
+// dtoToNode は DTO から AttackDataNode を復元する。
+// InProgress のタスクは Pending にリセットする。
+func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
+	node := &AttackDataNode{
+		Host:         dto.Host,
+		Port:         dto.Port,
+		Service:      dto.Service,
+		Banner:       dto.Banner,
+		Path:         dto.Path,
+		EndpointEnum: resetInProgress(dto.EndpointEnum),
+		ParamFuzz:    resetInProgress(dto.ParamFuzz),
+		Profiling:    resetInProgress(dto.Profiling),
+		VhostDiscov:  resetInProgress(dto.VhostDiscov),
+		Findings:     dto.Findings,
+		Checklist:    dto.Checklist,
+	}
+	for _, childDTO := range dto.Children {
+		node.Children = append(node.Children, dtoToNode(childDTO))
+	}
+	return node
+}
+
+// resetInProgress は InProgress を Pending にリセットする。
+func resetInProgress(s AttackDataStatus) AttackDataStatus {
+	if s == StatusInProgress {
+		return StatusPending
+	}
+	return s
 }
