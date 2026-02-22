@@ -27,38 +27,6 @@ func (a *App) runSpinner(ctx context.Context) {
 	}
 }
 
-// overwriteOutputLine is a compatibility no-op; full redraw is handled by tcell.
-func (a *App) overwriteOutputLine(string) {}
-
-// isThinkingLocked checks if the most recent active block is a Thinking block.
-// Must be called with a.mu held.
-func (a *App) isThinkingLocked() bool {
-	t := a.activeTargetLocked()
-	if t == nil {
-		return false
-	}
-	for i := len(t.Blocks) - 1; i >= 0; i-- {
-		b := t.Blocks[i]
-		if b.Type == agent.BlockThinking && !b.ThinkingDone {
-			return true
-		}
-		if (b.Type == agent.BlockCommand && !b.Completed) ||
-			(b.Type == agent.BlockSubTask && !b.TaskDone) {
-			return false
-		}
-	}
-	return false
-}
-
-// nextSpinnerFrame returns the current spinner animation frame.
-func (a *App) nextSpinnerFrame() string {
-	if len(a.spinnerFrames) == 0 {
-		return "."
-	}
-	idx := a.spinnerIdx.Load()
-	return a.spinnerFrames[int(idx)%len(a.spinnerFrames)]
-}
-
 // printCmdOutputLine emits textual output only in tests.
 func (a *App) printCmdOutputLine(line string, outputLen int) {
 	if a.testWriter == nil {
@@ -80,7 +48,7 @@ func (a *App) printCmdOutputLine(line string, outputLen int) {
 	}
 
 	remaining := outputLen - previewLines
-	_, _ = fmt.Fprintln(a.testWriter, fmt.Sprintf("     ... +%d lines (ctrl+o)", remaining))
+	_, _ = fmt.Fprintf(a.testWriter, "     ... +%d lines (ctrl+o)\n", remaining)
 }
 
 // toggleFold toggles log folding.
@@ -107,19 +75,6 @@ func (a *App) clearAndReprint() {
 	lines := a.buildOutputLinesLocked(width)
 	a.mu.Unlock()
 
-	for _, l := range lines {
-		_, _ = fmt.Fprintln(a.testWriter, l)
-	}
-}
-
-// printProposal emits proposal text only in tests.
-func (a *App) printProposal(p *agent.Proposal) {
-	if a.testWriter == nil {
-		return
-	}
-	a.mu.Lock()
-	lines := a.proposalLinesLocked(p)
-	a.mu.Unlock()
 	for _, l := range lines {
 		_, _ = fmt.Fprintln(a.testWriter, l)
 	}

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 )
@@ -201,8 +200,4 @@ func (a *App) hasActiveBlocksLocked() bool {
 		}
 	}
 	return false
-}
-
-func (a *App) debugEventString(e agent.Event) string {
-	return fmt.Sprintf("event=%s target=%d", e.Type, e.TargetID)
 }
