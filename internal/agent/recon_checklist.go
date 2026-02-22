@@ -7,15 +7,15 @@ import (
 
 // ChecklistItem represents a single recon task for a service.
 type ChecklistItem struct {
-	ID          string   // e.g. "searchsploit", "anon-check"
-	Description string   // Prompt display text
-	Keywords    []string // AND-match against command history
-	Done        bool     // additive-only: once true, never goes back
+	ID          string   `json:"id"`          // e.g. "searchsploit", "anon-check"
+	Description string   `json:"description"` // Prompt display text
+	Keywords    []string `json:"keywords"`    // AND-match against command history
+	Done        bool     `json:"done"`        // additive-only: once true, never goes back
 }
 
 // ServiceChecklist holds the recon checklist for a specific service.
 type ServiceChecklist struct {
-	Items []ChecklistItem
+	Items []ChecklistItem `json:"items"`
 }
 
 // serviceAliases maps nmap service names to canonical names.
