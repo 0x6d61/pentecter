@@ -82,6 +82,10 @@ func (a *App) handleAgentEvent(e agent.Event) {
 		t.AddBlock(agent.NewSystemBlock("Type a message to give the agent new direction."))
 		displayChanged = true
 
+	case agent.EventReconComplete:
+		t.AddBlock(agent.NewSystemBlock("✓ " + e.Message))
+		displayChanged = true
+
 	case agent.EventTurnStart:
 		// no-op
 

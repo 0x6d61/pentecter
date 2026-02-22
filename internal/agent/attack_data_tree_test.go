@@ -947,8 +947,9 @@ func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
 	if strings.Contains(output, "recon complete") {
 		t.Errorf("should NOT show 'recon complete' when child has pending tasks\noutput:\n%s", output)
 	}
-	if !strings.Contains(output, "recon pending") {
-		t.Errorf("should show 'recon pending' when child has pending tasks\noutput:\n%s", output)
+	// New format: "recon: N/M tasks" instead of "recon pending"
+	if !strings.Contains(output, "tasks") {
+		t.Errorf("should show task count when child has pending tasks\noutput:\n%s", output)
 	}
 }
 
@@ -1174,5 +1175,199 @@ func TestRenderIntel_AttackSurface_ChecklistProgress(t *testing.T) {
 	expectedProgress := fmt.Sprintf("recon: 1/%d", totalItems)
 	if !strings.Contains(output, expectedProgress) {
 		t.Errorf("ATTACK SURFACE should show checklist progress %q\noutput:\n%s", expectedProgress, output)
+	}
+}
+
+func TestComputeReconProgress_Basic(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+
+	// Complete some tasks
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/api", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/api", TaskParamFuzz)
+
+	prog := tree.ComputeReconProgress()
+
+	// EndpointEnum: port root(complete) + /api(complete) + /login(pending) = 2/3
+	if prog.EndpointEnum.Done != 2 || prog.EndpointEnum.Total != 3 {
+		t.Errorf("EndpointEnum = %d/%d, want 2/3", prog.EndpointEnum.Done, prog.EndpointEnum.Total)
+	}
+	// ParamFuzz: /api(complete) + /login(pending) = 1/2 (port root has no ParamFuzz)
+	if prog.ParamFuzz.Done != 1 || prog.ParamFuzz.Total != 2 {
+		t.Errorf("ParamFuzz = %d/%d, want 1/2", prog.ParamFuzz.Done, prog.ParamFuzz.Total)
+	}
+	// VhostDiscov: port root has 1 pending = 0/1
+	if prog.VhostDiscov.Done != 0 || prog.VhostDiscov.Total != 1 {
+		t.Errorf("VhostDiscov = %d/%d, want 0/1", prog.VhostDiscov.Done, prog.VhostDiscov.Total)
+	}
+}
+
+func TestComputeReconProgress_Empty(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	prog := tree.ComputeReconProgress()
+
+	if prog.EndpointEnum.Total != 0 {
+		t.Errorf("empty tree EndpointEnum.Total = %d, want 0", prog.EndpointEnum.Total)
+	}
+	if len(prog.PendingPaths) != 0 {
+		t.Errorf("empty tree PendingPaths = %v, want empty", prog.PendingPaths)
+	}
+}
+
+func TestComputeReconProgress_PendingPaths(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/admin")
+
+	// Complete /api endpoint enum
+	tree.CompleteTask("10.10.11.100", 80, "/api", TaskEndpointEnum)
+
+	prog := tree.ComputeReconProgress()
+
+	// Pending paths: / (port root), /login, /admin (but NOT /api since it's complete)
+	// Port root path "" should show as "/"
+	if len(prog.PendingPaths) != 3 {
+		t.Errorf("PendingPaths = %v, want 3 items", prog.PendingPaths)
+	}
+}
+
+func TestComputeReconProgress_MaxPendingPaths(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	// Add 15 endpoints — all pending
+	for i := 0; i < 15; i++ {
+		path := fmt.Sprintf("/path%d", i)
+		tree.AddEndpoint("10.10.11.100", 80, "/", path)
+	}
+
+	prog := tree.ComputeReconProgress()
+
+	// Should cap at 10
+	if len(prog.PendingPaths) > 10 {
+		t.Errorf("PendingPaths should be capped at 10, got %d", len(prog.PendingPaths))
+	}
+}
+
+func TestIsReconComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+
+	// Empty tree: no tasks = not complete (need at least 1 task)
+	if tree.IsReconComplete() {
+		t.Error("empty tree should not be complete")
+	}
+
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	// Set checklist for non-HTTP
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+
+	// Not complete yet
+	if tree.IsReconComplete() {
+		t.Error("should not be complete with pending tasks")
+	}
+
+	// Complete all HTTP tasks
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "", TaskVhostDiscov)
+
+	// Still not complete — checklist not done
+	if tree.IsReconComplete() {
+		t.Error("should not be complete with checklist incomplete")
+	}
+
+	// Complete all checklist items
+	sshNode := tree.Ports[1]
+	for i := range sshNode.Checklist.Items {
+		sshNode.Checklist.Items[i].Done = true
+	}
+
+	// Now complete
+	if !tree.IsReconComplete() {
+		t.Error("should be complete when all HTTP tasks and checklists are done")
+	}
+}
+
+func TestIsReconComplete_ChecklistIncomplete(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
+
+	// Checklist incomplete → not complete
+	if tree.IsReconComplete() {
+		t.Error("should not be complete with incomplete checklist")
+	}
+}
+
+func TestRenderIntel_ReconProgress(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	// Complete port-level endpoint enum
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+
+	output := tree.RenderIntel()
+
+	checks := []string{
+		"RECON PROGRESS",
+		"endpoint_enum:",
+		"param_fuzz:",
+		"vhost_discovery:",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderIntel missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderIntel_ReconProgressComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+
+	// Complete all port-level tasks
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "", TaskVhostDiscov)
+
+	output := tree.RenderIntel()
+
+	if !strings.Contains(output, "COMPLETE") {
+		t.Errorf("should show COMPLETE when all HTTP tasks are done\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_AttackSurface_HTTPTaskCount(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	// Complete 2 of 5 tasks
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/api", TaskEndpointEnum)
+
+	output := tree.RenderIntel()
+
+	// Should show task count like "recon: 2/5 tasks" instead of generic "recon pending"
+	if !strings.Contains(output, "2/5") {
+		t.Errorf("ATTACK SURFACE should show task count\noutput:\n%s", output)
+	}
+}
+
+func TestRenderIntel_NoReconProgressForNonHTTPOnly(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree.AddPort(22, "ssh", "OpenSSH 8.2")
+
+	output := tree.RenderIntel()
+
+	// No HTTP ports = no RECON PROGRESS section
+	if strings.Contains(output, "RECON PROGRESS") {
+		t.Errorf("should NOT show RECON PROGRESS when no HTTP ports\noutput:\n%s", output)
 	}
 }
