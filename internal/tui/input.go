@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 )
@@ -57,7 +56,6 @@ func (a *App) handleConfirmQuitInput(line string) bool {
 		return true
 	default:
 		a.inputMode = ModeNormal
-		a.refreshPrompt()
 		return false
 	}
 }
@@ -67,14 +65,12 @@ func (a *App) handleProposalInput(line string) {
 	t := a.activeTarget()
 	if t == nil {
 		a.inputMode = ModeNormal
-		a.refreshPrompt()
 		return
 	}
 
 	prop := t.GetProposal()
 	if prop == nil {
 		a.inputMode = ModeNormal
-		a.refreshPrompt()
 		return
 	}
 
@@ -85,8 +81,8 @@ func (a *App) handleProposalInput(line string) {
 		t.AddBlock(block)
 		t.SetStatusSafe(agent.StatusRunning)
 		t.ClearProposal()
+		a.invalidateOutputCacheLocked()
 		a.mu.Unlock()
-		_, _ = fmt.Fprint(a.writer(), renderUserInputBlock(block, a.width))
 
 		if ch, ok := a.agentApproveMap[t.ID]; ok {
 			select {
@@ -101,8 +97,8 @@ func (a *App) handleProposalInput(line string) {
 		t.AddBlock(block)
 		t.SetStatusSafe(agent.StatusIdle)
 		t.ClearProposal()
+		a.invalidateOutputCacheLocked()
 		a.mu.Unlock()
-		_, _ = fmt.Fprint(a.writer(), renderUserInputBlock(block, a.width))
 
 		if ch, ok := a.agentApproveMap[t.ID]; ok {
 			select {
@@ -113,17 +109,14 @@ func (a *App) handleProposalInput(line string) {
 
 	case "e", "edit":
 		cmd := prop.Tool + " " + strings.Join(prop.Args, " ")
-		_, _ = fmt.Fprintln(a.writer(), lipgloss.NewStyle().Foreground(colorMuted).Render(
-			"Edit command (copy and modify): "+cmd))
+		a.logSystem("Edit command (copy and modify): " + cmd)
 
 	default:
-		_, _ = fmt.Fprintln(a.writer(), lipgloss.NewStyle().Foreground(colorMuted).Render(
-			"Type y (approve), n (reject), or e (edit)"))
+		a.logSystem("Type y (approve), n (reject), or e (edit)")
 		return // stay in proposal mode
 	}
 
 	a.inputMode = ModeNormal
-	a.refreshPrompt()
 }
 
 // handleSelectInput processes input during numbered selection.
@@ -134,14 +127,12 @@ func (a *App) handleSelectInput(line string) {
 		a.inputMode = ModeNormal
 		a.selectOpts = nil
 		a.selectCb = nil
-		a.refreshPrompt()
 		return
 	}
 
-	var idx int
-	if _, err := fmt.Sscanf(line, "%d", &idx); err != nil || idx < 1 || idx > len(a.selectOpts) {
-		_, _ = fmt.Fprintln(a.writer(), lipgloss.NewStyle().Foreground(colorDanger).Render(
-			fmt.Sprintf("Enter a number 1-%d, or 'q' to cancel", len(a.selectOpts))))
+	idx, err := strconv.Atoi(line)
+	if err != nil || idx < 1 || idx > len(a.selectOpts) {
+		a.logSystem(fmt.Sprintf("Enter a number 1-%d, or 'q' to cancel", len(a.selectOpts)))
 		return
 	}
 
@@ -152,7 +143,6 @@ func (a *App) handleSelectInput(line string) {
 	a.inputMode = ModeNormal
 	a.selectOpts = nil
 	a.selectCb = nil
-	a.refreshPrompt()
 
 	if cb != nil {
 		cb(a, value)
@@ -187,8 +177,8 @@ func (a *App) handleNormalInput(line string) {
 				block := agent.NewUserInputBlock(fullText)
 				a.mu.Lock()
 				t.AddBlock(block)
+				a.invalidateOutputCacheLocked()
 				a.mu.Unlock()
-				_, _ = fmt.Fprint(a.writer(), renderUserInputBlock(block, a.width))
 			}
 			if msg != "" {
 				if t := a.activeTarget(); t != nil {
@@ -209,8 +199,8 @@ func (a *App) handleNormalInput(line string) {
 		block := agent.NewUserInputBlock(fullText)
 		a.mu.Lock()
 		t.AddBlock(block)
+		a.invalidateOutputCacheLocked()
 		a.mu.Unlock()
-		_, _ = fmt.Fprint(a.writer(), renderUserInputBlock(block, a.width))
 	}
 
 	// Send to active target's agent
@@ -289,41 +279,25 @@ func (a *App) addTarget(host string) {
 	a.selected = len(a.targets) - 1
 	a.mu.Unlock()
 
-	_, _ = fmt.Fprintln(a.writer(), lipgloss.NewStyle().Foreground(colorSuccess).Render(
-		fmt.Sprintf("Target added: %s", host)))
-	a.refreshPrompt()
+	a.logSystem(fmt.Sprintf("Target added: %s", host))
 }
 
 // showSelect activates the numbered selection UI with a boxed display.
 func (a *App) showSelect(title string, options []SelectOption, callback func(a *App, value string)) {
+	a.mu.Lock()
 	a.inputMode = ModeSelect
 	a.selectTitle = title
 	a.selectOpts = options
 	a.selectIdx = 0
 	a.selectCb = callback
+	a.invalidateOutputCacheLocked()
+	a.mu.Unlock()
 
-	// Build box content
-	titleStyled := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render(title)
-
-	var body strings.Builder
-	for i, opt := range options {
-		fmt.Fprintf(&body, "  %d. %s\n", i+1, opt.Label)
+	if a.testWriter != nil {
+		_, _ = fmt.Fprintln(a.testWriter, title)
+		for i, opt := range options {
+			_, _ = fmt.Fprintf(a.testWriter, "  %d. %s\n", i+1, opt.Label)
+		}
+		_, _ = fmt.Fprintf(a.testWriter, "  [1-%d/q]\n", len(options))
 	}
-
-	controls := lipgloss.NewStyle().Foreground(colorMuted).Render(
-		fmt.Sprintf("  [1-%d/q]", len(options)))
-
-	boxWidth := a.width - 4
-	if boxWidth < 10 {
-		boxWidth = 10
-	}
-
-	box := selectBoxStyle.Width(boxWidth).Render(
-		titleStyled + "\n\n" + body.String() + "\n" + controls,
-	)
-
-	w := a.writer()
-	_, _ = fmt.Fprintln(w, box)
-
-	a.refreshPrompt()
 }

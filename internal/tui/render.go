@@ -12,6 +12,12 @@ import (
 	"github.com/0x6d61/pentecter/internal/agent"
 )
 
+// Command output fold thresholds (shared by render and live output)
+const (
+	cmdFoldThreshold = 5
+	previewLines     = 3
+)
+
 // glamourCacheMu protects the cached Glamour renderer.
 // Renderer is recreated only when terminal width changes.
 var (
@@ -51,8 +57,6 @@ func renderCommandBlock(b *agent.DisplayBlock, width int, expanded bool) string 
 	// 出力行のプレフィックス
 	const outputPrefix = "  ⎿  "
 	const contPrefix = "     "
-	const cmdFoldThreshold = 5
-	const previewLines = 3
 
 	lines := b.Output
 	folded := false

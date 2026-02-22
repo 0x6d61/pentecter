@@ -3,14 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
-	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 )
 
-// consumeEvents runs in a goroutine and processes all agent events.
+// consumeEvents forwards all agent events into the UI event queue.
 func (a *App) consumeEvents(ctx context.Context) {
 	for {
 		select {
@@ -20,217 +17,154 @@ func (a *App) consumeEvents(ctx context.Context) {
 			if !ok {
 				return
 			}
-			a.handleAgentEvent(e)
+			a.enqueueUIEvent(uiEventMsg{kind: uiEventAgent, agent: e})
 		}
 	}
 }
 
-// handleAgentEvent processes a single agent event.
-// It updates blocks under lock, then prints output without holding the lock.
+// handleAgentEvent mutates target/app state only.
+// Rendering happens in the single tcell loop.
 func (a *App) handleAgentEvent(e agent.Event) {
-	t := a.targetByID(e.TargetID)
+	a.mu.Lock()
+	t := a.targetByIDLocked(e.TargetID)
 	if t == nil {
-		t = a.activeTarget()
-	}
-	if t == nil {
+		a.mu.Unlock()
 		return
 	}
-
-	active := a.activeTarget()
-	isActive := active != nil && t.ID == active.ID
-	w := a.writer()
-	width := a.width
+	active := a.activeTargetLocked()
+	isActive := active != nil && active.ID == t.ID
+	spinnerStateChanged := false
+	displayChanged := false
 
 	switch e.Type {
 	case agent.EventLog:
 		switch e.Source {
 		case agent.SourceAI:
-			block := agent.NewAIMessageBlock(e.Message)
-			a.mu.Lock()
-			t.AddBlock(block)
-			a.mu.Unlock()
-			if isActive {
-				_, _ = fmt.Fprint(w, renderAIMessageBlock(block, width))
-			}
-
+			t.AddBlock(agent.NewAIMessageBlock(e.Message))
+			displayChanged = true
 		case agent.SourceTool:
-			a.mu.Lock()
 			last := t.LastBlock()
 			if last != nil && last.Type == agent.BlockCommand && !last.Completed {
 				last.Output = append(last.Output, e.Message)
-				a.mu.Unlock()
-				if isActive {
-					_, _ = fmt.Fprintln(w, outputStyle.Render("     "+e.Message))
-				}
 			} else {
-				block := agent.NewCommandBlock(e.Message)
-				t.AddBlock(block)
-				a.mu.Unlock()
-				if isActive {
-					_, _ = fmt.Fprint(w, renderCommandBlock(block, width, false))
-				}
+				t.AddBlock(agent.NewCommandBlock(e.Message))
 			}
-
+			displayChanged = true
 		case agent.SourceSystem:
-			block := agent.NewSystemBlock(e.Message)
-			a.mu.Lock()
-			t.AddBlock(block)
-			a.mu.Unlock()
-			if isActive {
-				_, _ = fmt.Fprint(w, renderSystemBlock(block))
-			}
-
+			t.AddBlock(agent.NewSystemBlock(e.Message))
+			displayChanged = true
 		case agent.SourceUser:
-			block := agent.NewUserInputBlock(e.Message)
-			a.mu.Lock()
-			t.AddBlock(block)
-			a.mu.Unlock()
-			if isActive {
-				_, _ = fmt.Fprint(w, renderUserInputBlock(block, width))
-			}
+			t.AddBlock(agent.NewUserInputBlock(e.Message))
+			displayChanged = true
 		}
 
 	case agent.EventProposal:
 		if e.Proposal != nil {
 			t.SetProposal(e.Proposal)
+			displayChanged = true
 			if isActive {
-				a.printProposal(e.Proposal)
 				a.inputMode = ModeProposal
-				a.refreshPrompt()
 			}
 		}
 
 	case agent.EventComplete:
-		block := agent.NewSystemBlock("✅ " + e.Message)
-		a.mu.Lock()
-		t.AddBlock(block)
-		a.mu.Unlock()
-		if isActive {
-			_, _ = fmt.Fprint(w, renderSystemBlock(block))
-		}
+		t.AddBlock(agent.NewSystemBlock("✓ " + e.Message))
+		displayChanged = true
 
 	case agent.EventError:
-		block := agent.NewSystemBlock("❌ " + e.Message)
-		a.mu.Lock()
-		t.AddBlock(block)
-		a.mu.Unlock()
-		if isActive {
-			_, _ = fmt.Fprint(w, renderSystemBlock(block))
-		}
+		t.AddBlock(agent.NewSystemBlock("✗ " + e.Message))
+		displayChanged = true
 
 	case agent.EventAddTarget:
-		if e.NewHost != "" && a.team != nil {
-			a.addTarget(e.NewHost)
-		}
+		// handled outside lock below
 
 	case agent.EventStalled:
-		block1 := agent.NewSystemBlock("⚠ " + e.Message)
-		block2 := agent.NewSystemBlock("Type a message to give the agent new direction.")
-		a.mu.Lock()
-		t.AddBlock(block1)
-		t.AddBlock(block2)
-		a.mu.Unlock()
-		if isActive {
-			_, _ = fmt.Fprint(w, renderSystemBlock(block1))
-			_, _ = fmt.Fprint(w, renderSystemBlock(block2))
-		}
+		t.AddBlock(agent.NewSystemBlock("⚠ " + e.Message))
+		t.AddBlock(agent.NewSystemBlock("Type a message to give the agent new direction."))
+		displayChanged = true
 
 	case agent.EventTurnStart:
-		// No display action needed
+		// no-op
 
 	case agent.EventThinkStart:
-		block := agent.NewThinkingBlock()
-		a.mu.Lock()
-		t.AddBlock(block)
-		a.mu.Unlock()
-		if isActive {
-			// Print initial spinner line to output area (will be animated by runSpinner)
-			style := lipgloss.NewStyle().Foreground(colorSecondary)
-			_, _ = fmt.Fprintln(w, style.Render("⠋ Thinking..."))
-		}
+		t.AddBlock(agent.NewThinkingBlock())
 		a.spinnerActive.Store(true)
+		spinnerStateChanged = true
+		displayChanged = true
 
 	case agent.EventThinkDone:
-		a.mu.Lock()
 		last := t.LastBlock()
 		if last != nil && last.Type == agent.BlockThinking && !last.ThinkingDone {
 			last.ThinkingDone = true
 			last.ThinkDuration = e.Duration
-			a.mu.Unlock()
-			if isActive {
-				// Overwrite the spinner line with completion text
-				rendered := strings.TrimSuffix(renderThinkingBlock(last, ""), "\n")
-				a.overwriteOutputLine(rendered)
-			}
-		} else {
-			a.mu.Unlock()
+			displayChanged = true
 		}
-		a.updateSpinnerState()
+		spinnerStateChanged = true
 
 	case agent.EventCmdStart:
-		a.mu.Lock()
 		t.AddBlock(agent.NewCommandBlock(e.Message))
-		a.mu.Unlock()
-		if isActive {
-			cmdStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
-			_, _ = fmt.Fprintln(w, cmdStyle.Render("● "+e.Message))
-		}
+		spinnerStateChanged = true
+		displayChanged = true
 
 	case agent.EventCmdOutput:
-		a.mu.Lock()
 		last := t.LastBlock()
 		if last != nil && last.Type == agent.BlockCommand && !last.Completed {
 			last.Output = append(last.Output, e.OutputLine)
-			outputLen := len(last.Output)
-			a.mu.Unlock()
-			if isActive {
-				prefix := "     "
-				if outputLen == 1 {
-					prefix = "  ⎿  "
-				}
-				_, _ = fmt.Fprintln(w, outputStyle.Render(prefix+e.OutputLine))
-			}
-		} else {
-			a.mu.Unlock()
+			displayChanged = true
 		}
 
 	case agent.EventCmdDone:
-		a.mu.Lock()
 		last := t.LastBlock()
 		if last != nil && last.Type == agent.BlockCommand {
 			last.Completed = true
 			last.ExitCode = e.ExitCode
 			last.Duration = e.Duration
+			displayChanged = true
 		}
-		a.mu.Unlock()
-		a.updateSpinnerState()
+		spinnerStateChanged = true
 
 	case agent.EventSubTaskStart:
-		a.mu.Lock()
 		t.AddBlock(agent.NewSubTaskBlock(e.TaskID, e.Message))
-		a.mu.Unlock()
 		a.spinnerActive.Store(true)
+		spinnerStateChanged = true
+		displayChanged = true
 
 	case agent.EventSubTaskLog:
-		// Internal processing, no display
+		// internal-only
 
 	case agent.EventSubTaskComplete:
-		a.mu.Lock()
 		for i := len(t.Blocks) - 1; i >= 0; i-- {
 			b := t.Blocks[i]
 			if b.Type == agent.BlockSubTask && b.TaskID == e.TaskID && !b.TaskDone {
 				b.TaskDone = true
 				b.TaskDuration = e.Duration
-				a.mu.Unlock()
-				if isActive {
-					_, _ = fmt.Fprint(w, renderSubTaskBlock(b, width, ""))
-				}
-				a.updateSpinnerState()
-				return
+				displayChanged = true
+				break
 			}
 		}
-		a.mu.Unlock()
+		spinnerStateChanged = true
+	}
+
+	addTargetHost := ""
+	if e.Type == agent.EventAddTarget {
+		addTargetHost = e.NewHost
+	}
+	if displayChanged {
+		a.invalidateOutputCacheLocked()
+	}
+
+	a.mu.Unlock()
+
+	if addTargetHost != "" && a.team != nil {
+		a.addTarget(addTargetHost)
+	}
+
+	if spinnerStateChanged {
 		a.updateSpinnerState()
+	}
+
+	if a.testWriter != nil {
+		a.clearAndReprint()
 	}
 }
 
@@ -240,17 +174,12 @@ func (a *App) updateSpinnerState() {
 	hasActive := a.hasActiveBlocksLocked()
 	a.mu.Unlock()
 
-	if hasActive {
-		a.spinnerActive.Store(true)
-	} else {
-		a.spinnerActive.Store(false)
-		a.refreshPrompt()
-	}
+	a.spinnerActive.Store(hasActive)
 }
 
 // hasActiveBlocksLocked checks if there are active blocks. Must be called with a.mu held.
 func (a *App) hasActiveBlocksLocked() bool {
-	t := a.activeTarget()
+	t := a.activeTargetLocked()
 	if t == nil {
 		return false
 	}
@@ -272,4 +201,8 @@ func (a *App) hasActiveBlocksLocked() bool {
 		}
 	}
 	return false
+}
+
+func (a *App) debugEventString(e agent.Event) string {
+	return fmt.Sprintf("event=%s target=%d", e.Type, e.TargetID)
 }

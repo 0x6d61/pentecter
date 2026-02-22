@@ -162,6 +162,7 @@ func (r *CommandRunner) execute(
 		}
 
 		cmd.Stdin = nil // stdin 奪取防止: 子プロセスが親の stdin を読めないようにする
+		applyBackgroundPriority(cmd, binary)
 		stdout, _ := cmd.StdoutPipe()
 		stderr, _ := cmd.StderrPipe()
 
@@ -184,6 +185,7 @@ func (r *CommandRunner) execute(
 		if err := cmd.Start(); err != nil {
 			runErr = err
 		} else {
+			adjustStartedProcessPriority(cmd, binary)
 			done := make(chan struct{}, 2)
 			go func() { collect(bufio.NewScanner(stdout), false); done <- struct{}{} }()
 			go func() { collect(bufio.NewScanner(stderr), true); done <- struct{}{} }()

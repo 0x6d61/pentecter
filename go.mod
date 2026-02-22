@@ -5,9 +5,8 @@ go 1.25.0
 require (
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
-	github.com/ergochat/readline v0.1.3
+	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/joho/godotenv v1.5.1
-	golang.org/x/term v0.31.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -26,6 +25,7 @@ require (
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
+	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -39,5 +39,6 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/term v0.31.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 )

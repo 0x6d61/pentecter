@@ -3,19 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 )
 
-// runSpinner runs the spinner animation goroutine.
-// Animates the spinner text in the output area (above the prompt divider)
-// by overwriting the last output line using ANSI escape sequences.
-// The input prompt always remains just "> ".
+// runSpinner posts spinner tick events to the single UI loop.
 func (a *App) runSpinner(ctx context.Context) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -25,49 +19,21 @@ func (a *App) runSpinner(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if a.rl == nil || a.testWriter != nil {
+			if !a.spinnerActive.Load() {
 				continue
 			}
-
-			if !a.spinnerActive.Load() || a.inputMode != ModeNormal {
-				continue
-			}
-
-			// Only animate for Thinking blocks (no concurrent output conflicts).
-			// Commands and SubTasks have their own output flowing.
-			a.mu.Lock()
-			thinking := a.isThinkingLocked()
-			a.mu.Unlock()
-
-			if thinking {
-				frame := a.nextSpinnerFrame()
-				style := lipgloss.NewStyle().Foreground(colorSecondary)
-				a.overwriteOutputLine(style.Render(frame + " Thinking..."))
-			}
+			a.enqueueUIEvent(uiEventMsg{kind: uiEventSpinnerTick})
 		}
 	}
 }
 
-// overwriteOutputLine overwrites the last output line (above the prompt)
-// using DEC cursor save/restore. Dynamically calculates prompt height
-// to determine how many lines to move up from the cursor.
-func (a *App) overwriteOutputLine(styledText string) {
-	if a.testWriter != nil {
-		return
-	}
-	n := a.promptEchoLines("")
-	if n <= 0 {
-		return
-	}
-	a.outputMu.Lock()
-	_, _ = fmt.Fprintf(os.Stdout, "\0337\033[%dA\r\033[K%s\0338", n, styledText)
-	a.outputMu.Unlock()
-}
+// overwriteOutputLine is a compatibility no-op; full redraw is handled by tcell.
+func (a *App) overwriteOutputLine(string) {}
 
 // isThinkingLocked checks if the most recent active block is a Thinking block.
 // Must be called with a.mu held.
 func (a *App) isThinkingLocked() bool {
-	t := a.activeTarget()
+	t := a.activeTargetLocked()
 	if t == nil {
 		return false
 	}
@@ -76,7 +42,6 @@ func (a *App) isThinkingLocked() bool {
 		if b.Type == agent.BlockThinking && !b.ThinkingDone {
 			return true
 		}
-		// Stop at first incomplete non-thinking block
 		if (b.Type == agent.BlockCommand && !b.Completed) ||
 			(b.Type == agent.BlockSubTask && !b.TaskDone) {
 			return false
@@ -85,133 +50,139 @@ func (a *App) isThinkingLocked() bool {
 	return false
 }
 
-// nextSpinnerFrame returns the next spinner animation frame.
+// nextSpinnerFrame returns the current spinner animation frame.
 func (a *App) nextSpinnerFrame() string {
 	if len(a.spinnerFrames) == 0 {
-		return "⠋"
+		return "."
 	}
-	idx := a.spinnerIdx.Add(1) - 1
+	idx := a.spinnerIdx.Load()
 	return a.spinnerFrames[int(idx)%len(a.spinnerFrames)]
 }
 
-// toggleFold toggles log folding and reprints all blocks.
-func (a *App) toggleFold() {
-	a.logsExpanded = !a.logsExpanded
-	a.clearAndReprint()
-}
-
-// clearAndReprint clears the screen and reprints all blocks for the active target.
-func (a *App) clearAndReprint() {
+// printCmdOutputLine emits textual output only in tests.
+func (a *App) printCmdOutputLine(line string, outputLen int) {
 	if a.testWriter == nil {
-		// Clear screen and move cursor to home
-		_, _ = fmt.Fprint(a.rl.Stdout(), "\033[2J\033[H")
-	} else if a.rl != nil {
-		a.rl.ClearScreen()
-	}
-
-	t := a.activeTarget()
-	if t == nil {
-		a.printWelcome()
 		return
 	}
 
-	w := a.writer()
-	width := a.width
+	a.mu.Lock()
 	expanded := a.logsExpanded
+	a.mu.Unlock()
 
-	frame := ""
-	if a.spinnerActive.Load() {
-		frame = a.spinnerFrames[int(a.spinnerIdx.Load())%len(a.spinnerFrames)]
+	prefix := "     "
+	if outputLen == 1 {
+		prefix = "  ⎿  "
+	}
+
+	if expanded || outputLen <= cmdFoldThreshold {
+		_, _ = fmt.Fprintln(a.testWriter, prefix+line)
+		return
+	}
+
+	remaining := outputLen - previewLines
+	_, _ = fmt.Fprintln(a.testWriter, fmt.Sprintf("     ... +%d lines (ctrl+o)", remaining))
+}
+
+// toggleFold toggles log folding.
+func (a *App) toggleFold() {
+	a.mu.Lock()
+	a.logsExpanded = !a.logsExpanded
+	a.mu.Unlock()
+	if a.testWriter != nil {
+		a.clearAndReprint()
+	}
+}
+
+// clearAndReprint emits current active target text only in tests.
+func (a *App) clearAndReprint() {
+	if a.testWriter == nil {
+		return
 	}
 
 	a.mu.Lock()
-	blocks := make([]*agent.DisplayBlock, len(t.Blocks))
-	copy(blocks, t.Blocks)
+	width := a.width
+	if width <= 0 {
+		width = defaultWidth
+	}
+	lines := a.buildOutputLinesLocked(width)
 	a.mu.Unlock()
 
-	for _, b := range blocks {
-		rendered := renderBlock(b, width, expanded, frame)
-		_, _ = fmt.Fprint(w, rendered)
-	}
-
-	// Print proposal if active
-	if p := t.GetProposal(); p != nil {
-		a.printProposal(p)
+	for _, l := range lines {
+		_, _ = fmt.Fprintln(a.testWriter, l)
 	}
 }
 
-// printProposal prints the proposal box to stdout.
+// printProposal emits proposal text only in tests.
 func (a *App) printProposal(p *agent.Proposal) {
-	w := a.writer()
-
-	proposalTitle := lipgloss.NewStyle().
-		Foreground(colorWarning).
-		Bold(true).
-		Render("⚠  PROPOSAL — Awaiting approval")
-
-	proposalBody := fmt.Sprintf(
-		"%s\n  Tool: %s %s",
-		p.Description,
-		p.Tool,
-		strings.Join(p.Args, " "),
-	)
-
-	proposalControls := lipgloss.NewStyle().
-		Foreground(colorMuted).
-		Render("  [y] Approve  [n] Reject  [e] Edit")
-
-	boxWidth := a.width - 4
-	if boxWidth < 10 {
-		boxWidth = 10
+	if a.testWriter == nil {
+		return
 	}
-
-	box := proposalBoxStyle.Width(boxWidth).Render(
-		proposalTitle + "\n\n  " + proposalBody + "\n\n" + proposalControls,
-	)
-	_, _ = fmt.Fprintln(w, box)
+	a.mu.Lock()
+	lines := a.proposalLinesLocked(p)
+	a.mu.Unlock()
+	for _, l := range lines {
+		_, _ = fmt.Fprintln(a.testWriter, l)
+	}
 }
 
-// printReconTree prints the recon tree in a styled box.
+// printReconTree appends recon tree output as a system block.
 func (a *App) printReconTree(host, treeOutput string) {
-	w := a.writer()
+	title := "RECON TREE - " + host
+	body := strings.Split(treeOutput, "\n")
+	rows := append([]string{title}, body...)
 
-	title := lipgloss.NewStyle().
-		Foreground(colorPrimary).
-		Bold(true).
-		Render("RECON TREE — " + host)
-
-	boxWidth := a.width - 4
-	if boxWidth < 10 {
-		boxWidth = 10
+	maxW := 0
+	for _, row := range rows {
+		if w := runeLen(row); w > maxW {
+			maxW = w
+		}
+	}
+	if maxW < 1 {
+		maxW = 1
 	}
 
-	box := reconBoxStyle.Width(boxWidth).Render(
-		title + "\n\n" + treeOutput,
-	)
-	_, _ = fmt.Fprintln(w, box)
+	var b strings.Builder
+	b.WriteString("╭")
+	b.WriteString(strings.Repeat("─", maxW+2))
+	b.WriteString("╮\n")
+	for i, row := range rows {
+		pad := maxW - runeLen(row)
+		if pad < 0 {
+			pad = 0
+		}
+		b.WriteString("│ ")
+		b.WriteString(row)
+		b.WriteString(strings.Repeat(" ", pad))
+		b.WriteString(" │")
+		if i < len(rows)-1 {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n╰")
+	b.WriteString(strings.Repeat("─", maxW+2))
+	b.WriteString("╯")
+
+	msg := b.String()
+
+	a.mu.Lock()
+	if t := a.activeTargetLocked(); t != nil {
+		t.AddBlock(agent.NewSystemBlock(msg))
+	} else {
+		a.globalLogs = append(a.globalLogs, "RECON TREE - "+host)
+		a.globalLogs = append(a.globalLogs, strings.Split(treeOutput, "\n")...)
+	}
+	a.invalidateOutputCacheLocked()
+	if a.testWriter != nil {
+		_, _ = fmt.Fprintln(a.testWriter, msg)
+	}
+	a.mu.Unlock()
 }
 
-// printStatusLine prints the status line.
+// printStatusLine writes current status into the log stream.
 func (a *App) printStatusLine() {
-	w := a.writer()
-	t := a.activeTarget()
-
-	appName := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("⚡ PENTECTER")
-
-	var parts []string
-	parts = append(parts, appName)
-
-	if t != nil {
-		parts = append(parts, fmt.Sprintf("%s [%s]",
-			lipgloss.NewStyle().Foreground(colorWarning).Render(t.Host),
-			t.GetStatus()))
+	status := a.buildStatusText()
+	if status == "" {
+		status = "No active target/model status."
 	}
-
-	if a.CurrentModel != "" {
-		parts = append(parts, lipgloss.NewStyle().Foreground(colorMuted).Render(
-			a.CurrentProvider+"/"+a.CurrentModel))
-	}
-
-	line := strings.Join(parts, " | ")
-	_, _ = fmt.Fprintln(w, statusBarStyle.Width(a.width).Render(line))
+	a.logSystem(status)
 }

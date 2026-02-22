@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/0x6d61/pentecter/internal/brain"
@@ -9,26 +10,32 @@ import (
 
 // handleCommand processes slash commands. Returns true if the command was handled.
 func (a *App) handleCommand(fullText string) bool {
-	switch {
-	case strings.HasPrefix(fullText, "/approve"):
+	fields := strings.Fields(fullText)
+	if len(fields) == 0 {
+		return false
+	}
+	cmd := fields[0]
+
+	switch cmd {
+	case "/approve":
 		a.handleApproveCommand(fullText)
 		return true
-	case strings.HasPrefix(fullText, "/model"):
+	case "/model":
 		a.handleModelCommand(fullText)
 		return true
-	case fullText == "/targets":
+	case "/targets":
 		a.handleTargetsCommand()
 		return true
-	case fullText == "/recontree":
+	case "/recontree":
 		a.handleReconTreeCommand()
 		return true
-	case fullText == "/skip-recon":
+	case "/skip-recon":
 		a.handleSkipReconCommand()
 		return true
-	case fullText == "/fold":
+	case "/fold":
 		a.toggleFold()
 		return true
-	case fullText == "/status":
+	case "/status":
 		a.printStatusLine()
 		return true
 	default:
@@ -183,17 +190,31 @@ func (a *App) handleTargetsCommand() {
 		"Select target:",
 		options,
 		func(a *App, value string) {
-			var idx int
-			if _, err := fmt.Sscanf(value, "%d", &idx); err != nil {
+			idx, err := strconv.Atoi(value)
+			if err != nil {
 				return
 			}
-			if idx >= 0 && idx < len(a.targets) {
-				a.mu.Lock()
-				a.selected = idx
+			a.mu.Lock()
+			if idx < 0 || idx >= len(a.targets) {
 				a.mu.Unlock()
-				a.clearAndReprint()
-				a.logSystem(fmt.Sprintf("Switched to target: %s", a.targets[idx].Host))
+				return
 			}
+			a.selected = idx
+			host := a.targets[idx].Host
+			a.outputScroll = 0
+			a.outputFollow = true
+			a.outputPrevWrapped = 0
+			a.outputPrevWrapWidth = 0
+			if a.targets[idx].GetProposal() != nil {
+				a.inputMode = ModeProposal
+			} else if a.inputMode == ModeProposal {
+				a.inputMode = ModeNormal
+			}
+			a.mu.Unlock()
+
+			a.clearAndReprint()
+			a.refreshPrompt()
+			a.logSystem(fmt.Sprintf("Switched to target: %s", host))
 		},
 	)
 }

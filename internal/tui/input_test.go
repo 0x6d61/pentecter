@@ -153,6 +153,26 @@ func TestHandleInputLine_Select_InvalidChoice(t *testing.T) {
 	}
 }
 
+func TestHandleInputLine_Select_InvalidTrailingChars(t *testing.T) {
+	a := newTestApp(nil)
+	a.inputMode = ModeSelect
+	a.selectOpts = []SelectOption{
+		{Label: "opt1", Value: "v1"},
+		{Label: "opt2", Value: "v2"},
+	}
+
+	var called string
+	a.selectCb = func(a *App, v string) { called = v }
+
+	a.handleInputLine("1abc")
+	if called != "" {
+		t.Errorf("callback should not be called for invalid numeric input, got %q", called)
+	}
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect to remain active, got %d", a.inputMode)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // handleProposalInput
 // ---------------------------------------------------------------------------
@@ -232,6 +252,16 @@ func TestHandleCommand_Unknown(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_StrictPrefixMatch(t *testing.T) {
+	a := newTestApp(nil)
+	if a.handleCommand("/approve-now") {
+		t.Error("expected /approve-now to be treated as unknown command")
+	}
+	if a.handleCommand("/modelx") {
+		t.Error("expected /modelx to be treated as unknown command")
+	}
+}
+
 func TestHandleCommand_Fold(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	a := newTestApp([]*agent.Target{target})
@@ -254,4 +284,25 @@ func TestHandleCommand_Status(t *testing.T) {
 
 	// Should not panic
 	a.handleCommand("/status")
+}
+
+func TestHandleTargetsCommand_SwitchToProposalTarget(t *testing.T) {
+	t1 := agent.NewTarget(1, "10.0.0.1")
+	t2 := agent.NewTarget(2, "10.0.0.2")
+	t2.SetProposal(&agent.Proposal{
+		Description: "Run scan",
+		Tool:        "nmap",
+		Args:        []string{"-sV"},
+	})
+	a := newTestApp([]*agent.Target{t1, t2})
+
+	a.handleTargetsCommand()
+	a.handleInputLine("2")
+
+	if a.selected != 1 {
+		t.Fatalf("expected selected target index 1, got %d", a.selected)
+	}
+	if a.inputMode != ModeProposal {
+		t.Fatalf("expected ModeProposal after switching to target with proposal, got %d", a.inputMode)
+	}
 }

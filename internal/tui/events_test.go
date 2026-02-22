@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -299,6 +300,50 @@ func TestHandleAgentEvent_NilTarget(t *testing.T) {
 	})
 }
 
+func TestHandleAgentEvent_UnknownTargetID_IsIgnored(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := NewApp([]*agent.Target{target})
+	a.testWriter = &bytes.Buffer{}
+
+	a.handleAgentEvent(agent.Event{
+		TargetID: 999,
+		Type:     agent.EventLog,
+		Source:   agent.SourceSystem,
+		Message:  "should not be attached",
+	})
+
+	if len(target.Blocks) != 0 {
+		t.Fatalf("expected no blocks for unknown target event, got %d", len(target.Blocks))
+	}
+}
+
+func TestHandleAgentEvent_ProposalOnInactiveTarget_DoesNotForceMode(t *testing.T) {
+	target1 := agent.NewTarget(1, "10.0.0.1")
+	target2 := agent.NewTarget(2, "10.0.0.2")
+	var buf bytes.Buffer
+	a := NewApp([]*agent.Target{target1, target2})
+	a.testWriter = &buf
+	a.selected = 0
+	a.inputMode = ModeNormal
+
+	a.handleAgentEvent(agent.Event{
+		TargetID: 2,
+		Type:     agent.EventProposal,
+		Proposal: &agent.Proposal{
+			Description: "Run nmap scan",
+			Tool:        "nmap",
+			Args:        []string{"-sV", "10.0.0.2"},
+		},
+	})
+
+	if target2.GetProposal() == nil {
+		t.Fatal("expected proposal to be stored on inactive target")
+	}
+	if a.inputMode != ModeNormal {
+		t.Fatalf("expected mode to remain normal for inactive target proposal, got %d", a.inputMode)
+	}
+}
+
 func TestHasActiveBlocksLocked_NoBlocks(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	a := NewApp([]*agent.Target{target})
@@ -339,5 +384,94 @@ func TestHasActiveBlocksLocked_CompletedThinking(t *testing.T) {
 
 	if result {
 		t.Error("expected false for completed thinking block")
+	}
+}
+
+func TestHandleAgentEvent_EventCmdOutput_FoldAtThreshold(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	var buf bytes.Buffer
+	a := NewApp([]*agent.Target{target})
+	a.testWriter = &buf
+
+	// Start a command
+	a.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdStart,
+		Message:  "long-running-cmd",
+	})
+
+	// Send 5 output lines (within threshold)
+	for i := 1; i <= 5; i++ {
+		a.handleAgentEvent(agent.Event{
+			TargetID:   1,
+			Type:       agent.EventCmdOutput,
+			OutputLine: fmt.Sprintf("output line %d", i),
+		})
+	}
+
+	output := buf.String()
+	// Lines 1-5 should all be visible
+	for i := 1; i <= 5; i++ {
+		if !strings.Contains(output, fmt.Sprintf("output line %d", i)) {
+			t.Errorf("expected 'output line %d' in output within threshold", i)
+		}
+	}
+	if strings.Contains(output, "ctrl+o") {
+		t.Error("should not contain fold indicator within threshold")
+	}
+
+	buf.Reset()
+
+	// 6th line should trigger fold indicator
+	a.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "output line 6",
+	})
+
+	output = buf.String()
+	if !strings.Contains(output, "ctrl+o") {
+		t.Error("expected fold indicator at 6th output line")
+	}
+	if !strings.Contains(output, "+3") {
+		t.Error("expected '+3' in fold indicator (6 - 3 = 3)")
+	}
+	if strings.Contains(output, "output line 6") {
+		t.Error("should not show line content past threshold")
+	}
+}
+
+func TestHandleAgentEvent_EventCmdOutput_NoFoldWhenExpanded(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	var buf bytes.Buffer
+	a := NewApp([]*agent.Target{target})
+	a.testWriter = &buf
+	a.logsExpanded = true
+
+	// Start a command
+	a.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdStart,
+		Message:  "cmd",
+	})
+
+	// Send 7 output lines
+	for i := 1; i <= 7; i++ {
+		a.handleAgentEvent(agent.Event{
+			TargetID:   1,
+			Type:       agent.EventCmdOutput,
+			OutputLine: fmt.Sprintf("line %d", i),
+		})
+	}
+
+	output := buf.String()
+	// All lines should be visible when expanded
+	for i := 1; i <= 7; i++ {
+		if !strings.Contains(output, fmt.Sprintf("line %d", i)) {
+			t.Errorf("expected 'line %d' in expanded output", i)
+		}
+	}
+	if strings.Contains(output, "ctrl+o") {
+		t.Error("should not contain fold indicator when expanded")
 	}
 }

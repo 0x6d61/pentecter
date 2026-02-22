@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -144,6 +145,17 @@ func TestBuildStatusText_WithTarget(t *testing.T) {
 	}
 	if !strings.Contains(status, "anthropic/claude-sonnet-4-6") {
 		t.Error("status should contain model info")
+	}
+}
+
+func TestBuildStatusText_WithScroll(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.5")
+	a := NewApp([]*agent.Target{target})
+	a.outputScroll = 12
+
+	status := a.buildStatusText()
+	if !strings.Contains(status, "scroll:12") {
+		t.Fatalf("status should contain scroll indicator, got %q", status)
 	}
 }
 
@@ -362,8 +374,22 @@ func TestBuildPrompt_MultilineMode(t *testing.T) {
 	a.multilineMode = true
 
 	prompt := a.buildPrompt()
-	if prompt != "... " {
-		t.Errorf("expected '... ' prompt in multiline mode, got %q", prompt)
+	if prompt != "" {
+		t.Errorf("expected empty prompt in multiline mode, got %q", prompt)
+	}
+}
+
+func TestBuildPrompt_MultilineModeNoEllipsis(t *testing.T) {
+	a := NewApp(nil)
+	a.width = 80
+	a.multilineMode = true
+
+	prompt := a.buildPrompt()
+	if prompt != "" {
+		t.Errorf("expected empty prompt in multiline mode, got %q", prompt)
+	}
+	if strings.Contains(prompt, "...") {
+		t.Error("multiline prompt should not contain '...'")
 	}
 }
 
@@ -372,9 +398,9 @@ func TestPromptEchoLines_MultilineMode(t *testing.T) {
 	a.width = 80
 	a.multilineMode = true
 
-	// "... " is a single line, no \n prefix → promptEchoLines should return 1
+	// Empty prompt + text → promptEchoLines should return 1
 	n := a.promptEchoLines("hello")
-	// "... hello" = 9 chars → fits in 80 cols → 1 line
+	// "hello" = 5 chars → fits in 80 cols → 1 line
 	if n != 1 {
 		t.Errorf("expected 1 line for multiline prompt, got %d", n)
 	}
@@ -516,5 +542,130 @@ func TestMultiline_EmptyLine(t *testing.T) {
 	expected := "first\n\nthird\nfourth"
 	if fullText != expected {
 		t.Errorf("expected %q, got %q", expected, fullText)
+	}
+}
+
+// --- Bug 1: lastLineBuf tests ---
+
+func TestBug1_LastLineBufClearedAfterCtrlN(t *testing.T) {
+	a := newTestApp(nil)
+	a.lastLineBuf = "aaaa"
+
+	// Simulate what Ctrl+N handler does
+	saved := a.lastLineBuf
+	a.lastLineBuf = "" // Bug 1 fix
+	a.multilineBuffer = append(a.multilineBuffer, saved)
+	a.multilineMode = true
+
+	if a.lastLineBuf != "" {
+		t.Errorf("expected lastLineBuf to be empty after Ctrl+N, got %q", a.lastLineBuf)
+	}
+	if a.multilineBuffer[0] != "aaaa" {
+		t.Errorf("expected 'aaaa' in multilineBuffer, got %q", a.multilineBuffer[0])
+	}
+}
+
+func TestBug1_LastLineBufUpdatedAfterPop(t *testing.T) {
+	a := newTestApp(nil)
+	a.multilineBuffer = []string{"aaaa", "bbbb"}
+	a.multilineMode = true
+	a.lastLineBuf = "cccc"
+
+	// Simulate backspace pop
+	popped := a.multilineBuffer[len(a.multilineBuffer)-1]
+	a.multilineBuffer = a.multilineBuffer[:len(a.multilineBuffer)-1]
+	a.lastLineBuf = popped // Bug 1 fix
+
+	if a.lastLineBuf != "bbbb" {
+		t.Errorf("expected lastLineBuf to be 'bbbb' after pop, got %q", a.lastLineBuf)
+	}
+}
+
+// --- printCmdOutputLine tests ---
+
+func TestPrintCmdOutputLine_WithinThreshold(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewApp(nil)
+	a.testWriter = &buf
+	a.width = 80
+
+	// Print 5 lines (at threshold)
+	for i := 1; i <= 5; i++ {
+		a.printCmdOutputLine(fmt.Sprintf("line %d", i), i)
+	}
+
+	output := buf.String()
+	// All lines should be present
+	for i := 1; i <= 5; i++ {
+		if !strings.Contains(output, fmt.Sprintf("line %d", i)) {
+			t.Errorf("expected 'line %d' in output", i)
+		}
+	}
+	// No fold indicator
+	if strings.Contains(output, "ctrl+o") {
+		t.Error("should not contain fold indicator within threshold")
+	}
+}
+
+func TestPrintCmdOutputLine_PastThreshold(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewApp(nil)
+	a.testWriter = &buf
+	a.width = 80
+
+	// Print first 5 lines normally
+	for i := 1; i <= 5; i++ {
+		a.printCmdOutputLine(fmt.Sprintf("line %d", i), i)
+	}
+	buf.Reset()
+
+	// 6th line should produce fold indicator instead of line content
+	a.printCmdOutputLine("line 6", 6)
+
+	output := buf.String()
+	if !strings.Contains(output, "ctrl+o") {
+		t.Error("expected fold indicator at 6th line")
+	}
+	// remaining = 6 - 3 = 3
+	if !strings.Contains(output, "+3") {
+		t.Error("expected '+3' in fold indicator")
+	}
+	// Should NOT show the actual line content
+	if strings.Contains(output, "line 6") {
+		t.Error("should not show line content past threshold")
+	}
+}
+
+func TestPrintCmdOutputLine_Expanded(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewApp(nil)
+	a.testWriter = &buf
+	a.width = 80
+	a.logsExpanded = true
+
+	// Even past threshold, should show content when expanded
+	a.printCmdOutputLine("line 10", 10)
+
+	output := buf.String()
+	if !strings.Contains(output, "line 10") {
+		t.Error("expected line content when expanded")
+	}
+	if strings.Contains(output, "ctrl+o") {
+		t.Error("should not show fold indicator when expanded")
+	}
+}
+
+func TestPrintCmdOutputLine_FirstLinePrefix(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewApp(nil)
+	a.testWriter = &buf
+	a.width = 80
+
+	a.printCmdOutputLine("first output", 1)
+
+	output := buf.String()
+	// First line should have ⎿ prefix
+	if !strings.Contains(output, "⎿") {
+		t.Error("expected ⎿ prefix on first output line")
 	}
 }
