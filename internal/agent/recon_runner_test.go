@@ -8,7 +8,7 @@ import (
 )
 
 func TestReconRunner_FindHTTPPorts(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH")
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(443, "https", "nginx")
@@ -67,7 +67,7 @@ func TestReconRunner_BuildWebReconPrompt(t *testing.T) {
 }
 
 func TestReconRunner_SpawnWebReconForPort_NoTaskMgr(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	events := make(chan Event, 100)
 
@@ -98,7 +98,7 @@ func TestReconRunner_SpawnWebReconForPort_NoTaskMgr(t *testing.T) {
 }
 
 func TestReconRunner_SpawnWebReconForPort_MaxParallel(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(8080, "http", "Jetty")
 	events := make(chan Event, 100)
@@ -250,7 +250,7 @@ func TestBuildWebReconPrompt_Phase2Instructions(t *testing.T) {
 
 func TestReconRunner_SpawnWebReconForPort_StartsReconTasks(t *testing.T) {
 	// SpawnWebReconForPort が AttackDataTree の Pending タスクを InProgress にマークすることを確認
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	events := make(chan Event, 100)
 

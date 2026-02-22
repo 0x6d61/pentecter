@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"sync"
 )
@@ -161,22 +162,37 @@ type AttackDataTree struct {
 	mu          sync.RWMutex
 	Host        string
 	MaxParallel int
+	MaxDepth    int          // 0 = unlimited (constructor defaults to 3)
 	active      int
 	locked      bool         // RECON フェーズがロック中か（true = pending タスク完了まで遷移不可）
 	Ports       []*AttackDataNode // ポートレベルノード
 	Vhosts      []*AttackDataNode // vhost ルートノード
 }
 
-// NewAttackDataTree は新しい AttackDataTree を作成する。maxParallel が 0 ならデフォルト 2。
-func NewAttackDataTree(host string, maxParallel int) *AttackDataTree {
+// NewAttackDataTree は新しい AttackDataTree を作成する。maxParallel が 0 ならデフォルト 2、maxDepth が 0 ならデフォルト 3。
+func NewAttackDataTree(host string, maxParallel, maxDepth int) *AttackDataTree {
 	if maxParallel <= 0 {
 		maxParallel = 2
+	}
+	if maxDepth <= 0 {
+		maxDepth = 3
 	}
 	return &AttackDataTree{
 		Host:        host,
 		MaxParallel: maxParallel,
+		MaxDepth:    maxDepth,
 		locked:      true,
 	}
+}
+
+// pathDepth はパスの深度を返す。
+// "/" → 0, "/api" → 1, "/api/v1" → 2, "/api/v1/users" → 3
+func pathDepth(p string) int {
+	trimmed := strings.Trim(p, "/")
+	if trimmed == "" {
+		return 0
+	}
+	return strings.Count(trimmed, "/") + 1
 }
 
 // AddPort は nmap で発見したポートをツリーに追加する。
@@ -217,7 +233,9 @@ func (t *AttackDataTree) AddPort(port int, service, banner string) {
 }
 
 // AddEndpoint は ffuf で発見した endpoint を親ノードの子として追加する。
-// EndpointEnum + ParamFuzz + Profiling を pending にする。
+// ファイル拡張子を持つパスは EndpointEnum を StatusNone にする（ディレクトリ列挙不要）。
+// MaxDepth を超えるパスも EndpointEnum を StatusNone にする。
+// ParamFuzz と Profiling は常に Pending（SubAgent がプロンプトレベルで判断）。
 func (t *AttackDataTree) AddEndpoint(host string, port int, parentPath, newPath string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -225,11 +243,25 @@ func (t *AttackDataTree) AddEndpoint(host string, port int, parentPath, newPath 
 	if parent == nil {
 		return
 	}
+
+	// Determine EndpointEnum status
+	endpointEnum := StatusPending
+
+	// File extension check: files with extensions don't need directory enumeration
+	if path.Ext(newPath) != "" {
+		endpointEnum = StatusNone
+	}
+
+	// Depth check: if beyond MaxDepth, skip directory enumeration
+	if t.MaxDepth > 0 && pathDepth(newPath) > t.MaxDepth {
+		endpointEnum = StatusNone
+	}
+
 	child := &AttackDataNode{
 		Host:         host,
 		Port:         port,
 		Path:         newPath,
-		EndpointEnum: StatusPending,
+		EndpointEnum: endpointEnum,
 		ParamFuzz:    StatusPending,
 		Profiling:    StatusPending,
 	}
@@ -1062,6 +1094,7 @@ func collectAllChildren(nodes *[]*AttackDataNode, node *AttackDataNode) {
 type AttackDataSnapshot struct {
 	Host        string              `json:"host"`
 	MaxParallel int                 `json:"max_parallel"`
+	MaxDepth    int                 `json:"max_depth"`
 	Locked      bool                `json:"locked"`
 	Ports       []AttackDataNodeDTO `json:"ports"`
 	Vhosts      []AttackDataNodeDTO `json:"vhosts"`
@@ -1090,6 +1123,7 @@ func (t *AttackDataTree) Snapshot() AttackDataSnapshot {
 	snap := AttackDataSnapshot{
 		Host:        t.Host,
 		MaxParallel: t.MaxParallel,
+		MaxDepth:    t.MaxDepth,
 		Locked:      t.locked,
 	}
 	for _, node := range t.Ports {
@@ -1108,11 +1142,15 @@ func RestoreAttackDataTree(snap AttackDataSnapshot) *AttackDataTree {
 	tree := &AttackDataTree{
 		Host:        snap.Host,
 		MaxParallel: snap.MaxParallel,
+		MaxDepth:    snap.MaxDepth,
 		locked:      snap.Locked,
 		active:      0, // SubAgent は別途再 spawn
 	}
 	if tree.MaxParallel <= 0 {
 		tree.MaxParallel = 2
+	}
+	if tree.MaxDepth <= 0 {
+		tree.MaxDepth = 3
 	}
 	for _, dto := range snap.Ports {
 		tree.Ports = append(tree.Ports, dtoToNode(dto))

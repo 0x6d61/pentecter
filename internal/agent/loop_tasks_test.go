@@ -450,7 +450,7 @@ func TestBuildTaskResult_WebReconUpdatesAttackDataTree(t *testing.T) {
 	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
 
 	// AttackDataTree をセットアップ
-	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// SubAgent 単位で InProgress にマーク（SpawnWebReconForPort の実際の動作を再現）
 	// AddPort(http) は EndpointEnum + VhostDiscov を Pending にする

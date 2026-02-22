@@ -545,7 +545,7 @@ func TestTarget_SetAttackData(t *testing.T) {
 	tgt := agent.NewTarget(1, "10.0.0.1")
 
 	// AttackDataTree を設定して取得
-	rt := agent.NewAttackDataTree("10.0.0.1", 2)
+	rt := agent.NewAttackDataTree("10.0.0.1", 2, 0)
 	rt.AddPort(80, "http", "Apache 2.4.49")
 
 	tgt.SetAttackData(rt)
@@ -580,7 +580,7 @@ func TestTarget_GetAttackData_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				if j%2 == 0 {
-					rt := agent.NewAttackDataTree("10.0.0.1", 2)
+					rt := agent.NewAttackDataTree("10.0.0.1", 2, 0)
 					tgt.SetAttackData(rt)
 				} else {
 					tgt.SetAttackData(nil)

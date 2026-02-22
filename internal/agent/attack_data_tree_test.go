@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewAttackDataTree(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 0)
+	tree := NewAttackDataTree("10.10.11.100", 0, 0)
 	if tree.Host != "10.10.11.100" {
 		t.Errorf("Host = %q, want %q", tree.Host, "10.10.11.100")
 	}
@@ -18,14 +18,14 @@ func TestNewAttackDataTree(t *testing.T) {
 		t.Errorf("MaxParallel = %d, want 2", tree.MaxParallel)
 	}
 
-	tree2 := NewAttackDataTree("10.10.11.100", 4)
+	tree2 := NewAttackDataTree("10.10.11.100", 4, 0)
 	if tree2.MaxParallel != 4 {
 		t.Errorf("MaxParallel = %d, want 4", tree2.MaxParallel)
 	}
 }
 
 func TestAddPort_HTTP(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 
 	if len(tree.Ports) != 1 {
@@ -45,7 +45,7 @@ func TestAddPort_HTTP(t *testing.T) {
 }
 
 func TestAddPort_NonHTTP(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	if len(tree.Ports) != 1 {
@@ -65,7 +65,7 @@ func TestAddPort_NonHTTP(t *testing.T) {
 }
 
 func TestAddEndpoint(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -89,7 +89,7 @@ func TestAddEndpoint(t *testing.T) {
 }
 
 func TestAddEndpoint_Nested(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/api", "/api/v1")
@@ -117,7 +117,7 @@ func TestAddEndpoint_Nested(t *testing.T) {
 }
 
 func TestAddVhost(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
 
@@ -140,7 +140,7 @@ func TestAddVhost(t *testing.T) {
 }
 
 func TestCompleteTask(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -156,7 +156,7 @@ func TestCompleteTask(t *testing.T) {
 }
 
 func TestHasPending(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	// 空のツリーには pending なし
 	if tree.HasPending() {
 		t.Error("empty tree should not have pending")
@@ -182,7 +182,7 @@ func TestHasPending(t *testing.T) {
 }
 
 func TestCountPending(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// HTTP ポート: EndpointEnum + VhostDiscov = 2 pending
 	if got := tree.CountPending(); got != 2 {
@@ -202,7 +202,7 @@ func TestCountPending(t *testing.T) {
 }
 
 func TestCountTotal(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(22, "ssh", "OpenSSH")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -213,7 +213,7 @@ func TestCountTotal(t *testing.T) {
 }
 
 func TestNextBatch_RespectsMaxParallel(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
@@ -235,7 +235,7 @@ func TestNextBatch_RespectsMaxParallel(t *testing.T) {
 }
 
 func TestNextBatch_Priority(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 10) // 高い max_parallel で全部返す
+	tree := NewAttackDataTree("10.10.11.100", 10, 0) // 高い max_parallel で全部返す
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
@@ -251,7 +251,7 @@ func TestNextBatch_Priority(t *testing.T) {
 }
 
 func TestStartTask_FinishTask(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	batch := tree.NextBatch()
@@ -286,7 +286,7 @@ func TestStartTask_FinishTask(t *testing.T) {
 }
 
 func TestRenderTree(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -317,7 +317,7 @@ func TestRenderTree(t *testing.T) {
 }
 
 func TestRenderIntel(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -336,7 +336,7 @@ func TestRenderIntel(t *testing.T) {
 }
 
 func TestRenderIntel_Empty(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	output := tree.RenderIntel()
 	if output != "" {
 		t.Errorf("empty tree should return empty intel, got: %q", output)
@@ -344,14 +344,14 @@ func TestRenderIntel_Empty(t *testing.T) {
 }
 
 func TestAttackDataTree_LockedByDefault(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	if !tree.IsLocked() {
 		t.Error("new AttackDataTree should be locked by default")
 	}
 }
 
 func TestAttackDataTree_UnlockManual(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// ロック中
 	if !tree.IsLocked() {
@@ -365,7 +365,7 @@ func TestAttackDataTree_UnlockManual(t *testing.T) {
 }
 
 func TestAttackDataTree_AutoUnlock_WhenNoPending(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// pending あり → locked
 	if !tree.IsLocked() {
@@ -381,7 +381,7 @@ func TestAttackDataTree_AutoUnlock_WhenNoPending(t *testing.T) {
 }
 
 func TestAttackDataTree_StaysLocked_WithPending(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	// まだ pending がある
@@ -392,7 +392,7 @@ func TestAttackDataTree_StaysLocked_WithPending(t *testing.T) {
 }
 
 func TestAddFinding(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -427,7 +427,7 @@ func TestAddFinding(t *testing.T) {
 }
 
 func TestAddFinding_MultipleFindings(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -460,7 +460,7 @@ func TestAddFinding_MultipleFindings(t *testing.T) {
 }
 
 func TestAddFinding_NonExistentNode(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	// 存在しないパスに追加 — パニックしないこと
@@ -475,7 +475,7 @@ func TestAddFinding_NonExistentNode(t *testing.T) {
 }
 
 func TestCountFindings(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
@@ -503,7 +503,7 @@ func TestCountFindings(t *testing.T) {
 }
 
 func TestRenderTree_WithFindings(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -542,7 +542,7 @@ func TestRenderTree_WithFindings(t *testing.T) {
 
 func TestRenderTree_WithActiveTasks(t *testing.T) {
 	// StartTask で in_progress にした後、RenderTree に "[>]" と "[active]" が含まれること
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	batch := tree.NextBatch()
@@ -571,7 +571,7 @@ func TestRenderTree_WithActiveTasks(t *testing.T) {
 func TestRenderTree_FindingsAndChildren(t *testing.T) {
 	// エンドポイントに finding と子エンドポイントの両方がある場合、
 	// ツリーレンダリングで両方が正しく表示されること
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	// /api の子として /api/v1 を追加
@@ -610,7 +610,7 @@ func TestRenderTree_FindingsAndChildren(t *testing.T) {
 
 func TestFindNode_Vhost(t *testing.T) {
 	// AddVhost で追加した vhost ノードを findNode で見つけられること
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
 
@@ -629,7 +629,7 @@ func TestFindNode_Vhost(t *testing.T) {
 
 func TestFindNode_VhostChild(t *testing.T) {
 	// vhost に子エンドポイントを追加し、CompleteTask で子の findNode が動作すること
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
 
@@ -659,7 +659,7 @@ func TestFindNode_VhostChild(t *testing.T) {
 // --- CompleteAllPortTasks テスト ---
 
 func TestCompleteAllPortTasks_Basic(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	// SubAgent 単位で active を設定（SpawnWebReconForPort と同等）
@@ -687,7 +687,7 @@ func TestCompleteAllPortTasks_Basic(t *testing.T) {
 
 func TestCompleteAllPortTasks_OnlyInProgress(t *testing.T) {
 	// InProgress のタスクのみ Complete にし、Pending はスキップすること
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	node := tree.Ports[0]
@@ -714,7 +714,7 @@ func TestCompleteAllPortTasks_OnlyInProgress(t *testing.T) {
 }
 
 func TestCompleteAllPortTasks_NoMatchingPort(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	node := tree.Ports[0]
@@ -733,7 +733,7 @@ func TestCompleteAllPortTasks_NoMatchingPort(t *testing.T) {
 }
 
 func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 4)
+	tree := NewAttackDataTree("10.10.11.100", 4, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(443, "https", "nginx")
 
@@ -763,7 +763,7 @@ func TestCompleteAllPortTasks_MultiplePorts(t *testing.T) {
 }
 
 func TestAddPort_NonHTTPToHTTP_InitializesTasks(t *testing.T) {
-	tree := NewAttackDataTree("10.0.0.1", 2)
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
 	// First add as generic TCP
 	tree.AddPort(8080, "tcpwrapped", "")
 	// Port should not have HTTP tasks
@@ -794,7 +794,7 @@ func TestAddPort_NonHTTPToHTTP_InitializesTasks(t *testing.T) {
 func TestAddPort_NonHTTPToHTTP_AlreadyInitialized(t *testing.T) {
 	// HTTP ポートとして追加された後、再度 HTTP で更新されても
 	// すでに初期化済みのタスクステータスが上書きされないこと
-	tree := NewAttackDataTree("10.0.0.1", 2)
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// EndpointEnum を InProgress に変更
 	tree.Ports[0].EndpointEnum = StatusInProgress
@@ -807,7 +807,7 @@ func TestAddPort_NonHTTPToHTTP_AlreadyInitialized(t *testing.T) {
 }
 
 func TestAddPort_Dedup(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "")
 	tree.AddPort(80, "http", "Apache 2.4.49")
 
@@ -821,7 +821,7 @@ func TestAddPort_Dedup(t *testing.T) {
 }
 
 func TestAddPort_Dedup_KeepLongerBanner(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache httpd 2.4.49 ((Unix))")
 	tree.AddPort(80, "http", "Apache")
 
@@ -832,7 +832,7 @@ func TestAddPort_Dedup_KeepLongerBanner(t *testing.T) {
 }
 
 func TestAttackDataTree_ConcurrentAccess(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 4)
+	tree := NewAttackDataTree("10.10.11.100", 4, 0)
 	var wg sync.WaitGroup
 
 	// 並行で AddPort
@@ -879,7 +879,7 @@ func TestAttackDataTree_ConcurrentAccess(t *testing.T) {
 }
 
 func TestRenderIntel_WithActiveAgents(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// Simulate HTTPAgent active
 	batch := tree.NextBatch()
@@ -899,7 +899,7 @@ func TestRenderIntel_WithActiveAgents(t *testing.T) {
 }
 
 func TestRenderIntel_WithFindings(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
 	tree.AddFinding("10.10.11.100", 80, "/login", Finding{
@@ -918,7 +918,7 @@ func TestRenderIntel_WithFindings(t *testing.T) {
 }
 
 func TestRenderIntel_AttackSurface(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(80, "http", "Apache")
 	output := tree.RenderIntel()
@@ -935,7 +935,7 @@ func TestRenderIntel_AttackSurface(t *testing.T) {
 }
 
 func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// ポートレベルのタスクを complete にする
 	tree.CompleteTask("10.10.11.100", 80, "/", TaskEndpointEnum)
@@ -955,7 +955,7 @@ func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
 }
 
 func TestSetChecklist(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
@@ -972,7 +972,7 @@ func TestSetChecklist(t *testing.T) {
 }
 
 func TestSetChecklist_NoOpIfAlreadySet(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	cl1 := GenerateChecklist("ssh", "OpenSSH 8.2", false)
@@ -996,7 +996,7 @@ func TestSetChecklist_NoOpIfAlreadySet(t *testing.T) {
 }
 
 func TestSetChecklist_SkipsHTTPPorts(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	cl := GenerateChecklist("http", "", false)
@@ -1010,7 +1010,7 @@ func TestSetChecklist_SkipsHTTPPorts(t *testing.T) {
 }
 
 func TestSetChecklist_PortNotFound(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
@@ -1019,7 +1019,7 @@ func TestSetChecklist_PortNotFound(t *testing.T) {
 }
 
 func TestUpdateAllChecklists(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(21, "ftp", "vsftpd 2.3.4")
 
@@ -1053,7 +1053,7 @@ func TestUpdateAllChecklists(t *testing.T) {
 }
 
 func TestAllChecklistsDone(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(80, "http", "Apache") // HTTP port - no checklist
 
@@ -1076,7 +1076,7 @@ func TestAllChecklistsDone(t *testing.T) {
 }
 
 func TestAllChecklistsDone_NoChecklists(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache") // HTTP only - no checklists
 
 	// No checklists at all - should return true (vacuously)
@@ -1086,7 +1086,7 @@ func TestAllChecklistsDone_NoChecklists(t *testing.T) {
 }
 
 func TestRenderIntel_WithChecklist(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(80, "http", "Apache")
 
@@ -1117,7 +1117,7 @@ func TestRenderIntel_WithChecklist(t *testing.T) {
 }
 
 func TestRenderIntel_ChecklistAllComplete(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
@@ -1136,7 +1136,7 @@ func TestRenderIntel_ChecklistAllComplete(t *testing.T) {
 }
 
 func TestRenderIntel_AllNonHTTPReconComplete(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddPort(21, "ftp", "vsftpd 2.3.4")
 
@@ -1160,7 +1160,7 @@ func TestRenderIntel_AllNonHTTPReconComplete(t *testing.T) {
 }
 
 func TestRenderIntel_AttackSurface_ChecklistProgress(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
@@ -1180,7 +1180,7 @@ func TestRenderIntel_AttackSurface_ChecklistProgress(t *testing.T) {
 }
 
 func TestComputeReconProgress_Basic(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
@@ -1207,7 +1207,7 @@ func TestComputeReconProgress_Basic(t *testing.T) {
 }
 
 func TestComputeReconProgress_Empty(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	prog := tree.ComputeReconProgress()
 
 	if prog.EndpointEnum.Total != 0 {
@@ -1219,7 +1219,7 @@ func TestComputeReconProgress_Empty(t *testing.T) {
 }
 
 func TestComputeReconProgress_PendingPaths(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
@@ -1238,7 +1238,7 @@ func TestComputeReconProgress_PendingPaths(t *testing.T) {
 }
 
 func TestComputeReconProgress_MaxPendingPaths(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	// Add 15 endpoints — all pending
@@ -1256,7 +1256,7 @@ func TestComputeReconProgress_MaxPendingPaths(t *testing.T) {
 }
 
 func TestIsReconComplete(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 
 	// Empty tree: no tasks = not complete (need at least 1 task)
 	if tree.IsReconComplete() {
@@ -1296,7 +1296,7 @@ func TestIsReconComplete(t *testing.T) {
 }
 
 func TestIsReconComplete_ChecklistIncomplete(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.SetChecklist(22, GenerateChecklist("ssh", "OpenSSH 8.2", false))
 
@@ -1307,7 +1307,7 @@ func TestIsReconComplete_ChecklistIncomplete(t *testing.T) {
 }
 
 func TestRenderIntel_ReconProgress(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -1330,7 +1330,7 @@ func TestRenderIntel_ReconProgress(t *testing.T) {
 }
 
 func TestRenderIntel_ReconProgressComplete(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 
 	// Complete all port-level tasks
@@ -1345,7 +1345,7 @@ func TestRenderIntel_ReconProgressComplete(t *testing.T) {
 }
 
 func TestRenderIntel_AttackSurface_HTTPTaskCount(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
@@ -1362,7 +1362,7 @@ func TestRenderIntel_AttackSurface_HTTPTaskCount(t *testing.T) {
 }
 
 func TestRenderIntel_NoReconProgressForNonHTTPOnly(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 
 	output := tree.RenderIntel()
@@ -1374,7 +1374,7 @@ func TestRenderIntel_NoReconProgressForNonHTTPOnly(t *testing.T) {
 }
 
 func TestSnapshot_Roundtrip(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 3)
+	tree := NewAttackDataTree("10.10.11.100", 3, 0)
 	tree.AddPort(80, "http", "Apache 2.4.49")
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
@@ -1434,7 +1434,7 @@ func TestSnapshot_Roundtrip(t *testing.T) {
 }
 
 func TestSnapshot_WithChecklist(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(22, "ssh", "OpenSSH 8.2")
 	cl := GenerateChecklist("ssh", "OpenSSH 8.2", false)
 	tree.SetChecklist(22, cl)
@@ -1465,7 +1465,7 @@ func TestSnapshot_WithChecklist(t *testing.T) {
 }
 
 func TestSnapshot_WithFindings(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
@@ -1503,7 +1503,7 @@ func TestSnapshot_WithFindings(t *testing.T) {
 }
 
 func TestSnapshot_InProgressResetToPending(t *testing.T) {
-	tree := NewAttackDataTree("10.10.11.100", 2)
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 	// Set tasks to InProgress
@@ -1542,4 +1542,112 @@ func TestSnapshot_InProgressResetToPending(t *testing.T) {
 	}
 	// Completed tasks should stay Complete
 	// (none in this test, but verify StatusNone stays None)
+}
+
+func TestPathDepth(t *testing.T) {
+	tests := []struct {
+		path string
+		want int
+	}{
+		{"/", 0},
+		{"", 0},
+		{"/api", 1},
+		{"/api/v1", 2},
+		{"/api/v1/users", 3},
+		{"/api/v1/users/details", 4},
+		{"/a/b/c/d/e", 5},
+	}
+	for _, tt := range tests {
+		got := pathDepth(tt.path)
+		if got != tt.want {
+			t.Errorf("pathDepth(%q) = %d, want %d", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestAddEndpoint_FileExtension_SkipsEndpointEnum(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// File with extension → EndpointEnum should be StatusNone
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login.php")
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusNone {
+		t.Errorf("EndpointEnum = %d, want StatusNone for file with extension", child.EndpointEnum)
+	}
+	// ParamFuzz and Profiling should still be Pending
+	if child.ParamFuzz != StatusPending {
+		t.Errorf("ParamFuzz = %d, want StatusPending", child.ParamFuzz)
+	}
+	if child.Profiling != StatusPending {
+		t.Errorf("Profiling = %d, want StatusPending", child.Profiling)
+	}
+}
+
+func TestAddEndpoint_FileExtension_Various(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// Files with extensions → StatusNone for EndpointEnum
+	files := []string{"/style.css", "/app.js", "/image.png", "/page.html", "/api.json"}
+	for _, f := range files {
+		tree.AddEndpoint("10.10.11.100", 80, "/", f)
+	}
+
+	for i, child := range tree.Ports[0].Children {
+		if child.EndpointEnum != StatusNone {
+			t.Errorf("child[%d] %q: EndpointEnum = %d, want StatusNone", i, child.Path, child.EndpointEnum)
+		}
+	}
+}
+
+func TestAddEndpoint_Directory_GetsEndpointEnum(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// Directory (no extension) → EndpointEnum should be Pending
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusPending {
+		t.Errorf("EndpointEnum = %d, want StatusPending for directory", child.EndpointEnum)
+	}
+}
+
+func TestAddEndpoint_MaxDepth_Enforced(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 2) // MaxDepth = 2
+	tree.AddPort(80, "http", "Apache")
+
+	// Depth 1: /api → OK (within limit)
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusPending {
+		t.Errorf("depth 1: EndpointEnum = %d, want Pending", child.EndpointEnum)
+	}
+
+	// Depth 2: /api/v1 → OK (at limit)
+	tree.AddEndpoint("10.10.11.100", 80, "/api", "/api/v1")
+	v1 := child.Children[0]
+	if v1.EndpointEnum != StatusPending {
+		t.Errorf("depth 2: EndpointEnum = %d, want Pending", v1.EndpointEnum)
+	}
+
+	// Depth 3: /api/v1/users → OVER limit → StatusNone
+	tree.AddEndpoint("10.10.11.100", 80, "/api/v1", "/api/v1/users")
+	users := v1.Children[0]
+	if users.EndpointEnum != StatusNone {
+		t.Errorf("depth 3: EndpointEnum = %d, want StatusNone (over MaxDepth)", users.EndpointEnum)
+	}
+	// ParamFuzz/Profiling still Pending
+	if users.ParamFuzz != StatusPending {
+		t.Errorf("depth 3: ParamFuzz = %d, want Pending", users.ParamFuzz)
+	}
+}
+
+func TestAddEndpoint_MaxDepth_Default(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0) // 0 → default 3
+	if tree.MaxDepth != 3 {
+		t.Errorf("MaxDepth = %d, want 3 (default)", tree.MaxDepth)
+	}
 }

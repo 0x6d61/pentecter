@@ -2105,7 +2105,7 @@ func TestLoop_PhaseGate_BlocksDuringRecon(t *testing.T) {
 	loop, events, _, _ := newTestLoop(target, mb)
 
 	// Set up AttackDataTree with active recon (Active=1)
-	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	// Simulate an active SubAgent by starting port recon
 	tree.StartPortRecon(tree.Ports[0])
@@ -2148,7 +2148,7 @@ func TestLoop_PhaseGate_UnblocksOnUserMsg(t *testing.T) {
 	loop, events, _, userMsg := newTestLoop(target, mb)
 
 	// Set up AttackDataTree with active recon
-	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.StartPortRecon(tree.Ports[0])
 	loop.WithAttackData(tree)
@@ -2208,7 +2208,7 @@ func TestLoop_PhaseGate_UnblocksWhenReconCompletes(t *testing.T) {
 	loop, events, _, _ := newTestLoop(target, mb)
 
 	// Set up AttackDataTree with active recon
-	tree := agent.NewAttackDataTree("10.0.0.1", 2)
+	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
 	tree.AddPort(80, "http", "Apache")
 	tree.StartPortRecon(tree.Ports[0])
 	loop.WithAttackData(tree)

@@ -333,7 +333,7 @@ func TestSmartSubAgent_UpdatesAttackDataTree(t *testing.T) {
 
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
-	tree := agent.NewAttackDataTree("10.0.0.5", 2)
+	tree := agent.NewAttackDataTree("10.0.0.5", 2, 0)
 
 	task := agent.NewSubTask("smart-recon", agent.TaskKindSmart, "test recon tree update")
 	task.MaxTurns = 5
