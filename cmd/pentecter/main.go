@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
 
 	"github.com/0x6d61/pentecter/internal/agent"
@@ -231,18 +230,18 @@ Chat commands:
 	}
 
 	// --- TUI ---
-	m := tui.NewWithTargets(targets)
-	m.ConnectTeam(team, events, approveMap, userMsgMap)
+	app := tui.NewApp(targets)
+	app.ConnectTeam(team, events, approveMap, userMsgMap)
 
 	// Set initial model info for status bar
-	m.CurrentProvider = string(selectedProvider)
-	m.CurrentModel = brainCfg.Model
+	app.CurrentProvider = string(selectedProvider)
+	app.CurrentModel = brainCfg.Model
 
 	// Connect CommandRunner for /approve command
-	m.Runner = runner
+	app.Runner = runner
 
 	// BrainFactory for /model command
-	m.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
+	app.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
 		cfg, err := brain.LoadConfig(hint)
 		if err != nil {
 			return nil, err
@@ -259,8 +258,7 @@ Chat commands:
 	team.Start(ctx)
 
 	// TUI を起動（ブロッキング）
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	if err := app.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "TUI error:", err)
 		os.Exit(1)
 	}

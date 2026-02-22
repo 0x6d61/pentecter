@@ -1,5 +1,10 @@
 # TUI インタラクション設計
 
+> **注意: このドキュメントは Bubble Tea ベースの旧 TUI 仕様です。**
+> 現行の readline ベース Hybrid TUI には適用されません。
+> 現行仕様は [`hybrid-tui-scroll-region.md`](./hybrid-tui-scroll-region.md) および
+> [`ui-spec.md`](./ui-spec.md) を参照してください。
+
 ## 概要
 
 TUI のユーザー操作・コマンド・選択UI の設計。
@@ -10,13 +15,18 @@ TUI のユーザー操作・コマンド・選択UI の設計。
 |---------|------|
 | `/model` | LLM プロバイダー/モデルの選択・切り替え |
 | `/approve` | Auto-approve の ON/OFF 切り替え |
+| `/targets` | ターゲット一覧表示と切り替え |
 | `/target <host>` | ターゲットの追加 |
+| `/recontree` | 偵察ツリーの ASCII 表示 |
+| `/skip-recon` | RECON フェーズロックの手動解除 |
+| `/fold` | コマンド出力の折りたたみ切り替え |
+| `/status` | ステータスライン表示 |
 | `<IP>` | IP アドレス入力でターゲット追加 |
 | 自然言語 | AI エージェントへの指示 |
 
 ## 選択UI
 
-`/model` や `/approve` を引数なしで実行した場合、テキスト入力ではなく対話的な選択UIを表示する。
+`/model` や `/approve`、`/targets` を引数なしで実行した場合、番号入力による選択UIを表示する。
 
 ### 動作
 
@@ -24,42 +34,45 @@ TUI のユーザー操作・コマンド・選択UI の設計。
 > /approve
 
 Auto-approve (current: OFF):
-  ● ON — auto-approve all commands
-    OFF — require approval
-[↑↓] Move  [Enter] Select  [Esc] Cancel
+  1. ON — auto-approve all commands
+  2. OFF — require approval
+
+├──────────────────────────────────────────────────────────┤
+│ select [1-2/q] > █
+╰──────────────────────────────────────────────────────────╯
 ```
 
 ### キー操作
 
 | キー | 動作 |
 |------|------|
-| `↑` / `↓` | 選択肢を移動 |
-| `Enter` | 選択を確定し、コールバックを実行 |
-| `Esc` | キャンセルして通常モードに戻る |
+| `1`〜`N` | 対応する番号の選択肢を確定し、コールバックを実行 |
+| `q` | キャンセルして通常モードに戻る |
 
 ### 実装
 
-- `Model.inputMode` で `InputNormal` / `InputSelect` を管理
-- `InputSelect` 時はテキスト入力を無効化し、選択UI を input bar に描画
+- `App.inputMode` で `ModeNormal` / `ModeSelect` / `ModeProposal` / `ModeConfirmQuit` を管理
+- `ModeSelect` 時はテキスト入力を無効化し、番号入力のみ受け付ける
 - `showSelect(title, options, callback)` メソッドで選択UIを起動
 - 後方互換: `/approve on` `/approve off` のテキスト指定も引き続き動作
 
 ## コマンドサジェスト
 
 入力フィールドで `/` を入力すると、利用可能なコマンドをオートコンプリート候補として表示。
-右矢印キーでサジェストを確定。
+オートコンプリートは readline のネイティブ機能（`AutoComplete` 設定）により処理される。
 
-登録済みサジェスト: `/model`, `/approve`, `/target`
+登録済みサジェスト: `/model`, `/approve`, `/targets`, `/target`, `/recontree`, `/skip-recon`, `/fold`, `/status`
 
 ## Proposal（承認ゲート）
 
-承認が必要なコマンドは PROPOSAL ボックスとして表示:
+承認が必要なコマンドは PROPOSAL ボックスとして出力エリアに表示される。
+入力プロンプトが `approve? [y/n/e] >` に変化し、以下の入力を受け付ける:
 
 | キー | 動作 |
 |------|------|
 | `y` | 承認 → コマンドを実行 |
 | `n` | 拒否 → Brain に「ユーザーが拒否した」と伝える |
-| `e` | 編集 → コマンドを input bar にコピーして編集可能にする |
+| `e` | 編集 → コマンドを表示して編集方法を提示 |
 
 ## Agent イベントと表示
 
@@ -122,7 +135,7 @@ type LogEntry struct {
 ───────────── Turn 3 ─────────────
 ```
 
-- 区切り線は `─` 記号でビューポート幅いっぱいに描画
+- 区切り線は `─` 記号でターミナル幅いっぱいに描画
 - ターン番号は中央に配置
 - スタイル: 薄い色（`colorMuted`）で表示し、通常のログとの視覚的区別を明確にする
 
@@ -145,8 +158,10 @@ type LogEntry struct {
 
 ## 関連ファイル
 
-- `internal/tui/model.go` — Model struct、InputMode、SelectOption
-- `internal/tui/update.go` — コマンド処理、選択UI のキー操作
-- `internal/tui/view.go` — 選択UI のレンダリング、ターン区切り・コマンド結果サマリー
+- `internal/tui/app.go` — App 構造体、Run() メインループ、InputMode 定義
+- `internal/tui/input.go` — コマンドパース、選択UI の入力処理
+- `internal/tui/output.go` — スピナー、折りたたみ、Proposal/Status 表示
+- `internal/tui/events.go` — イベント消費 goroutine、handleAgentEvent()
+- `internal/tui/commands.go` — /model, /approve, /targets 等のハンドラ、SelectOption
 - `internal/agent/event.go` — EventType 定義、Event 構造体
 - `internal/agent/target.go` — LogEntry 構造体（Type, TurnNumber, ExitCode フィールド）
