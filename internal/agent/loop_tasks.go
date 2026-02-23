@@ -31,7 +31,18 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 			task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
 			if l.attackData.PortHasPendingChildren(task.Metadata.Port) {
 				if portNode := l.attackData.FindPortNode(task.Metadata.Port); portNode != nil {
-					l.reconRunner.SpawnWebReconForPort(ctx, portNode)
+					if portNode.SpawnCount >= MaxRespawns {
+						// リスポーン上限到達 — 残タスクをスキップ
+						l.attackData.SkipAllPendingChildren(task.Metadata.Port)
+						l.emit(Event{
+							Type:     EventLog,
+							Source:   SourceSystem,
+							Message:  fmt.Sprintf("[RECON] Max re-spawns reached for port %d — skipping remaining tasks", task.Metadata.Port),
+							TargetID: l.target.ID,
+						})
+					} else {
+						l.reconRunner.SpawnWebReconForPort(ctx, portNode)
+					}
 				}
 			}
 		}

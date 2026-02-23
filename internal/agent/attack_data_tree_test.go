@@ -2302,3 +2302,199 @@ func TestFindPortNode_NotFound(t *testing.T) {
 		t.Errorf("FindPortNode(8080) = %v, want nil", node)
 	}
 }
+
+// === Re-spawn limit tests ===
+
+func TestAttackDataNode_SpawnCount_Increment(t *testing.T) {
+	// StartPortRecon should increment SpawnCount each time it succeeds
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	node := tree.Ports[0]
+
+	// First spawn
+	ok := tree.StartPortRecon(node)
+	if !ok {
+		t.Fatal("StartPortRecon should succeed on first call")
+	}
+	if node.SpawnCount != 1 {
+		t.Errorf("SpawnCount = %d after first StartPortRecon, want 1", node.SpawnCount)
+	}
+
+	// Complete the port so active goes down
+	tree.CompleteAllPortTasks(80)
+
+	// Re-add pending tasks to simulate new tasks discovered
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusPending)
+
+	// Second spawn
+	ok = tree.StartPortRecon(node)
+	if !ok {
+		t.Fatal("StartPortRecon should succeed on second call")
+	}
+	if node.SpawnCount != 2 {
+		t.Errorf("SpawnCount = %d after second StartPortRecon, want 2", node.SpawnCount)
+	}
+}
+
+func TestAttackDataTree_SkipAllPendingChildren(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	node := tree.Ports[0]
+
+	// Add some endpoints with pending tasks
+	tree.AddEndpoint("10.0.0.1", 80, "/", "/api")
+	tree.AddEndpoint("10.0.0.1", 80, "/", "/admin")
+
+	// Set some tasks to various statuses
+	apiNode := node.Children[0]
+	apiNode.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	apiNode.SetAttackDataStatusForTest(TaskParamFuzz, StatusPending)
+
+	adminNode := node.Children[1]
+	adminNode.SetAttackDataStatusForTest(TaskEndpointEnum, StatusPending)
+	adminNode.SetAttackDataStatusForTest(TaskParamFuzz, StatusPending)
+
+	// Port-level tasks: set endpoint_enum to Complete, vhost to Pending
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	node.SetAttackDataStatusForTest(TaskVhostDiscov, StatusPending)
+
+	// Skip all pending children
+	tree.SkipAllPendingChildren(80)
+
+	// Port-level pending tasks should be skipped
+	if node.VhostDiscov != StatusSkipped {
+		t.Errorf("port VhostDiscov = %d, want StatusSkipped(%d)", node.VhostDiscov, StatusSkipped)
+	}
+	// Port-level complete tasks should remain complete
+	if node.EndpointEnum != StatusComplete {
+		t.Errorf("port EndpointEnum = %d, want StatusComplete(%d)", node.EndpointEnum, StatusComplete)
+	}
+
+	// Child pending tasks should be skipped
+	if apiNode.ParamFuzz != StatusSkipped {
+		t.Errorf("api ParamFuzz = %d, want StatusSkipped(%d)", apiNode.ParamFuzz, StatusSkipped)
+	}
+	// Child complete tasks should remain complete
+	if apiNode.EndpointEnum != StatusComplete {
+		t.Errorf("api EndpointEnum = %d, want StatusComplete(%d)", apiNode.EndpointEnum, StatusComplete)
+	}
+
+	if adminNode.EndpointEnum != StatusSkipped {
+		t.Errorf("admin EndpointEnum = %d, want StatusSkipped(%d)", adminNode.EndpointEnum, StatusSkipped)
+	}
+	if adminNode.ParamFuzz != StatusSkipped {
+		t.Errorf("admin ParamFuzz = %d, want StatusSkipped(%d)", adminNode.ParamFuzz, StatusSkipped)
+	}
+}
+
+func TestAttackDataTree_SkipAllPendingChildren_DeepNesting(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 5)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.0.0.1", 80, "/", "/api")
+	tree.AddEndpoint("10.0.0.1", 80, "/api", "/api/v1")
+	tree.AddEndpoint("10.0.0.1", 80, "/api/v1", "/api/v1/users")
+
+	// All children should have pending tasks
+	tree.SkipAllPendingChildren(80)
+
+	// Walk and verify all pending became skipped
+	var walk func(n *AttackDataNode)
+	walk = func(n *AttackDataNode) {
+		for _, st := range []AttackDataStatus{n.EndpointEnum, n.ParamFuzz, n.ValueFuzz, n.Profiling, n.VhostDiscov} {
+			if st == StatusPending {
+				t.Errorf("found StatusPending in node path=%s port=%d after SkipAllPendingChildren", n.Path, n.Port)
+			}
+		}
+		for _, child := range n.Children {
+			walk(child)
+		}
+	}
+	node := tree.Ports[0]
+	walk(node)
+}
+
+func TestStatusSkipped_Icon_And_Label(t *testing.T) {
+	// statusIcon should return "[-]" for Skipped
+	icon := statusIcon(StatusSkipped)
+	if icon != "[-]" {
+		t.Errorf("statusIcon(StatusSkipped) = %q, want %q", icon, "[-]")
+	}
+
+	// statusLabel should return "skipped"
+	label := statusLabel(StatusSkipped)
+	if label != "skipped" {
+		t.Errorf("statusLabel(StatusSkipped) = %q, want %q", label, "skipped")
+	}
+}
+
+func TestStatusSkipped_CountTasks(t *testing.T) {
+	// Skipped tasks should count as total but not pending or complete
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	node := tree.Ports[0]
+
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusSkipped)
+	node.SetAttackDataStatusForTest(TaskVhostDiscov, StatusComplete)
+
+	pending, complete, total := node.countTasks()
+	if pending != 0 {
+		t.Errorf("pending = %d, want 0", pending)
+	}
+	if complete != 1 {
+		t.Errorf("complete = %d, want 1", complete)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2 (skipped + complete)", total)
+	}
+}
+
+func TestSpawnCount_JSON_RoundTrip(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	node := tree.Ports[0]
+
+	// Simulate 2 spawns
+	tree.StartPortRecon(node)
+	tree.CompleteAllPortTasks(80)
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusPending)
+	tree.StartPortRecon(node)
+	tree.CompleteAllPortTasks(80)
+
+	if node.SpawnCount != 2 {
+		t.Fatalf("SpawnCount = %d before snapshot, want 2", node.SpawnCount)
+	}
+
+	// Snapshot → Restore → check SpawnCount preserved
+	snap := tree.Snapshot()
+	snapJSON, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var restored AttackDataSnapshot
+	if err := json.Unmarshal(snapJSON, &restored); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	tree2 := RestoreAttackDataTree(restored)
+	if len(tree2.Ports) != 1 {
+		t.Fatalf("restored ports = %d, want 1", len(tree2.Ports))
+	}
+	if tree2.Ports[0].SpawnCount != 2 {
+		t.Errorf("restored SpawnCount = %d, want 2", tree2.Ports[0].SpawnCount)
+	}
+}
+
+func TestStatusSkipped_NotCountedAsPending_InPortHasPendingChildren(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.0.0.1", 80, "/", "/api")
+
+	// Set all children tasks to skipped
+	tree.SkipAllPendingChildren(80)
+
+	// PortHasPendingChildren should return false (skipped != pending)
+	if tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren should return false when all pending are skipped")
+	}
+}
