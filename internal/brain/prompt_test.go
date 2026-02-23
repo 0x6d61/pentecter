@@ -577,9 +577,9 @@ func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
 	if !strings.Contains(prompt, "HTTPAgent") {
 		t.Error("RECON step should reference HTTPAgent for web reconnaissance")
 	}
-	// ffuf/dirb を自分で実行しない指示
-	if !strings.Contains(prompt, "Do NOT run ffuf") {
-		t.Error("RECON step should prohibit running ffuf directly")
+	// dirb/gobuster/nikto を自分で実行しない指示
+	if !strings.Contains(prompt, "Do NOT run dirb") {
+		t.Error("RECON step should prohibit running web recon tools directly")
 	}
 	// Reconnaissance Intel を参照する指示
 	if !strings.Contains(prompt, "Reconnaissance Intel") {

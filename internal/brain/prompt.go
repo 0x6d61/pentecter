@@ -87,7 +87,7 @@ Use "run" (blocking) for ALL commands in RECON — do NOT use spawn_task during 
       nmap -sV -sC <target>
 
    b. IF HTTP/HTTPS services found — web reconnaissance is handled AUTOMATICALLY by HTTPAgent.
-      Do NOT run ffuf, dirb, gobuster, or nikto yourself — HTTPAgent runs them in the background.
+      Do NOT run dirb, gobuster, or nikto yourself — HTTPAgent handles web reconnaissance in the background.
       Check the "Reconnaissance Intel" section for HTTPAgent progress and findings.
       Focus your effort on non-HTTP services while HTTPAgent works.
 

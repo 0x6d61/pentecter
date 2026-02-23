@@ -41,7 +41,7 @@ skills/*
 !skills/curl.md
 !skills/ssh.md
 !skills/searchsploit.md
-!skills/ffuf.md
+!skills/webfuzz.md
 !skills/web-vuln.md
 
 # Config — only example files tracked

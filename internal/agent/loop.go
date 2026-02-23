@@ -349,7 +349,7 @@ func (l *Loop) Run(ctx context.Context) {
 func isWebReconCommand(cmd string) bool {
 	cmdLower := strings.ToLower(cmd)
 	// コマンド名を先頭またはパスの末尾で検出
-	webTools := []string{"ffuf", "dirb", "gobuster", "nikto"}
+	webTools := []string{"webfuzz", "dirb", "gobuster", "nikto"}
 	for _, tool := range webTools {
 		if strings.Contains(cmdLower, tool) {
 			return true
@@ -369,16 +369,13 @@ func (l *Loop) runCommand(ctx context.Context, command string) {
 	// リアクティブモード有効時: web recon ツールは HTTPAgent が担当 → メイン Agent はブロック
 	// SubBrain が未設定の場合は HTTPAgent を起動できないためブロックしない
 	if l.reconRunner != nil && l.taskMgr.CanSpawnSmart() && isWebReconCommand(command) {
-		blockMsg := "Web recon tools (ffuf/dirb/gobuster/nikto) are handled by HTTPAgent. Focus on non-HTTP services."
+		blockMsg := "Web recon tools (webfuzz/dirb/gobuster/nikto) are handled by HTTPAgent. Focus on non-HTTP services."
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: blockMsg})
 		l.lastCommand = command
 		l.lastToolOutput = blockMsg
 		l.lastExitCode = 0
 		return
 	}
-
-	// ffuf コマンド正規化: -s（プログレス抑制）
-	command = EnsureFfufSilent(command)
 
 	l.lastCommand = command
 	l.cmdStartTime = time.Now()
@@ -593,13 +590,6 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 	// AttackDataTree: ツール出力をパースして偵察状態を更新
 	if l.attackData != nil && l.lastCommand != "" {
 		parseOutput := l.lastToolOutput
-
-		// ffuf -o <file> の場合、ファイルから JSON を読み取る（stdout には JSON が出ないため）
-		if ffufPath := ExtractFfufOutputPath(l.lastCommand); ffufPath != "" {
-			if data, err := os.ReadFile(ffufPath); err == nil {
-				parseOutput = string(data)
-			}
-		}
 
 		// nmap -oX <file> / -oN <file> / -oA <base> の場合、ファイルから読み取る
 		if nmapPath := ExtractNmapOutputFile(l.lastCommand); nmapPath != "" {

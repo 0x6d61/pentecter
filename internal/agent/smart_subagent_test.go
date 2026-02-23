@@ -266,55 +266,6 @@ func TestSmartSubAgent_Run_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestSmartSubAgent_FfufSilent(t *testing.T) {
-	// SmartSubAgent が ffuf コマンドに -s を自動付与することを検証。
-	// mockBrain: run "ffuf ... /FUZZ" → complete
-	// 2回目の Think() に渡される LastCommand に -s が含まれているはず。
-	mb := &mockBrain{
-		actions: []*schema.Action{
-			{
-				Thought: "running ffuf",
-				Action:  schema.ActionRun,
-				Command: `ffuf -w /usr/share/wordlists/dirb/common.txt -u http://10.10.11.100/FUZZ -of json`,
-			},
-			{
-				Thought: "done",
-				Action:  schema.ActionComplete,
-			},
-		},
-	}
-
-	runner := newSmartTestRunner()
-	events := make(chan agent.Event, 64)
-
-	task := agent.NewSubTask("smart-ffuf", agent.TaskKindSmart, "test ffuf normalization")
-	task.MaxTurns = 5
-
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	go sa.Run(ctx, task, "10.10.11.100")
-
-	select {
-	case <-task.Done():
-	case <-time.After(8 * time.Second):
-		t.Fatal("timeout waiting for SmartSubAgent to complete")
-	}
-
-	// 2回目の Think() 呼び出しの Input.LastCommand を検証
-	// inputs[0] = initial (empty lastCommand), inputs[1] = after ffuf run
-	if len(mb.inputs) < 2 {
-		t.Fatalf("expected at least 2 brain inputs, got %d", len(mb.inputs))
-	}
-
-	lastCmd := mb.inputs[1].LastCommand
-	if !strings.Contains(lastCmd, " -s ") {
-		t.Errorf("LastCommand should contain -s (EnsureFfufSilent), got: %q", lastCmd)
-	}
-}
-
 func TestSmartSubAgent_UpdatesAttackDataTree(t *testing.T) {
 	// SmartSubAgent が nmap 出力を AttackDataTree にパースすることを検証
 	mb := &mockBrain{

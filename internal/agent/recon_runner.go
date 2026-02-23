@@ -137,9 +137,6 @@ func buildWebReconPrompt(host string, port int) string {
 Your AttackDataTree is automatically updated as you run commands.
 Check the tree for pending tasks and work through them sequentially.
 
-CRITICAL — THESE FLAGS ARE MANDATORY ON EVERY ffuf COMMAND:
-  -of json              (structured output for parsing — NEVER omit)
-
 Do NOT use -recursion or -recursion-depth flags. Each directory is a separate task.
 
 WORKFLOW — Execute tasks in this order for each endpoint:
@@ -155,32 +152,32 @@ WORKFLOW — Execute tasks in this order for each endpoint:
    If uncertain, use: -e .php,.jsp,.html,.txt,.bak
 
 2. ENDPOINT ENUMERATION (for each directory):
-   ffuf -w /usr/share/wordlists/dirb/common.txt -u %s/<path>/FUZZ -e <extensions-from-step-1> -of json -t 50
+   webfuzz dir -w /usr/share/wordlists/dirb/common.txt -u %s/<path>/FUZZ -e <extensions-from-step-1> -t 50
    IMPORTANT: Use ONLY /usr/share/wordlists/dirb/common.txt for directory enumeration.
    Do NOT use raft-*, directory-list-*, or other large wordlists — they waste time with minimal gain.
    When new directories are discovered, enumerate each one separately.
 
 3. PARAMETER FUZZING:
    For EACH endpoint where param_fuzz is "pending" in the tree:
-   GET: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "%s/<endpoint>?FUZZ=value" -of json -fs <default-size>
-   POST: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u %s/<endpoint> -X POST -d "FUZZ=value" -of json -fs <default-size>
+   GET: webfuzz param -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "%s/<endpoint>?FUZZ=value" -fs <default-size>
+   POST: webfuzz param -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u %s/<endpoint> -X POST -d "FUZZ=value" -fs <default-size>
    Static files (css/js/png/jpg/ico/svg/woff/font) are already filtered out by the tree — skip if param_fuzz shows "none".
 
 4. PARAMETER VALUE FUZZING (MANDATORY):
    After discovering parameters in step 3, you MUST test EACH parameter.
 
    For each discovered parameter:
-   a. Send baseline: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=normalvalue"
+   a. Send baseline: curl -s -w "\n%%%%{http_code} %%%%{size_download} %%%%{time_total}" "%s/<endpoint>?param=normalvalue"
    b. Record baseline: status_code, content_length, response_time
 
    MANDATORY categories to test (ALL required):
 %s
    For each category:
    1. Choose 2-5 payloads appropriate for the parameter name context
-   2. Send: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=PAYLOAD"
+   2. Send: curl -s -w "\n%%%%{http_code} %%%%{size_download} %%%%{time_total}" "%s/<endpoint>?param=PAYLOAD"
    3. Compare against baseline:
       - Status code changed → flag
-      - Content-length differs by >10%% → flag
+      - Content-length differs by >10%%%% → flag
       - Response time >5x baseline → flag (time-based injection)
       - Response body contains error messages, different data, or template output → flag
    4. Report EACH anomaly with "memory" action:
@@ -198,11 +195,10 @@ WORKFLOW — Execute tasks in this order for each endpoint:
    First get the default response size:
    curl -s %s | wc -c
    Then fuzz:
-   ffuf -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u %s -H "Host: FUZZ.%s" -of json -fs <default-size>
+   webfuzz vhost -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u %s -H "Host: FUZZ.%s" -fs <default-size>
    For each discovered vhost, run endpoint enumeration (step 2) on the vhost.
 
 RULES (VIOLATION = FAILURE):
-- EVERY ffuf command MUST include -of json — no exceptions
 - Do NOT use -recursion or -recursion-depth flags
 - Do NOT skip any endpoint or task — check the tree and process ALL pending tasks
 - ALL fuzz categories in step 4 are MANDATORY
