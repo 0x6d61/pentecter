@@ -59,6 +59,12 @@ type Finding struct {
 	Severity string `json:"severity"` // 深刻度: "high", "medium", "low", "info"
 }
 
+// Parameter はファジングで発見されたパラメーター
+type Parameter struct {
+	Name string `json:"name"` // パラメーター名 (e.g. "id", "username")
+	Type string `json:"type"` // query, form, header, cookie, path
+}
+
 // TaskProgress は特定タスクタイプの進捗
 type TaskProgress struct {
 	Done         int
@@ -90,8 +96,9 @@ type AttackDataNode struct {
 	Profiling    AttackDataStatus
 	VhostDiscov  AttackDataStatus
 
-	Findings []Finding
-	Checklist *ServiceChecklist
+	Findings   []Finding
+	Parameters []Parameter
+	Checklist  *ServiceChecklist
 	SpawnCount int // SubAgent がこのポートに対して spawn された回数
 
 	Children []*AttackDataNode
@@ -720,6 +727,25 @@ func taskStatusLine(name string, s AttackDataStatus) string {
 	return fmt.Sprintf("%s: %s", name, label)
 }
 
+// AddParameter はエンドポイントノードにパラメーターを追加する。
+// 同名パラメーターが既に存在する場合はスキップする。
+// ノードが見つからない場合は何もしない。
+func (t *AttackDataTree) AddParameter(host string, port int, path string, name string, paramType string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	node := t.findNode(host, port, path)
+	if node == nil {
+		return
+	}
+	// 重複チェック
+	for _, p := range node.Parameters {
+		if p.Name == name {
+			return
+		}
+	}
+	node.Parameters = append(node.Parameters, Parameter{Name: name, Type: paramType})
+}
+
 // AddFinding はエンドポイントノードに finding を追加する。
 // ノードが見つからない場合は何もしない。
 func (t *AttackDataTree) AddFinding(host string, port int, path string, finding Finding) {
@@ -795,31 +821,38 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 		}
 
 		if node.isHTTP() {
-			// vhost + endpoint ステータス表示
 			sb.WriteString("\n")
-			hasChildren := len(node.Children) > 0
-			vhostPrefix := childPrefix + "|-- "
-			if !hasChildren {
-				vhostPrefix = childPrefix + "+-- "
-			}
-			fmt.Fprintf(sb, "%svhost %s\n", vhostPrefix, statusIcon(node.VhostDiscov))
-
-			// endpoint ノードのステータス（ルートレベル）— 新形式で表示
 			hasRootTasks := node.EndpointEnum != StatusNone
-			if hasRootTasks {
+			hasChildren := len(node.Children) > 0
+			hasVhost := node.VhostDiscov != StatusNone
+
+			// vhost_discovery タスクステータス（他タスクと同形式）
+			if hasVhost {
+				vhostIsLast := !hasRootTasks && !hasChildren
+				vhostPrefix := childPrefix + "|-- "
+				if vhostIsLast {
+					vhostPrefix = childPrefix + "+-- "
+				}
+				fmt.Fprintf(sb, "%s%s\n", vhostPrefix, taskStatusLine("vhost_discovery", node.VhostDiscov))
+			}
+
+			// ルート "/" ノード（ポートノードのタスク・パラメータ・ファインディングを表示）
+			hasRootData := hasRootTasks || len(node.Parameters) > 0 || len(node.Findings) > 0
+			if hasRootData {
 				rootPrefix := childPrefix + "|-- "
 				rootChildPrefix := childPrefix + "|   "
 				if !hasChildren {
 					rootPrefix = childPrefix + "+-- "
 					rootChildPrefix = childPrefix + "    "
 				}
-				// ルートを仮の endpoint ノードとしてレンダリング
 				rootNode := &AttackDataNode{
 					Path:         "/",
 					EndpointEnum: node.EndpointEnum,
 					ParamFuzz:    node.ParamFuzz,
 					ValueFuzz:    node.ValueFuzz,
 					Profiling:    node.Profiling,
+					Parameters:   node.Parameters,
+					Findings:     node.Findings,
 				}
 				renderEndpointNode(sb, rootNode, rootPrefix, rootChildPrefix)
 			}
@@ -863,8 +896,8 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 		}
 	}
 
-	// findings + children + taskLines の合計で最終要素を判定
-	totalItems := len(taskLines) + len(node.Findings) + len(node.Children)
+	// parameters + findings + children + taskLines の合計で最終要素を判定
+	totalItems := len(taskLines) + len(node.Parameters) + len(node.Findings) + len(node.Children)
 	itemIdx := 0
 
 	for _, line := range taskLines {
@@ -875,6 +908,16 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 			tp = childPrefix + "+-- "
 		}
 		fmt.Fprintf(sb, "%s%s\n", tp, line)
+	}
+
+	for _, p := range node.Parameters {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		pp := childPrefix + "|-- "
+		if isLast {
+			pp = childPrefix + "+-- "
+		}
+		fmt.Fprintf(sb, "%sparam: %s (%s)\n", pp, p.Name, p.Type)
 	}
 
 	for _, f := range node.Findings {
@@ -1331,6 +1374,7 @@ type AttackDataNodeDTO struct {
 	Profiling    AttackDataStatus    `json:"profiling"`
 	VhostDiscov  AttackDataStatus    `json:"vhost_discovery"`
 	Findings     []Finding           `json:"findings,omitempty"`
+	Parameters   []Parameter         `json:"parameters,omitempty"`
 	Checklist    *ServiceChecklist   `json:"checklist,omitempty"`
 	SpawnCount   int                 `json:"spawn_count"`
 	Children     []AttackDataNodeDTO `json:"children,omitempty"`
@@ -1395,6 +1439,7 @@ func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
 		Profiling:    node.Profiling,
 		VhostDiscov:  node.VhostDiscov,
 		Findings:     node.Findings,
+		Parameters:   node.Parameters,
 		Checklist:    node.Checklist,
 		SpawnCount:   node.SpawnCount,
 	}
@@ -1419,6 +1464,7 @@ func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
 		Profiling:    resetInProgress(dto.Profiling),
 		VhostDiscov:  resetInProgress(dto.VhostDiscov),
 		Findings:     dto.Findings,
+		Parameters:   dto.Parameters,
 		Checklist:    dto.Checklist,
 		SpawnCount:   dto.SpawnCount,
 	}
