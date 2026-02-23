@@ -10,6 +10,7 @@ import (
 	"github.com/0x6d61/pentecter/internal/brain"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/tools"
+	"github.com/0x6d61/pentecter/internal/tools/webfuzz"
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
 
@@ -26,6 +27,13 @@ type SmartSubAgent struct {
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
 func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, attackData *AttackDataTree, targetHost string, memDir string) *SmartSubAgent {
+	// webfuzz 内部ツールを CommandRunner に登録
+	var tree webfuzz.TreeUpdater
+	if attackData != nil {
+		tree = &webfuzzTreeAdapter{tree: attackData}
+	}
+	runner.RegisterInternalTool("webfuzz", webfuzz.NewWebfuzzTool(tree, targetHost))
+
 	return &SmartSubAgent{
 		br:         br,
 		runner:     runner,

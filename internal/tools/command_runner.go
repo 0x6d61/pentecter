@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type CommandRunner struct {
 	blacklist     *Blacklist
 	store         *LogStore
 	autoApprove   bool // グローバル自動承認（true: 未登録ツールも自動実行）
+	itMu          sync.RWMutex // internalTools の並行アクセス保護
 	internalTools map[string]InternalTool
 }
 
@@ -39,8 +41,11 @@ func NewCommandRunner(registry *Registry, blacklist *Blacklist, store *LogStore)
 
 // RegisterInternalTool は内部ツールを登録する。
 // 登録された binary 名のコマンドは sh -c を経由せず、InternalTool.Execute() で実行される。
+// 同名のツールが既に登録されている場合は上書きする（SubAgent ごとに tree/host が異なるため意図的）。
 func (r *CommandRunner) RegisterInternalTool(name string, tool InternalTool) {
+	r.itMu.Lock()
 	r.internalTools[name] = tool
+	r.itMu.Unlock()
 }
 
 // Run はコマンドを実行する。
@@ -140,7 +145,10 @@ func (r *CommandRunner) execute(
 	useDocker bool,
 ) (<-chan OutputLine, <-chan *ToolResult) {
 	// 内部ツール分岐
-	if tool, ok := r.internalTools[binary]; ok {
+	r.itMu.RLock()
+	tool, isInternal := r.internalTools[binary]
+	r.itMu.RUnlock()
+	if isInternal {
 		return r.executeInternal(ctx, tool, originalCommand, binary, args)
 	}
 
@@ -251,6 +259,7 @@ func (r *CommandRunner) execute(
 
 // executeInternal は内部ツールを Go 内部で実行する。
 // sh -c を経由せず InternalTool.Execute() を直接呼ぶ。
+// 出力は中間チャネルで傍受し、Truncated フィールドに実際の出力を格納する。
 func (r *CommandRunner) executeInternal(
 	ctx context.Context,
 	tool InternalTool,
@@ -267,16 +276,49 @@ func (r *CommandRunner) executeInternal(
 		startedAt := time.Now()
 		id := MakeID(binary, originalCommand, startedAt)
 
-		exitCode, runErr := tool.Execute(ctx, args, linesCh)
+		// 中間チャネルで出力を傍受し、Truncated を構築する
+		internalCh := make(chan OutputLine, 256)
+		var rawLines []OutputLine
 
-		// lineCh から rawLines を再構築する必要はない — lineCh は Execute() 内で書き込まれている
-		// ここでは TUI 向けのサマリーのみ ToolResult に格納する
+		var fwdWg sync.WaitGroup
+		fwdWg.Add(1)
+		go func() {
+			defer fwdWg.Done()
+			for line := range internalCh {
+				rawLines = append(rawLines, line)
+				select {
+				case linesCh <- line:
+				case <-ctx.Done():
+					// コンテキストキャンセル後は残りを収集のみ（転送しない）
+					for rem := range internalCh {
+						rawLines = append(rawLines, rem)
+					}
+					return
+				}
+			}
+		}()
+
+		exitCode, runErr := tool.Execute(ctx, args, internalCh)
+		close(internalCh)
+		fwdWg.Wait()
+
+		// 実際の出力から Truncated を構築（Brain が次ターンで参照する）
+		rawTextLines := make([]string, len(rawLines))
+		for i, l := range rawLines {
+			rawTextLines[i] = l.Content
+		}
+		truncated := Truncate(rawTextLines, DefaultHeadTailConfig)
+
+		entities := ExtractEntities(rawTextLines)
+
 		res := &ToolResult{
 			ID:         id,
 			ToolName:   binary,
 			Args:       args,
 			ExitCode:   exitCode,
-			Truncated:  fmt.Sprintf("[internal tool: %s]", binary),
+			RawLines:   rawLines,
+			Truncated:  truncated,
+			Entities:   entities,
 			StartedAt:  startedAt,
 			FinishedAt: time.Now(),
 			Err:        runErr,

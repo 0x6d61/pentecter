@@ -40,6 +40,30 @@ services:
       retries: 10
       start_period: 30s
 
+  # VulnBoard: 意図的に脆弱な Flask 掲示板アプリ（ペンテスト練習用）
+  # OS Command Injection, SQL Injection, XSS, SSTI, IDOR, Path Traversal 等を含む。
+  vulnboard: # nosemgrep: yaml.docker-compose.security.no-new-privileges.no-new-privileges, yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
+    build:
+      context: ./vulnboard
+    container_name: pentecter-vulnboard
+    hostname: vulnboard
+    init: true
+    ports:
+      - "9080:80"     # HTTP (Flask — 脆弱な掲示板)
+    networks:
+      - pentecter-testnet
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
 networks:
   pentecter-testnet:
     driver: bridge

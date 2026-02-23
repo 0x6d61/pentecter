@@ -278,6 +278,6 @@ func pentestTLSConfig() *tls.Config {
 	// nosemgrep: problem-based-packs.insecure-transport.go-stdlib.bypass-tls-verification.bypass-tls-verification
 	return &tls.Config{
 		InsecureSkipVerify: true,             // #nosec G402 -- pentest tool: must connect to targets with self-signed certs
-		MinVersion:         tls.VersionTLS13, // nosemgrep: go.lang.security.audit.crypto.missing-ssl-minversion.missing-ssl-minversion
+		MinVersion:         tls.VersionTLS12, // nosemgrep: go.lang.security.audit.crypto.missing-ssl-minversion.missing-ssl-minversion
 	}
 }
