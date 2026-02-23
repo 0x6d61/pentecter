@@ -22,10 +22,11 @@ type SmartSubAgent struct {
 	events     chan<- Event
 	attackData *AttackDataTree
 	targetHost string
+	memDir     string // ffuf -o 出力先（空 = EnsureFfufOutput 無効）
 }
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
-func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, attackData *AttackDataTree, targetHost string) *SmartSubAgent {
+func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, attackData *AttackDataTree, targetHost string, memDir string) *SmartSubAgent {
 	return &SmartSubAgent{
 		br:         br,
 		runner:     runner,
@@ -33,6 +34,7 @@ func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.M
 		events:     events,
 		attackData: attackData,
 		targetHost: targetHost,
+		memDir:     memDir,
 	}
 }
 
@@ -74,10 +76,10 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		task.TurnCount = turn
 
-		// AttackDataTree の intel を取得（nil チェック済み）
+		// AttackDataTree の intel を取得（SubAgent 用: [BACKGROUND] セクション除外）
 		var reconQueue string
 		if sa.attackData != nil {
-			reconQueue = sa.attackData.RenderIntel()
+			reconQueue = sa.attackData.RenderIntelForSubAgent()
 		}
 
 		// CommandHistory を構築（直近の履歴要約）
@@ -123,6 +125,7 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 		switch action.Action {
 		case schema.ActionRun:
 			cmd := EnsureFfufSilent(action.Command)
+			cmd = EnsureFfufOutput(cmd, sa.memDir, sa.targetHost)
 			lastCommand = cmd
 			linesCh, resultCh := sa.runner.ForceRun(ctx, cmd)
 
@@ -170,6 +173,14 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 			}
 
 		case schema.ActionComplete:
+			// Pending タスクが残っている場合は complete を拒否してループ継続
+			if sa.attackData != nil && sa.attackData.HasPending() {
+				sa.emitLog(task, SourceSystem,
+					fmt.Sprintf("SmartSubAgent %s: complete rejected — %d pending tasks remain",
+						task.ID, sa.attackData.CountPending()))
+				lastOutput = fmt.Sprintf("Cannot complete: %d pending tasks remain. Check RECON INTEL and continue working.", sa.attackData.CountPending())
+				continue
+			}
 			task.Status = TaskStatusCompleted
 			task.CompletedAt = time.Now()
 			task.Complete()
@@ -181,9 +192,13 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 			// Thought は既にログ済み。ループ継続。
 
 		default:
-			task.AppendOutput("Unsupported action in SubAgent: " + string(action.Action))
+			// SubAgent は run/think/memory/complete のみサポート。
+			// wait 等の unsupported action は Brain にフィードバックしてリトライさせる。
+			msg := fmt.Sprintf("Action %q is not available in SubAgent. Use run/think/memory/complete only.", action.Action)
+			task.AppendOutput(msg)
 			sa.emitLog(task, SourceSystem,
 				fmt.Sprintf("SmartSubAgent %s: unsupported action %q", task.ID, action.Action))
+			lastOutput = msg
 		}
 	}
 

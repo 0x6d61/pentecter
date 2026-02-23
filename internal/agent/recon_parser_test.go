@@ -2,6 +2,7 @@ package agent
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -223,26 +224,28 @@ func TestParseFfufJSON_RecursiveChildrenStayPending(t *testing.T) {
 		t.Errorf("/api EndpointEnum = %d, want StatusComplete", apiNode.EndpointEnum)
 	}
 
-	// /api/v1 endpoint_enum should stay pending (HTTPAgent processes each directory separately)
+	// /api/v1 (status 301) → EndpointEnum=Pending (directory), ParamFuzz/Profiling=None (redirect)
 	v1Node := apiNode.Children[0]
 	if v1Node.EndpointEnum != StatusPending {
 		t.Errorf("/api/v1 EndpointEnum = %d, want StatusPending", v1Node.EndpointEnum)
 	}
+	if v1Node.ParamFuzz != StatusNone {
+		t.Errorf("/api/v1 ParamFuzz = %d, want StatusNone (status 301)", v1Node.ParamFuzz)
+	}
+	if v1Node.Profiling != StatusNone {
+		t.Errorf("/api/v1 Profiling = %d, want StatusNone (status 301)", v1Node.Profiling)
+	}
 
-	// /api/v1/users endpoint_enum should stay pending (HTTPAgent processes each directory separately)
+	// /api/v1/users (status 200) → full pending
 	usersNode := v1Node.Children[0]
 	if usersNode.EndpointEnum != StatusPending {
 		t.Errorf("/api/v1/users EndpointEnum = %d, want StatusPending", usersNode.EndpointEnum)
 	}
-
-	// ParamFuzz and Profiling should still be Pending on all children
-	for _, node := range []*AttackDataNode{v1Node, usersNode} {
-		if node.ParamFuzz != StatusPending {
-			t.Errorf("%s ParamFuzz = %d, want StatusPending", node.Path, node.ParamFuzz)
-		}
-		if node.Profiling != StatusPending {
-			t.Errorf("%s Profiling = %d, want StatusPending", node.Path, node.Profiling)
-		}
+	if usersNode.ParamFuzz != StatusPending {
+		t.Errorf("/api/v1/users ParamFuzz = %d, want StatusPending (status 200)", usersNode.ParamFuzz)
+	}
+	if usersNode.Profiling != StatusPending {
+		t.Errorf("/api/v1/users Profiling = %d, want StatusPending (status 200)", usersNode.Profiling)
 	}
 }
 
@@ -745,5 +748,171 @@ func TestExtractFfufOutputPath(t *testing.T) {
 				t.Errorf("ExtractFfufOutputPath(%q) = %q, want %q", tt.command, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- EnsureFfufOutput テスト ---
+
+func TestEnsureFfufOutput_InjectsOutputFlag(t *testing.T) {
+	cmd := `ffuf -w /usr/share/wordlists/dirb/common.txt -u http://10.10.11.100/FUZZ -of json`
+	got := EnsureFfufOutput(cmd, "/tmp/memory", "10.10.11.100")
+
+	// -o フラグが追加される
+	outPath := ExtractFfufOutputPath(got)
+	if outPath == "" {
+		t.Fatal("expected -o flag to be injected")
+	}
+	// memory/<host>/raw/ 以下のパスになる
+	if !strings.Contains(outPath, "10.10.11.100") {
+		t.Errorf("output path should contain host, got: %s", outPath)
+	}
+	if !strings.Contains(outPath, "raw") {
+		t.Errorf("output path should contain 'raw' dir, got: %s", outPath)
+	}
+	if !strings.HasSuffix(outPath, ".json") {
+		t.Errorf("output path should end with .json, got: %s", outPath)
+	}
+}
+
+func TestEnsureFfufOutput_ReplacesExistingOutput(t *testing.T) {
+	cmd := `ffuf -w wordlist -u http://10.10.11.100/FUZZ -o /tmp/old.json -of json`
+	got := EnsureFfufOutput(cmd, "/tmp/memory", "10.10.11.100")
+
+	outPath := ExtractFfufOutputPath(got)
+	// /tmp/old.json ではなく memory 以下に差し替えられる
+	if outPath == "/tmp/old.json" {
+		t.Error("should replace existing -o path with memory dir path")
+	}
+	if !strings.Contains(outPath, "10.10.11.100") {
+		t.Errorf("output path should contain host, got: %s", outPath)
+	}
+}
+
+func TestEnsureFfufOutput_NotFfuf(t *testing.T) {
+	cmd := `nmap -sV 10.10.11.100`
+	got := EnsureFfufOutput(cmd, "/tmp/memory", "10.10.11.100")
+	if got != cmd {
+		t.Errorf("non-ffuf command should be unchanged, got: %q", got)
+	}
+}
+
+func TestEnsureFfufOutput_EmptyMemDir(t *testing.T) {
+	cmd := `ffuf -w wordlist -u http://10.10.11.100/FUZZ -of json`
+	got := EnsureFfufOutput(cmd, "", "10.10.11.100")
+	// memDir が空なら変更しない
+	if got != cmd {
+		t.Errorf("empty memDir should leave command unchanged, got: %q", got)
+	}
+}
+
+// --- ParseFfufJSON ステータスコードフィルタリング テスト ---
+
+func TestParseFfufJSON_StatusFiltering(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// status 200 と status 403 が混在するffuf結果
+	jsonData := `{"commandline":"ffuf -u http://10.10.11.100/FUZZ -of json","results":[
+		{"input":{"FUZZ":"api"},"status":200,"length":1234,"url":"http://10.10.11.100/api"},
+		{"input":{"FUZZ":".htaccess"},"status":403,"length":277,"url":"http://10.10.11.100/.htaccess"},
+		{"input":{"FUZZ":".htpasswd"},"status":403,"length":277,"url":"http://10.10.11.100/.htpasswd"},
+		{"input":{"FUZZ":"admin"},"status":301,"length":0,"url":"http://10.10.11.100/admin"},
+		{"input":{"FUZZ":"login"},"status":200,"length":4532,"url":"http://10.10.11.100/login"}
+	]}`
+
+	err := ParseFfufJSON(jsonData, tree, "10.10.11.100", 80, "/", TaskEndpointEnum)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	portNode := tree.Ports[0]
+	if len(portNode.Children) != 5 {
+		t.Fatalf("Children count = %d, want 5", len(portNode.Children))
+	}
+
+	// /api (status 200) → full pending
+	api := portNode.Children[0]
+	if api.Path != "/api" {
+		t.Errorf("child 0 path = %q, want /api", api.Path)
+	}
+	if api.ParamFuzz != StatusPending {
+		t.Errorf("/api ParamFuzz = %d, want StatusPending", api.ParamFuzz)
+	}
+	if api.Profiling != StatusPending {
+		t.Errorf("/api Profiling = %d, want StatusPending", api.Profiling)
+	}
+
+	// /.htaccess (status 403) → all StatusNone
+	htaccess := portNode.Children[1]
+	if htaccess.Path != "/.htaccess" {
+		t.Errorf("child 1 path = %q, want /.htaccess", htaccess.Path)
+	}
+	if htaccess.EndpointEnum != StatusNone {
+		t.Errorf("/.htaccess EndpointEnum = %d, want StatusNone", htaccess.EndpointEnum)
+	}
+	if htaccess.ParamFuzz != StatusNone {
+		t.Errorf("/.htaccess ParamFuzz = %d, want StatusNone", htaccess.ParamFuzz)
+	}
+	if htaccess.Profiling != StatusNone {
+		t.Errorf("/.htaccess Profiling = %d, want StatusNone", htaccess.Profiling)
+	}
+
+	// /.htpasswd (status 403) → all StatusNone
+	htpasswd := portNode.Children[2]
+	if htpasswd.ParamFuzz != StatusNone {
+		t.Errorf("/.htpasswd ParamFuzz = %d, want StatusNone", htpasswd.ParamFuzz)
+	}
+
+	// /admin (status 301) → EndpointEnum=Pending, ParamFuzz/Profiling=StatusNone
+	admin := portNode.Children[3]
+	if admin.Path != "/admin" {
+		t.Errorf("child 3 path = %q, want /admin", admin.Path)
+	}
+	if admin.EndpointEnum != StatusPending {
+		t.Errorf("/admin EndpointEnum = %d, want StatusPending (301 redirect = directory)", admin.EndpointEnum)
+	}
+	if admin.ParamFuzz != StatusNone {
+		t.Errorf("/admin ParamFuzz = %d, want StatusNone for status 301", admin.ParamFuzz)
+	}
+	if admin.Profiling != StatusNone {
+		t.Errorf("/admin Profiling = %d, want StatusNone for status 301", admin.Profiling)
+	}
+
+	// /login (status 200) → full pending
+	login := portNode.Children[4]
+	if login.Path != "/login" {
+		t.Errorf("child 4 path = %q, want /login", login.Path)
+	}
+	if login.ParamFuzz != StatusPending {
+		t.Errorf("/login ParamFuzz = %d, want StatusPending", login.ParamFuzz)
+	}
+	if login.Profiling != StatusPending {
+		t.Errorf("/login Profiling = %d, want StatusPending", login.Profiling)
+	}
+}
+
+func TestParseFfufJSON_StatusFiltering_ReducesPendingCount(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// 全て 403 → ParamFuzz/Profiling の pending は 0 になるべき
+	jsonData := `{"commandline":"ffuf -u http://10.10.11.100/FUZZ -of json","results":[
+		{"input":{"FUZZ":".htaccess"},"status":403,"length":277,"url":"http://10.10.11.100/.htaccess"},
+		{"input":{"FUZZ":".htpasswd"},"status":403,"length":277,"url":"http://10.10.11.100/.htpasswd"}
+	]}`
+
+	err := ParseFfufJSON(jsonData, tree, "10.10.11.100", 80, "/", TaskEndpointEnum)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 子ノードの ParamFuzz/Profiling は全て StatusNone
+	for _, child := range tree.Ports[0].Children {
+		if child.ParamFuzz != StatusNone {
+			t.Errorf("%s ParamFuzz = %d, want StatusNone", child.Path, child.ParamFuzz)
+		}
+		if child.Profiling != StatusNone {
+			t.Errorf("%s Profiling = %d, want StatusNone", child.Path, child.Profiling)
+		}
 	}
 }

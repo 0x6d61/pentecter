@@ -298,15 +298,18 @@ func TestRenderTree(t *testing.T) {
 
 	output := tree.RenderTree()
 
-	// 基本的な内容が含まれるか確認
+	// 基本的な内容が含まれるか確認（新しい詳細表示形式）
 	checks := []string{
 		"10.10.11.100",
 		"22/ssh OpenSSH 8.2",
 		"80/http Apache 2.4.49",
 		"/api",
 		"/login",
-		"[x]",
-		"[ ]",
+		"endpoint_enum: complete",  // /login の endpoint_enum
+		"param_fuzz: complete",     // /login の param_fuzz
+		"profiling: complete",      // /login の profiling
+		"endpoint_enum: pending",   // /api の endpoint_enum
+		"param_fuzz: pending",      // /api の param_fuzz
 		"Progress:",
 	}
 	for _, check := range checks {
@@ -554,9 +557,9 @@ func TestRenderTree_WithActiveTasks(t *testing.T) {
 
 	output := tree.RenderTree()
 
-	// "[>]" は StatusInProgress の表示
-	if !strings.Contains(output, "[>]") {
-		t.Errorf("RenderTree should contain '[>]' for active task\noutput:\n%s", output)
+	// "running" は StatusInProgress の表示（新形式）
+	if !strings.Contains(output, "running") {
+		t.Errorf("RenderTree should contain 'running' for active task\noutput:\n%s", output)
 	}
 
 	// RenderIntel で "HTTPAgent active" が含まれること
@@ -1649,5 +1652,301 @@ func TestAddEndpoint_MaxDepth_Default(t *testing.T) {
 	tree := NewAttackDataTree("10.10.11.100", 2, 0) // 0 → default 3
 	if tree.MaxDepth != 3 {
 		t.Errorf("MaxDepth = %d, want 3 (default)", tree.MaxDepth)
+	}
+}
+
+// --- AddEndpointWithStatus テスト ---
+
+func TestAddEndpointWithStatus_200_FullPending(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusPending {
+		t.Errorf("EndpointEnum = %d, want StatusPending for status 200", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusPending {
+		t.Errorf("ParamFuzz = %d, want StatusPending for status 200", child.ParamFuzz)
+	}
+	if child.Profiling != StatusPending {
+		t.Errorf("Profiling = %d, want StatusPending for status 200", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_403_AllNone(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/.htaccess", 403)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusNone {
+		t.Errorf("EndpointEnum = %d, want StatusNone for status 403", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusNone {
+		t.Errorf("ParamFuzz = %d, want StatusNone for status 403", child.ParamFuzz)
+	}
+	if child.Profiling != StatusNone {
+		t.Errorf("Profiling = %d, want StatusNone for status 403", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_401_AllNone(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/admin", 401)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusNone {
+		t.Errorf("EndpointEnum = %d, want StatusNone for status 401", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusNone {
+		t.Errorf("ParamFuzz = %d, want StatusNone for status 401", child.ParamFuzz)
+	}
+	if child.Profiling != StatusNone {
+		t.Errorf("Profiling = %d, want StatusNone for status 401", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_301_EndpointEnumOnly(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// 301 redirect typically indicates a directory → EndpointEnum should be Pending
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 301)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusPending {
+		t.Errorf("EndpointEnum = %d, want StatusPending for status 301 (directory redirect)", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusNone {
+		t.Errorf("ParamFuzz = %d, want StatusNone for status 301", child.ParamFuzz)
+	}
+	if child.Profiling != StatusNone {
+		t.Errorf("Profiling = %d, want StatusNone for status 301", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_302_EndpointEnumOnly(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/old-path", 302)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusPending {
+		t.Errorf("EndpointEnum = %d, want StatusPending for status 302", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusNone {
+		t.Errorf("ParamFuzz = %d, want StatusNone for status 302", child.ParamFuzz)
+	}
+	if child.Profiling != StatusNone {
+		t.Errorf("Profiling = %d, want StatusNone for status 302", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_0_DefaultBehavior(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// httpStatus=0 は「不明」→ 従来通り全 Pending（AddEndpoint と同じ動作）
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 0)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusPending {
+		t.Errorf("EndpointEnum = %d, want StatusPending for httpStatus=0", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusPending {
+		t.Errorf("ParamFuzz = %d, want StatusPending for httpStatus=0", child.ParamFuzz)
+	}
+	if child.Profiling != StatusPending {
+		t.Errorf("Profiling = %d, want StatusPending for httpStatus=0", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_FileExtension_Overrides(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// ファイル拡張子あり + status 200 → EndpointEnum=None, ParamFuzz/Profiling=Pending
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/login.php", 200)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusNone {
+		t.Errorf("EndpointEnum = %d, want StatusNone for file with extension", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusPending {
+		t.Errorf("ParamFuzz = %d, want StatusPending for status 200 file", child.ParamFuzz)
+	}
+	if child.Profiling != StatusPending {
+		t.Errorf("Profiling = %d, want StatusPending for status 200 file", child.Profiling)
+	}
+}
+
+func TestAddEndpointWithStatus_500_AllNone(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/error", 500)
+
+	child := tree.Ports[0].Children[0]
+	if child.EndpointEnum != StatusNone {
+		t.Errorf("EndpointEnum = %d, want StatusNone for status 500", child.EndpointEnum)
+	}
+	if child.ParamFuzz != StatusNone {
+		t.Errorf("ParamFuzz = %d, want StatusNone for status 500", child.ParamFuzz)
+	}
+	if child.Profiling != StatusNone {
+		t.Errorf("Profiling = %d, want StatusNone for status 500", child.Profiling)
+	}
+}
+
+// --- 静的ファイル拡張子 ParamFuzz スキップ テスト ---
+
+func TestAddEndpointWithStatus_StaticFile_SkipsParamFuzz(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	staticFiles := []string{"/style.css", "/app.js", "/logo.png", "/bg.jpg", "/favicon.ico", "/icon.svg", "/font.woff"}
+	for _, f := range staticFiles {
+		tree.AddEndpointWithStatus("10.10.11.100", 80, "/", f, 200)
+	}
+
+	for i, child := range tree.Ports[0].Children {
+		if child.ParamFuzz != StatusNone {
+			t.Errorf("child[%d] %q: ParamFuzz = %d, want StatusNone (static file)", i, child.Path, child.ParamFuzz)
+		}
+		if child.Profiling != StatusNone {
+			t.Errorf("child[%d] %q: Profiling = %d, want StatusNone (static file)", i, child.Path, child.Profiling)
+		}
+	}
+}
+
+func TestAddEndpointWithStatus_DynamicFile_KeepsParamFuzz(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// .php, .jsp, .aspx 等は動的ファイル → ParamFuzz=Pending のまま
+	dynamicFiles := []string{"/login.php", "/api.jsp", "/admin.aspx", "/search.py"}
+	for _, f := range dynamicFiles {
+		tree.AddEndpointWithStatus("10.10.11.100", 80, "/", f, 200)
+	}
+
+	for i, child := range tree.Ports[0].Children {
+		if child.ParamFuzz != StatusPending {
+			t.Errorf("child[%d] %q: ParamFuzz = %d, want StatusPending (dynamic file)", i, child.Path, child.ParamFuzz)
+		}
+	}
+}
+
+func TestAddEndpointWithStatus_DirectoryNoExt_KeepsParamFuzz(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// 拡張子なしディレクトリ → ParamFuzz=Pending
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/admin", 200)
+
+	for _, child := range tree.Ports[0].Children {
+		if child.ParamFuzz != StatusPending {
+			t.Errorf("%q: ParamFuzz = %d, want StatusPending", child.Path, child.ParamFuzz)
+		}
+	}
+}
+
+// --- UI 表示形式テスト ---
+
+func TestRenderEndpointNode_DetailedFormat(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache 2.4.49")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/admin")
+	tree.CompleteTask("10.10.11.100", 80, "/admin", TaskEndpointEnum)
+
+	output := tree.RenderTree()
+
+	// 新しい表示形式: 各タスクが独立した行で表示される
+	checks := []string{
+		"/admin",
+		"endpoint_enum: complete",
+		"param_fuzz: pending",
+		"profiling: pending",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderEndpointNode_StatusNone_Hidden(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	// status 403 → 全て StatusNone
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/.htaccess", 403)
+
+	output := tree.RenderTree()
+
+	// .htaccess はパス名のみ表示され、タスク行がない
+	if !strings.Contains(output, "/.htaccess") {
+		t.Errorf("should show .htaccess path\noutput:\n%s", output)
+	}
+	// .htaccess の直後にタスク行が続かない（StatusNone は非表示）
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, ".htaccess") {
+			// 次の行が endpoint_enum/param_fuzz/profiling ならNG
+			if i+1 < len(lines) {
+				next := lines[i+1]
+				if strings.Contains(next, "endpoint_enum") || strings.Contains(next, "param_fuzz") || strings.Contains(next, "profiling") {
+					t.Errorf(".htaccess should not have task lines, next line: %q\noutput:\n%s", next, output)
+				}
+			}
+			break
+		}
+	}
+}
+
+// --- AddEndpoint 重複チェック テスト ---
+
+func TestAddEndpoint_DuplicatePath_NoDuplicate(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// 同じパスを2回追加
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	if len(tree.Ports[0].Children) != 1 {
+		t.Errorf("Children count = %d, want 1 (no duplicates)", len(tree.Ports[0].Children))
+	}
+}
+
+func TestAddEndpointWithStatus_DuplicatePath_NoDuplicate(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// 同じパスを異なるステータスで2回追加 → 1つだけ存在すべき
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 301)
+
+	if len(tree.Ports[0].Children) != 1 {
+		t.Errorf("Children count = %d, want 1 (no duplicates)", len(tree.Ports[0].Children))
+	}
+}
+
+func TestAddEndpoint_DuplicateMultiplePaths(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// 3つの異なるパスを追加、うち /api を2回
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+
+	if len(tree.Ports[0].Children) != 2 {
+		t.Errorf("Children count = %d, want 2 (/api + /login)", len(tree.Ports[0].Children))
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // --- nmap XML パーサー ---
@@ -165,7 +166,7 @@ func ParseFfufJSON(jsonData string, tree *AttackDataTree, host string, port int,
 			if parent == "." {
 				parent = "/"
 			}
-			tree.AddEndpoint(host, port, parent, newPath)
+			tree.AddEndpointWithStatus(host, port, parent, newPath, r.Status)
 		}
 		// 親のenum完了（結果あり = 列挙できた）
 		tree.CompleteTask(host, port, parentPath, TaskEndpointEnum)
@@ -350,6 +351,33 @@ func ExtractFfufOutputPath(command string) string {
 		}
 	}
 	return ""
+}
+
+// EnsureFfufOutput は ffuf コマンドの -o フラグを memory ディレクトリ以下に強制する。
+// -o がない場合は追加し、既にある場合は memory 以下のパスに差し替える。
+// memDir が空の場合は何もしない。
+func EnsureFfufOutput(command string, memDir string, host string) string {
+	if !strings.Contains(command, "ffuf") || memDir == "" {
+		return command
+	}
+
+	// 出力パスを生成: memDir/<host>/raw/ffuf_<timestamp>.json
+	outPath := fmt.Sprintf("%s/%s/raw/ffuf_%s.json",
+		strings.TrimRight(memDir, "/"),
+		host,
+		time.Now().Format("20060102-150405"))
+
+	// 既に -o がある場合は差し替え
+	parts := strings.Fields(command)
+	for i, p := range parts {
+		if p == "-o" && i+1 < len(parts) {
+			parts[i+1] = outPath
+			return strings.Join(parts, " ")
+		}
+	}
+
+	// -o がない場合は追加
+	return strings.Replace(command, "ffuf ", fmt.Sprintf("ffuf -o %s ", outPath), 1)
 }
 
 // EnsureFfufSilent は ffuf コマンドに -s フラグを自動付与する。
