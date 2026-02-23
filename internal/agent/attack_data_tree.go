@@ -19,6 +19,8 @@ const (
 	StatusInProgress
 	// StatusComplete は完了
 	StatusComplete
+	// StatusSkipped はリスポーン制限等で意図的にスキップされた
+	StatusSkipped
 )
 
 // ReconTaskType は偵察タスクの種類
@@ -90,6 +92,7 @@ type AttackDataNode struct {
 
 	Findings []Finding
 	Checklist *ServiceChecklist
+	SpawnCount int // SubAgent がこのポートに対して spawn された回数
 
 	Children []*AttackDataNode
 }
@@ -145,6 +148,8 @@ func (n *AttackDataNode) countTasks() (pending, complete, total int) {
 			total++
 		case StatusComplete:
 			complete++
+			total++
+		case StatusSkipped:
 			total++
 		}
 	}
@@ -590,6 +595,31 @@ func nodeHasPendingChildren(node *AttackDataNode) bool {
 }
 
 // FindPortNode は指定ポート番号のノードを返す。見つからなければ nil。
+// SkipAllPendingChildren は指定ポートのノードとその子孫で Pending なタスクを StatusSkipped に変更する。
+// MaxRespawns に達した場合に呼ばれ、残りのタスクを意図的にスキップする。
+func (t *AttackDataTree) SkipAllPendingChildren(port int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			skipPendingRecursive(node)
+			return
+		}
+	}
+}
+
+// skipPendingRecursive はノードとその子孫で Pending なタスクを StatusSkipped に変更する。
+func skipPendingRecursive(node *AttackDataNode) {
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
+		if node.getAttackDataStatus(tt) == StatusPending {
+			node.setAttackDataStatus(tt, StatusSkipped)
+		}
+	}
+	for _, child := range node.Children {
+		skipPendingRecursive(child)
+	}
+}
+
 func (t *AttackDataTree) FindPortNode(port int) *AttackDataNode {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -658,6 +688,8 @@ func statusIcon(s AttackDataStatus) string {
 		return "[>]"
 	case StatusPending:
 		return "[ ]"
+	case StatusSkipped:
+		return "[-]"
 	default:
 		return ""
 	}
@@ -672,6 +704,8 @@ func statusLabel(s AttackDataStatus) string {
 		return "running"
 	case StatusPending:
 		return "pending"
+	case StatusSkipped:
+		return "skipped"
 	default:
 		return ""
 	}
@@ -959,7 +993,7 @@ func accumTaskProgressWithPath(tp *TaskProgress, status AttackDataStatus, path s
 		return
 	}
 	tp.Total++
-	if status == StatusComplete {
+	if status == StatusComplete || status == StatusSkipped {
 		tp.Done++
 	}
 	if status == StatusPending && len(tp.PendingPaths) < maxPendingPaths {
@@ -1255,6 +1289,7 @@ func (t *AttackDataTree) StartPortRecon(port *AttackDataNode) bool {
 			port.setAttackDataStatus(tt, StatusInProgress)
 		}
 	}
+	port.SpawnCount++
 	t.active++
 	return true
 }
@@ -1297,6 +1332,7 @@ type AttackDataNodeDTO struct {
 	VhostDiscov  AttackDataStatus    `json:"vhost_discovery"`
 	Findings     []Finding           `json:"findings,omitempty"`
 	Checklist    *ServiceChecklist   `json:"checklist,omitempty"`
+	SpawnCount   int                 `json:"spawn_count"`
 	Children     []AttackDataNodeDTO `json:"children,omitempty"`
 }
 
@@ -1360,6 +1396,7 @@ func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
 		VhostDiscov:  node.VhostDiscov,
 		Findings:     node.Findings,
 		Checklist:    node.Checklist,
+		SpawnCount:   node.SpawnCount,
 	}
 	for _, child := range node.Children {
 		dto.Children = append(dto.Children, nodeToDTO(child))
@@ -1383,6 +1420,7 @@ func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
 		VhostDiscov:  resetInProgress(dto.VhostDiscov),
 		Findings:     dto.Findings,
 		Checklist:    dto.Checklist,
+		SpawnCount:   dto.SpawnCount,
 	}
 	for _, childDTO := range dto.Children {
 		node.Children = append(node.Children, dtoToNode(childDTO))
