@@ -544,6 +544,142 @@ func TestRenderTree_WithFindings(t *testing.T) {
 	}
 }
 
+func TestRenderTree_WithParameters(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/login", 200)
+
+	tree.AddParameter("10.10.11.100", 80, "/login", "username", "query")
+	tree.AddParameter("10.10.11.100", 80, "/login", "password", "query")
+
+	output := tree.RenderTree()
+
+	checks := []string{
+		"/login",
+		"param: username (query)",
+		"param: password (query)",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderTree_WithParametersAndFindings(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+
+	tree.AddParameter("10.10.11.100", 80, "/api", "id", "query")
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param:    "id",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error",
+		Severity: "high",
+	})
+
+	output := tree.RenderTree()
+
+	checks := []string{
+		"param: id (query)",
+		`finding: param "id"`,
+		"sqli",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+
+	// param が finding より前に表示されること
+	paramIdx := strings.Index(output, "param: id")
+	findingIdx := strings.Index(output, "finding:")
+	if paramIdx >= findingIdx {
+		t.Errorf("param should appear before finding\noutput:\n%s", output)
+	}
+}
+
+func TestRenderTree_RootParamsAndFindings(t *testing.T) {
+	// ポートノードの "/" にパラメータと Finding があるとき
+	// renderNode の virtual "/" ノードに正しく渡されること
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// "/" にパラメータを追加（ポートノード = path ""）
+	tree.AddParameter("10.10.11.100", 80, "", "q", "query")
+	tree.AddFinding("10.10.11.100", 80, "", Finding{
+		Param:    "q",
+		Category: "sqli",
+		Evidence: "syntax error",
+		Severity: "high",
+	})
+
+	output := tree.RenderTree()
+	t.Logf("RenderTree output:\n%s", output)
+
+	checks := []string{
+		"/",
+		"param: q (query)",
+		`finding: param "q"`,
+		"sqli",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderTree_FullPipeline(t *testing.T) {
+	// webfuzz の全モードで検出されたデータが /attackdata で見えること
+	tree := NewAttackDataTree("10.10.11.100", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	// dir モード: endpoint 検出
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/login", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 301)
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+
+	// param モード: パラメータ検出
+	tree.AddParameter("10.10.11.100", 80, "/login", "user", "query")
+	tree.AddParameter("10.10.11.100", 80, "/login", "pass", "query")
+	tree.CompleteTask("10.10.11.100", 80, "/login", TaskParamFuzz)
+
+	// value モード: finding 検出
+	tree.AddFinding("10.10.11.100", 80, "/login", Finding{
+		Param:    "user",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error",
+		Severity: "high",
+	})
+
+	// vhost モード
+	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
+	tree.CompleteTask("10.10.11.100", 80, "", TaskVhostDiscov)
+
+	output := tree.RenderTree()
+	t.Logf("RenderTree output:\n%s", output)
+
+	checks := []string{
+		"80/http Apache",
+		"vhost_discovery: complete",
+		"/login",
+		"/api",
+		"param: user (query)",
+		"param: pass (query)",
+		`finding: param "user"`,
+		"sqli",
+		"[vhost] dev.example.com",
+		"endpoint_enum: complete", // port root "/"
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
 // --- RenderIntel active タスクカバレッジ ---
 
 func TestRenderTree_WithActiveTasks(t *testing.T) {

@@ -668,12 +668,56 @@ func TestShouldReport(t *testing.T) {
 	}
 }
 
-func TestExpandExtensions_NonDirMode(t *testing.T) {
-	words := []string{"admin", "test"}
-	// param モードでは extensions を展開しない
-	result := expandExtensions(words, "param", []string{".php"})
-	if len(result) != 2 {
-		t.Errorf("param mode should not expand extensions, got %d words", len(result))
+func TestRun_ParamMode_IgnoresExtensions(t *testing.T) {
+	// param モードでは Extensions が設定されていても展開しないことを確認
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "ok")
+	}))
+	defer ts.Close()
+
+	wl := writeWordlist(t, []string{"id", "name"})
+	opts := Options{
+		Mode:        "param",
+		URL:         ts.URL + "/search?FUZZ=test",
+		Wordlist:    wl,
+		Method:      "GET",
+		Threads:     1,
+		Timeout:     5 * time.Second,
+		Extensions:  []string{".php", ".html"}, // param モードでは無視される
+		MatchStatus: nil,                        // 全マッチ
+	}
+
+	var mu sync.Mutex
+	var hits []Hit
+	var lines []string
+	hitFn := func(h Hit) {
+		mu.Lock()
+		defer mu.Unlock()
+		hits = append(hits, h)
+	}
+	lineFn := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, s)
+	}
+
+	err := Run(context.Background(), opts, hitFn, lineFn)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	// param モードでは "id", "name" の2つのみ（拡張子展開なし）
+	if len(hits) != 2 {
+		t.Errorf("param mode: got %d hits, want 2 (extensions should be ignored)", len(hits))
+	}
+
+	// [DONE] メッセージに 2 requests と記載されること
+	mu.Lock()
+	defer mu.Unlock()
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, "2 requests") {
+		t.Errorf("last line = %q, want to contain '2 requests'", last)
 	}
 }
 

@@ -17,6 +17,8 @@ type TreeUpdater interface {
 	AddEndpointWithStatus(host string, port int, parentPath, newPath string, httpStatus int)
 	AddVhost(parentHost string, port int, vhostName string)
 	CompleteTask(host string, port int, path string, taskType int)
+	AddParameter(host string, port int, path string, name string, paramType string)
+	AddFinding(host string, port int, path string, param, category, evidence, severity string)
 }
 
 // WebfuzzTool は InternalTool を実装し、結果を AttackDataTree に直接書き込む。
@@ -67,9 +69,8 @@ func (w *WebfuzzTool) Execute(ctx context.Context, args []string, lineCh chan<- 
 			vhostName := hit.Input + "." + domain
 			w.tree.AddVhost(w.host, port, vhostName)
 		case "param":
-			// パラメーターファジングはタスク完了のみ
-			// TaskParamFuzz = 1 (agent パッケージの定数値)
-			w.tree.CompleteTask(w.host, port, parentPath, 1)
+			// ヒットしたパラメーター名をツリーに記録
+			w.tree.AddParameter(w.host, port, parentPath, hit.Input, "query")
 		}
 	}
 
@@ -87,11 +88,20 @@ func (w *WebfuzzTool) Execute(ctx context.Context, args []string, lineCh chan<- 
 		return 1, err
 	}
 
-	// dir モードの場合、列挙完了をマーク
-	if w.tree != nil && opts.Mode == "dir" {
+	// 各モードの列挙完了をマーク
+	if w.tree != nil {
 		port, parentPath := extractPortAndPath(opts.URL)
-		// TaskEndpointEnum = 0 (agent パッケージの定数値)
-		w.tree.CompleteTask(w.host, port, parentPath, 0)
+		switch opts.Mode {
+		case "dir":
+			// TaskEndpointEnum = 0 (agent パッケージの定数値)
+			w.tree.CompleteTask(w.host, port, parentPath, 0)
+		case "vhost":
+			// TaskVhostDiscov = 4 (agent パッケージの定数値)
+			w.tree.CompleteTask(w.host, port, parentPath, 4)
+		case "param":
+			// TaskParamFuzz = 1 (agent パッケージの定数値)
+			w.tree.CompleteTask(w.host, port, parentPath, 1)
+		}
 	}
 
 	return 0, nil

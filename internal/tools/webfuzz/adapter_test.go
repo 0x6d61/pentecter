@@ -16,10 +16,22 @@ import (
 
 // mockTreeUpdater は TreeUpdater のテスト用モック。
 type mockTreeUpdater struct {
-	mu        sync.Mutex
-	endpoints []endpointRecord
-	vhosts    []vhostRecord
-	completed []completeRecord
+	mu         sync.Mutex
+	endpoints  []endpointRecord
+	vhosts     []vhostRecord
+	completed  []completeRecord
+	parameters []parameterRecord
+	findings   []findingRecord
+}
+
+type parameterRecord struct {
+	host, path, name, paramType string
+	port                        int
+}
+
+type findingRecord struct {
+	host, path, param, category, evidence, severity string
+	port                                            int
 }
 
 type endpointRecord struct {
@@ -54,6 +66,18 @@ func (m *mockTreeUpdater) CompleteTask(host string, port int, path string, taskT
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completed = append(m.completed, completeRecord{host: host, port: port, path: path, taskType: taskType})
+}
+
+func (m *mockTreeUpdater) AddParameter(host string, port int, path string, name string, paramType string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.parameters = append(m.parameters, parameterRecord{host: host, port: port, path: path, name: name, paramType: paramType})
+}
+
+func (m *mockTreeUpdater) AddFinding(host string, port int, path string, param, category, evidence, severity string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.findings = append(m.findings, findingRecord{host: host, port: port, path: path, param: param, category: category, evidence: evidence, severity: severity})
 }
 
 func TestWebfuzzTool_Execute_DirMode(t *testing.T) {
@@ -382,6 +406,96 @@ func TestWebfuzzTool_Execute_ParamMode(t *testing.T) {
 	defer tree.mu.Unlock()
 	if len(tree.completed) == 0 {
 		t.Error("expected CompleteTask to be called for param mode")
+	}
+}
+
+func TestWebfuzzTool_Execute_VhostMode_CompletesTask(t *testing.T) {
+	// Bug 2: vhost モードで列挙完了後に CompleteTask(taskType=4=TaskVhostDiscov) が呼ばれることを確認
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "default")
+	}))
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "dev\n")
+
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 256)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"vhost", "-u", srv.URL, "-w", wordlist, "-H", "Host: FUZZ.example.com", "-fs", "99999", "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	// vhost モード完了で CompleteTask(taskType=4=TaskVhostDiscov) が呼ばれるべき
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	found := false
+	for _, c := range tree.completed {
+		if c.taskType == 4 { // TaskVhostDiscov
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected CompleteTask(taskType=4=TaskVhostDiscov) for vhost mode completion")
+	}
+}
+
+func TestWebfuzzTool_Execute_ParamMode_NoHits_CompletesTask(t *testing.T) {
+	// Bug 2 (related): param モードでヒットが0件でも CompleteTask が呼ばれることを確認
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	}))
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "id\nname\n")
+
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 256)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"param", "-u", srv.URL + "/page?FUZZ=test", "-w", wordlist, "-mc", "200", "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	// ヒット0件でも CompleteTask(taskType=1=TaskParamFuzz) が呼ばれるべき
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	found := false
+	for _, c := range tree.completed {
+		if c.taskType == 1 { // TaskParamFuzz
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected CompleteTask(taskType=1=TaskParamFuzz) for param mode completion even with 0 hits")
 	}
 }
 
