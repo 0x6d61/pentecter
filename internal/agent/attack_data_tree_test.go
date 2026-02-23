@@ -2188,3 +2188,117 @@ func TestRenderIntel_PendingPathsInline(t *testing.T) {
 		}
 	}
 }
+
+// === PortHasPendingChildren tests ===
+
+func TestPortHasPendingChildren_True(t *testing.T) {
+	// ポートに Pending 子タスクがある場合 true を返す
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 200)
+
+	// ポートレベルのタスクを Complete にする（SubAgent が MaxTurns で完了した想定）
+	node := tree.Ports[0]
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	node.SetAttackDataStatusForTest(TaskVhostDiscov, StatusComplete)
+
+	// 子ノードの param_fuzz は Pending のまま
+	if !tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren(80) = false, want true (child has pending tasks)")
+	}
+}
+
+func TestPortHasPendingChildren_False(t *testing.T) {
+	// ポートの子タスクが全て Complete の場合 false を返す
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 200)
+
+	// 全タスクを Complete にする
+	node := tree.Ports[0]
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	node.SetAttackDataStatusForTest(TaskVhostDiscov, StatusComplete)
+	child := node.Children[0]
+	child.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	child.SetAttackDataStatusForTest(TaskParamFuzz, StatusComplete)
+	child.SetAttackDataStatusForTest(TaskValueFuzz, StatusComplete)
+	child.SetAttackDataStatusForTest(TaskProfiling, StatusComplete)
+
+	if tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren(80) = true, want false (all child tasks complete)")
+	}
+}
+
+func TestPortHasPendingChildren_NoPendingNoChildren(t *testing.T) {
+	// 子ノードがないポートは false を返す
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	// ポートレベルのタスクを Complete にする
+	node := tree.Ports[0]
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	node.SetAttackDataStatusForTest(TaskVhostDiscov, StatusComplete)
+
+	if tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren(80) = true, want false (no children)")
+	}
+}
+
+func TestPortHasPendingChildren_DeepNested(t *testing.T) {
+	// 深くネストされた子ノードに Pending タスクがある場合 true を返す
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 301)   // redirect: EndpointEnum only
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/api", "/api/v1", 200) // full recon
+
+	// ポートレベル + 第1階層を Complete にする
+	node := tree.Ports[0]
+	node.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	node.SetAttackDataStatusForTest(TaskVhostDiscov, StatusComplete)
+	apiChild := node.Children[0] // /api
+	apiChild.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+
+	// /api/v1 の param_fuzz は Pending のまま
+	if !tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren(80) = false, want true (deep nested pending task)")
+	}
+}
+
+func TestPortHasPendingChildren_NonExistentPort(t *testing.T) {
+	// 存在しないポートは false を返す
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	if tree.PortHasPendingChildren(443) {
+		t.Error("PortHasPendingChildren(443) = true, want false (port does not exist)")
+	}
+}
+
+// === FindPortNode tests ===
+
+func TestFindPortNode_Found(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(443, "https", "nginx")
+
+	node := tree.FindPortNode(80)
+	if node == nil {
+		t.Fatal("FindPortNode(80) = nil, want non-nil")
+	}
+	if node.Port != 80 {
+		t.Errorf("FindPortNode(80).Port = %d, want 80", node.Port)
+	}
+	if node.Service != "http" {
+		t.Errorf("FindPortNode(80).Service = %q, want %q", node.Service, "http")
+	}
+}
+
+func TestFindPortNode_NotFound(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	node := tree.FindPortNode(8080)
+	if node != nil {
+		t.Errorf("FindPortNode(8080) = %v, want nil", node)
+	}
+}

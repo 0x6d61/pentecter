@@ -561,6 +561,46 @@ func (t *AttackDataTree) CompleteAllPortTasks(port int) {
 	}
 }
 
+// PortHasPendingChildren はポートの子孫ノードに Pending タスクがあるか返す。
+// SubAgent が MaxTurns で完了した後、残タスクの有無を判定するために使用する。
+func (t *AttackDataTree) PortHasPendingChildren(port int) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			return nodeHasPendingChildren(node)
+		}
+	}
+	return false
+}
+
+// nodeHasPendingChildren は子ノードを再帰的に走査し、Pending タスクがあるか返す。
+func nodeHasPendingChildren(node *AttackDataNode) bool {
+	for _, child := range node.Children {
+		for _, st := range []AttackDataStatus{child.EndpointEnum, child.ParamFuzz, child.ValueFuzz, child.Profiling, child.VhostDiscov} {
+			if st == StatusPending {
+				return true
+			}
+		}
+		if nodeHasPendingChildren(child) {
+			return true
+		}
+	}
+	return false
+}
+
+// FindPortNode は指定ポート番号のノードを返す。見つからなければ nil。
+func (t *AttackDataTree) FindPortNode(port int) *AttackDataNode {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			return node
+		}
+	}
+	return nil
+}
+
 // findNode はホスト/ポート/パスでノードを検索する。
 // path が "/" かつポートノードの Path が "" の場合はポートノード自身を返す（ルート扱い）。
 func (t *AttackDataTree) findNode(host string, port int, path string) *AttackDataNode {
