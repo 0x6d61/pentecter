@@ -83,6 +83,9 @@ func TestAddEndpoint(t *testing.T) {
 	if child.ParamFuzz != StatusPending {
 		t.Errorf("ParamFuzz = %d, want pending", child.ParamFuzz)
 	}
+	if child.ValueFuzz != StatusPending {
+		t.Errorf("ValueFuzz = %d, want pending", child.ValueFuzz)
+	}
 	if child.Profiling != StatusPending {
 		t.Errorf("Profiling = %d, want pending", child.Profiling)
 	}
@@ -190,14 +193,14 @@ func TestCountPending(t *testing.T) {
 	}
 
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
-	// + EndpointEnum + ParamFuzz + Profiling = 5 pending
-	if got := tree.CountPending(); got != 5 {
-		t.Errorf("CountPending = %d, want 5", got)
+	// + EndpointEnum + ParamFuzz + ValueFuzz + Profiling = 6 pending
+	if got := tree.CountPending(); got != 6 {
+		t.Errorf("CountPending = %d, want 6", got)
 	}
 
 	tree.CompleteTask("10.10.11.100", 80, "/api", TaskEndpointEnum)
-	if got := tree.CountPending(); got != 4 {
-		t.Errorf("CountPending = %d, want 4", got)
+	if got := tree.CountPending(); got != 5 {
+		t.Errorf("CountPending = %d, want 5", got)
 	}
 }
 
@@ -206,9 +209,9 @@ func TestCountTotal(t *testing.T) {
 	tree.AddPort(80, "http", "Apache")
 	tree.AddPort(22, "ssh", "OpenSSH")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
-	// HTTP ポート: 2 tasks + endpoint: 3 tasks = 5
-	if got := tree.CountTotal(); got != 5 {
-		t.Errorf("CountTotal = %d, want 5", got)
+	// HTTP ポート: 2 tasks + endpoint: 4 tasks (EndpointEnum+ParamFuzz+ValueFuzz+Profiling) = 6
+	if got := tree.CountTotal(); got != 6 {
+		t.Errorf("CountTotal = %d, want 6", got)
 	}
 }
 
@@ -943,7 +946,7 @@ func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
 	// ポートレベルのタスクを complete にする
 	tree.CompleteTask("10.10.11.100", 80, "/", TaskEndpointEnum)
 	tree.CompleteTask("10.10.11.100", 80, "/", TaskVhostDiscov)
-	// 子エンドポイントを追加（ParamFuzz が Pending のまま）
+	// 子エンドポイントを追加（ParamFuzz + ValueFuzz + Profiling + EndpointEnum が Pending）
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/admin")
 
 	output := tree.RenderIntel()
@@ -952,8 +955,9 @@ func TestRenderIntel_ChildPendingPreventsReconComplete(t *testing.T) {
 		t.Errorf("should NOT show 'recon complete' when child has pending tasks\noutput:\n%s", output)
 	}
 	// New format: "recon: N/M tasks" instead of "recon pending"
-	if !strings.Contains(output, "tasks") {
-		t.Errorf("should show task count when child has pending tasks\noutput:\n%s", output)
+	// Port has 2 complete + /admin has 4 tasks (EndpointEnum+ParamFuzz+ValueFuzz+Profiling) = 2/6
+	if !strings.Contains(output, "2/6") {
+		t.Errorf("should show task count 2/6 when child has pending tasks\noutput:\n%s", output)
 	}
 }
 
@@ -1203,6 +1207,10 @@ func TestComputeReconProgress_Basic(t *testing.T) {
 	if prog.ParamFuzz.Done != 1 || prog.ParamFuzz.Total != 2 {
 		t.Errorf("ParamFuzz = %d/%d, want 1/2", prog.ParamFuzz.Done, prog.ParamFuzz.Total)
 	}
+	// ValueFuzz: /api(pending) + /login(pending) = 0/2 (follows ParamFuzz)
+	if prog.ValueFuzz.Done != 0 || prog.ValueFuzz.Total != 2 {
+		t.Errorf("ValueFuzz = %d/%d, want 0/2", prog.ValueFuzz.Done, prog.ValueFuzz.Total)
+	}
 	// VhostDiscov: port root has 1 pending = 0/1
 	if prog.VhostDiscov.Done != 0 || prog.VhostDiscov.Total != 1 {
 		t.Errorf("VhostDiscov = %d/%d, want 0/1", prog.VhostDiscov.Done, prog.VhostDiscov.Total)
@@ -1216,8 +1224,12 @@ func TestComputeReconProgress_Empty(t *testing.T) {
 	if prog.EndpointEnum.Total != 0 {
 		t.Errorf("empty tree EndpointEnum.Total = %d, want 0", prog.EndpointEnum.Total)
 	}
-	if len(prog.PendingPaths) != 0 {
-		t.Errorf("empty tree PendingPaths = %v, want empty", prog.PendingPaths)
+	// PendingPaths is now per TaskProgress, not on ReconProgress
+	if len(prog.EndpointEnum.PendingPaths) != 0 {
+		t.Errorf("empty tree EndpointEnum.PendingPaths = %v, want empty", prog.EndpointEnum.PendingPaths)
+	}
+	if len(prog.ParamFuzz.PendingPaths) != 0 {
+		t.Errorf("empty tree ParamFuzz.PendingPaths = %v, want empty", prog.ParamFuzz.PendingPaths)
 	}
 }
 
@@ -1233,10 +1245,20 @@ func TestComputeReconProgress_PendingPaths(t *testing.T) {
 
 	prog := tree.ComputeReconProgress()
 
-	// Pending paths: / (port root), /login, /admin (but NOT /api since it's complete)
+	// EndpointEnum pending paths: / (port root), /login, /admin (but NOT /api since it's complete)
 	// Port root path "" should show as "/"
-	if len(prog.PendingPaths) != 3 {
-		t.Errorf("PendingPaths = %v, want 3 items", prog.PendingPaths)
+	if len(prog.EndpointEnum.PendingPaths) != 3 {
+		t.Errorf("EndpointEnum.PendingPaths = %v, want 3 items", prog.EndpointEnum.PendingPaths)
+	}
+
+	// ParamFuzz pending paths: /api, /login, /admin (all 3 have ParamFuzz=Pending)
+	if len(prog.ParamFuzz.PendingPaths) != 3 {
+		t.Errorf("ParamFuzz.PendingPaths = %v, want 3 items", prog.ParamFuzz.PendingPaths)
+	}
+
+	// ValueFuzz pending paths: same as ParamFuzz
+	if len(prog.ValueFuzz.PendingPaths) != 3 {
+		t.Errorf("ValueFuzz.PendingPaths = %v, want 3 items", prog.ValueFuzz.PendingPaths)
 	}
 }
 
@@ -1252,9 +1274,18 @@ func TestComputeReconProgress_MaxPendingPaths(t *testing.T) {
 
 	prog := tree.ComputeReconProgress()
 
-	// Should cap at 10
-	if len(prog.PendingPaths) > 10 {
-		t.Errorf("PendingPaths should be capped at 10, got %d", len(prog.PendingPaths))
+	// Should cap at 10 per task type
+	if len(prog.EndpointEnum.PendingPaths) > 10 {
+		t.Errorf("EndpointEnum.PendingPaths should be capped at 10, got %d", len(prog.EndpointEnum.PendingPaths))
+	}
+	if len(prog.ParamFuzz.PendingPaths) > 10 {
+		t.Errorf("ParamFuzz.PendingPaths should be capped at 10, got %d", len(prog.ParamFuzz.PendingPaths))
+	}
+	if len(prog.ValueFuzz.PendingPaths) > 10 {
+		t.Errorf("ValueFuzz.PendingPaths should be capped at 10, got %d", len(prog.ValueFuzz.PendingPaths))
+	}
+	if len(prog.Profiling.PendingPaths) > 10 {
+		t.Errorf("Profiling.PendingPaths should be capped at 10, got %d", len(prog.Profiling.PendingPaths))
 	}
 }
 
@@ -1323,6 +1354,7 @@ func TestRenderIntel_ReconProgress(t *testing.T) {
 		"RECON PROGRESS",
 		"endpoint_enum:",
 		"param_fuzz:",
+		"value_fuzz:",
 		"vhost_discovery:",
 	}
 	for _, check := range checks {
@@ -1345,6 +1377,8 @@ func TestRenderIntel_ReconProgressComplete(t *testing.T) {
 	if !strings.Contains(output, "COMPLETE") {
 		t.Errorf("should show COMPLETE when all HTTP tasks are done\noutput:\n%s", output)
 	}
+	// value_fuzz should appear in progress section (port node has no ValueFuzz so it may be 0/0)
+	// But the COMPLETE line should still appear
 }
 
 func TestRenderIntel_AttackSurface_HTTPTaskCount(t *testing.T) {
@@ -1352,15 +1386,16 @@ func TestRenderIntel_AttackSurface_HTTPTaskCount(t *testing.T) {
 	tree.AddPort(80, "http", "Apache")
 	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
 
-	// Complete 2 of 5 tasks
+	// Complete 2 of 6 tasks (EndpointEnum on port + /api)
+	// Total: port(EndpointEnum+VhostDiscov) + /api(EndpointEnum+ParamFuzz+ValueFuzz+Profiling) = 6
 	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
 	tree.CompleteTask("10.10.11.100", 80, "/api", TaskEndpointEnum)
 
 	output := tree.RenderIntel()
 
-	// Should show task count like "recon: 2/5 tasks" instead of generic "recon pending"
-	if !strings.Contains(output, "2/5") {
-		t.Errorf("ATTACK SURFACE should show task count\noutput:\n%s", output)
+	// Should show task count like "recon: 2/6 tasks"
+	if !strings.Contains(output, "2/6") {
+		t.Errorf("ATTACK SURFACE should show task count 2/6\noutput:\n%s", output)
 	}
 }
 
@@ -1975,5 +2010,181 @@ func TestAddEndpointWithStatus_TrailingSlash_Normalized(t *testing.T) {
 
 	if len(tree.Ports[0].Children) != 1 {
 		t.Errorf("Children count = %d, want 1 (trailing slash normalized)", len(tree.Ports[0].Children))
+	}
+}
+
+// --- ValueFuzz テスト ---
+
+func TestAddEndpointWithStatus_ValueFuzz_FollowsParamFuzz(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// status 200: ParamFuzz=Pending → ValueFuzz=Pending
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+	child := tree.Ports[0].Children[0]
+	if child.ParamFuzz != StatusPending {
+		t.Errorf("ParamFuzz = %d, want StatusPending", child.ParamFuzz)
+	}
+	if child.ValueFuzz != StatusPending {
+		t.Errorf("ValueFuzz = %d, want StatusPending (follows ParamFuzz)", child.ValueFuzz)
+	}
+
+	// status 301: ParamFuzz=None → ValueFuzz=None
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/redirect", 301)
+	redirect := tree.Ports[0].Children[1]
+	if redirect.ParamFuzz != StatusNone {
+		t.Errorf("redirect ParamFuzz = %d, want StatusNone", redirect.ParamFuzz)
+	}
+	if redirect.ValueFuzz != StatusNone {
+		t.Errorf("redirect ValueFuzz = %d, want StatusNone (follows ParamFuzz)", redirect.ValueFuzz)
+	}
+}
+
+func TestAddEndpointWithStatus_StaticFile_ValueFuzzNone(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// Static files skip ParamFuzz/Profiling → ValueFuzz should also be None
+	staticFiles := []string{"/style.css", "/app.js", "/logo.png"}
+	for _, f := range staticFiles {
+		tree.AddEndpointWithStatus("10.10.11.100", 80, "/", f, 200)
+	}
+
+	for i, child := range tree.Ports[0].Children {
+		if child.ValueFuzz != StatusNone {
+			t.Errorf("child[%d] %q: ValueFuzz = %d, want StatusNone (static file)", i, child.Path, child.ValueFuzz)
+		}
+	}
+}
+
+func TestRenderEndpointNode_ValueFuzz_Shown(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+
+	output := tree.RenderTree()
+
+	if !strings.Contains(output, "value_fuzz: pending") {
+		t.Errorf("RenderTree should show value_fuzz line\noutput:\n%s", output)
+	}
+}
+
+func TestComputeReconProgress_PendingPathsPerTaskType(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/contact")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/user")
+
+	// Complete endpoint_enum for all endpoints but NOT param_fuzz/value_fuzz/profiling
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/contact", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/login", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/user", TaskEndpointEnum)
+
+	prog := tree.ComputeReconProgress()
+
+	// endpoint_enum: all complete → no pending paths
+	if len(prog.EndpointEnum.PendingPaths) != 0 {
+		t.Errorf("EndpointEnum.PendingPaths = %v, want empty (all complete)", prog.EndpointEnum.PendingPaths)
+	}
+
+	// param_fuzz: /contact, /login, /user pending (3 items)
+	if len(prog.ParamFuzz.PendingPaths) != 3 {
+		t.Errorf("ParamFuzz.PendingPaths = %v, want 3 items", prog.ParamFuzz.PendingPaths)
+	}
+
+	// value_fuzz: same as param_fuzz
+	if len(prog.ValueFuzz.PendingPaths) != 3 {
+		t.Errorf("ValueFuzz.PendingPaths = %v, want 3 items", prog.ValueFuzz.PendingPaths)
+	}
+
+	// profiling: same
+	if len(prog.Profiling.PendingPaths) != 3 {
+		t.Errorf("Profiling.PendingPaths = %v, want 3 items", prog.Profiling.PendingPaths)
+	}
+}
+
+func TestReconProgress_ParamFuzzPendingPaths(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/api")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+
+	// Complete param_fuzz for /api only
+	tree.CompleteTask("10.10.11.100", 80, "/api", TaskParamFuzz)
+
+	prog := tree.ComputeReconProgress()
+
+	// /login still has ParamFuzz=Pending
+	if len(prog.ParamFuzz.PendingPaths) != 1 {
+		t.Errorf("ParamFuzz.PendingPaths = %v, want 1 item (/login)", prog.ParamFuzz.PendingPaths)
+	}
+	if len(prog.ParamFuzz.PendingPaths) > 0 && prog.ParamFuzz.PendingPaths[0] != "/login" {
+		t.Errorf("ParamFuzz.PendingPaths[0] = %q, want /login", prog.ParamFuzz.PendingPaths[0])
+	}
+}
+
+func TestSnapshot_ValueFuzz_Roundtrip(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+
+	// Complete ValueFuzz on /api
+	tree.CompleteTask("10.10.11.100", 80, "/api", TaskValueFuzz)
+
+	snap := tree.Snapshot()
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap2 AttackDataSnapshot
+	if err := json.Unmarshal(data, &snap2); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := RestoreAttackDataTree(snap2)
+	apiNode := restored.Ports[0].Children[0]
+	if apiNode.ValueFuzz != StatusComplete {
+		t.Errorf("ValueFuzz = %d, want StatusComplete after roundtrip", apiNode.ValueFuzz)
+	}
+	// ParamFuzz should still be Pending (not affected)
+	if apiNode.ParamFuzz != StatusPending {
+		t.Errorf("ParamFuzz = %d, want StatusPending", apiNode.ParamFuzz)
+	}
+}
+
+func TestRenderIntel_PendingPathsInline(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/contact")
+	tree.AddEndpoint("10.10.11.100", 80, "/", "/login")
+
+	// Complete all endpoint_enum
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/contact", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "/login", TaskEndpointEnum)
+
+	output := tree.RenderIntel()
+
+	// endpoint_enum should show 100% with no pending inline
+	if !strings.Contains(output, "endpoint_enum: 3/3 (100%)") {
+		t.Errorf("should show endpoint_enum at 100%%\noutput:\n%s", output)
+	}
+
+	// param_fuzz should show pending paths inline
+	// Format: "param_fuzz: 0/2 (0%) — pending: /contact, /login"
+	if !strings.Contains(output, "pending: /contact") {
+		t.Errorf("should show pending paths inline for param_fuzz\noutput:\n%s", output)
+	}
+
+	// The old-style separate "Pending:" line should NOT appear
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Pending:") {
+			t.Errorf("should NOT have separate 'Pending:' line\noutput:\n%s", output)
+			break
+		}
 	}
 }

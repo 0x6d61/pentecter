@@ -27,6 +27,7 @@ type ReconTaskType int
 const (
 	TaskEndpointEnum ReconTaskType = iota
 	TaskParamFuzz
+	TaskValueFuzz
 	TaskProfiling
 	TaskVhostDiscov
 )
@@ -37,6 +38,8 @@ func (t ReconTaskType) String() string {
 		return "endpoint_enum"
 	case TaskParamFuzz:
 		return "param_fuzz"
+	case TaskValueFuzz:
+		return "value_fuzz"
 	case TaskProfiling:
 		return "profiling"
 	case TaskVhostDiscov:
@@ -56,17 +59,18 @@ type Finding struct {
 
 // TaskProgress は特定タスクタイプの進捗
 type TaskProgress struct {
-	Done  int
-	Total int
+	Done         int
+	Total        int
+	PendingPaths []string // このタスクタイプが Pending のパス一覧（最大 maxPendingPaths 件）
 }
 
 // ReconProgress は HTTP 偵察の全体進捗
 type ReconProgress struct {
 	EndpointEnum TaskProgress
 	ParamFuzz    TaskProgress
+	ValueFuzz    TaskProgress
 	Profiling    TaskProgress
 	VhostDiscov  TaskProgress
-	PendingPaths []string // EndpointEnum == Pending のパス一覧（最大10件）
 }
 
 // AttackDataNode はツリーの各ノード
@@ -80,6 +84,7 @@ type AttackDataNode struct {
 	// タスクステータス（ノードタイプによって使うフィールドが異なる）
 	EndpointEnum AttackDataStatus
 	ParamFuzz    AttackDataStatus
+	ValueFuzz    AttackDataStatus
 	Profiling    AttackDataStatus
 	VhostDiscov  AttackDataStatus
 
@@ -102,6 +107,8 @@ func (n *AttackDataNode) getAttackDataStatus(taskType ReconTaskType) AttackDataS
 		return n.EndpointEnum
 	case TaskParamFuzz:
 		return n.ParamFuzz
+	case TaskValueFuzz:
+		return n.ValueFuzz
 	case TaskProfiling:
 		return n.Profiling
 	case TaskVhostDiscov:
@@ -118,6 +125,8 @@ func (n *AttackDataNode) setAttackDataStatus(taskType ReconTaskType, status Atta
 		n.EndpointEnum = status
 	case TaskParamFuzz:
 		n.ParamFuzz = status
+	case TaskValueFuzz:
+		n.ValueFuzz = status
 	case TaskProfiling:
 		n.Profiling = status
 	case TaskVhostDiscov:
@@ -127,7 +136,7 @@ func (n *AttackDataNode) setAttackDataStatus(taskType ReconTaskType, status Atta
 
 // countTasks はノードとその子孫の pending/complete/total を再帰的に数える
 func (n *AttackDataNode) countTasks() (pending, complete, total int) {
-	for _, st := range []AttackDataStatus{n.EndpointEnum, n.ParamFuzz, n.Profiling, n.VhostDiscov} {
+	for _, st := range []AttackDataStatus{n.EndpointEnum, n.ParamFuzz, n.ValueFuzz, n.Profiling, n.VhostDiscov} {
 		switch st {
 		case StatusPending:
 			pending++
@@ -281,19 +290,22 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 	// Determine task statuses based on HTTP status code
 	endpointEnum := StatusPending
 	paramFuzz := StatusPending
+	valueFuzz := StatusPending
 	profiling := StatusPending
 
 	switch httpStatus {
 	case 0, 200:
 		// Full recon: all tasks pending
 	case 301, 302:
-		// Redirect: likely a directory, enumerate but no param_fuzz/profiling
+		// Redirect: likely a directory, enumerate but no param_fuzz/value_fuzz/profiling
 		paramFuzz = StatusNone
+		valueFuzz = StatusNone
 		profiling = StatusNone
 	default:
 		// 401, 403, 500, etc.: no recon tasks
 		endpointEnum = StatusNone
 		paramFuzz = StatusNone
+		valueFuzz = StatusNone
 		profiling = StatusNone
 	}
 
@@ -310,9 +322,10 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 		endpointEnum = StatusNone
 	}
 
-	// Static file check: known static extensions skip ParamFuzz/Profiling too
+	// Static file check: known static extensions skip ParamFuzz/ValueFuzz/Profiling too
 	if paramFuzz != StatusNone && isStaticFileExt(ext) {
 		paramFuzz = StatusNone
+		valueFuzz = StatusNone
 		profiling = StatusNone
 	}
 
@@ -327,6 +340,7 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 		Path:         newPath,
 		EndpointEnum: endpointEnum,
 		ParamFuzz:    paramFuzz,
+		ValueFuzz:    valueFuzz,
 		Profiling:    profiling,
 	}
 	parent.Children = append(parent.Children, child)
@@ -456,7 +470,7 @@ func (t *AttackDataTree) NextBatch() []*ReconTask {
 
 	var tasks []*ReconTask
 	// 優先順にタスクを収集
-	for _, taskType := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+	for _, taskType := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
 		t.collectPending(&tasks, taskType, available)
 		if len(tasks) >= available {
 			break
@@ -533,7 +547,7 @@ func (t *AttackDataTree) CompleteAllPortTasks(port int) {
 	found := false
 	for _, node := range t.Ports {
 		if node.Port == port {
-			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
 				if node.getAttackDataStatus(tt) == StatusInProgress {
 					node.setAttackDataStatus(tt, StatusComplete)
 					found = true
@@ -730,6 +744,7 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 					Path:         "/",
 					EndpointEnum: node.EndpointEnum,
 					ParamFuzz:    node.ParamFuzz,
+					ValueFuzz:    node.ValueFuzz,
 					Profiling:    node.Profiling,
 				}
 				renderEndpointNode(sb, rootNode, rootPrefix, rootChildPrefix)
@@ -766,6 +781,7 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 	}{
 		{"endpoint_enum", node.EndpointEnum},
 		{"param_fuzz", node.ParamFuzz},
+		{"value_fuzz", node.ValueFuzz},
 		{"profiling", node.Profiling},
 	} {
 		if line := taskStatusLine(pair.name, pair.status); line != "" {
@@ -880,20 +896,17 @@ func (t *AttackDataTree) computeReconProgressLocked() ReconProgress {
 }
 
 func (t *AttackDataTree) accumulateProgress(prog *ReconProgress, node *AttackDataNode) {
-	// Count tasks for this node
-	accumTaskProgress(&prog.EndpointEnum, node.EndpointEnum)
-	accumTaskProgress(&prog.ParamFuzz, node.ParamFuzz)
-	accumTaskProgress(&prog.Profiling, node.Profiling)
-	accumTaskProgress(&prog.VhostDiscov, node.VhostDiscov)
-
-	// Collect pending paths
-	if node.EndpointEnum == StatusPending && len(prog.PendingPaths) < maxPendingPaths {
-		path := node.Path
-		if path == "" {
-			path = "/"
-		}
-		prog.PendingPaths = append(prog.PendingPaths, path)
+	path := node.Path
+	if path == "" {
+		path = "/"
 	}
+
+	// Count tasks and collect pending paths for each task type
+	accumTaskProgressWithPath(&prog.EndpointEnum, node.EndpointEnum, path)
+	accumTaskProgressWithPath(&prog.ParamFuzz, node.ParamFuzz, path)
+	accumTaskProgressWithPath(&prog.ValueFuzz, node.ValueFuzz, path)
+	accumTaskProgressWithPath(&prog.Profiling, node.Profiling, path)
+	accumTaskProgressWithPath(&prog.VhostDiscov, node.VhostDiscov, path)
 
 	// Recurse into children
 	for _, child := range node.Children {
@@ -901,13 +914,16 @@ func (t *AttackDataTree) accumulateProgress(prog *ReconProgress, node *AttackDat
 	}
 }
 
-func accumTaskProgress(tp *TaskProgress, status AttackDataStatus) {
+func accumTaskProgressWithPath(tp *TaskProgress, status AttackDataStatus, path string) {
 	if status == StatusNone {
 		return
 	}
 	tp.Total++
 	if status == StatusComplete {
 		tp.Done++
+	}
+	if status == StatusPending && len(tp.PendingPaths) < maxPendingPaths {
+		tp.PendingPaths = append(tp.PendingPaths, path)
 	}
 }
 
@@ -945,7 +961,11 @@ func renderTaskProgress(sb *strings.Builder, name string, tp TaskProgress) {
 		return
 	}
 	pct := tp.Done * 100 / tp.Total
-	fmt.Fprintf(sb, "  %s: %d/%d (%d%%)\n", name, tp.Done, tp.Total, pct)
+	if len(tp.PendingPaths) > 0 {
+		fmt.Fprintf(sb, "  %s: %d/%d (%d%%) \u2014 pending: %s\n", name, tp.Done, tp.Total, pct, strings.Join(tp.PendingPaths, ", "))
+	} else {
+		fmt.Fprintf(sb, "  %s: %d/%d (%d%%)\n", name, tp.Done, tp.Total, pct)
+	}
 }
 
 // RenderIntel は RECON INTEL をプロンプト注入用に返す。
@@ -975,7 +995,7 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		var activePorts []string
 		for _, node := range t.Ports {
 			if node.isHTTP() {
-				for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+				for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
 					if node.getAttackDataStatus(tt) == StatusInProgress {
 						activePorts = append(activePorts, fmt.Sprintf("%d", node.Port))
 						break
@@ -993,18 +1013,16 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 
 	// [RECON PROGRESS]: HTTP タスクタイプ別進捗
 	prog := t.computeReconProgressLocked()
-	httpTotal := prog.EndpointEnum.Total + prog.ParamFuzz.Total + prog.Profiling.Total + prog.VhostDiscov.Total
+	httpTotal := prog.EndpointEnum.Total + prog.ParamFuzz.Total + prog.ValueFuzz.Total + prog.Profiling.Total + prog.VhostDiscov.Total
 	if httpTotal > 0 {
 		sb.WriteString("[RECON PROGRESS]\n")
 		sb.WriteString("HTTP Recon:\n")
 		renderTaskProgress(&sb, "endpoint_enum", prog.EndpointEnum)
 		renderTaskProgress(&sb, "param_fuzz", prog.ParamFuzz)
+		renderTaskProgress(&sb, "value_fuzz", prog.ValueFuzz)
 		renderTaskProgress(&sb, "profiling", prog.Profiling)
 		renderTaskProgress(&sb, "vhost_discovery", prog.VhostDiscov)
-		if len(prog.PendingPaths) > 0 {
-			fmt.Fprintf(&sb, "  Pending: %s\n", strings.Join(prog.PendingPaths, ", "))
-		}
-		httpDone := prog.EndpointEnum.Done + prog.ParamFuzz.Done + prog.Profiling.Done + prog.VhostDiscov.Done
+		httpDone := prog.EndpointEnum.Done + prog.ParamFuzz.Done + prog.ValueFuzz.Done + prog.Profiling.Done + prog.VhostDiscov.Done
 		if httpDone == httpTotal {
 			sb.WriteString("Overall: COMPLETE — ready for exploitation phase\n")
 		} else {
@@ -1066,7 +1084,7 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		status := "not tested"
 		if node.isHTTP() {
 			// Check if any task is InProgress
-			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
 				if node.getAttackDataStatus(tt) == StatusInProgress {
 					status = "HTTPAgent active"
 					break
@@ -1192,7 +1210,7 @@ func (t *AttackDataTree) StartPortRecon(port *AttackDataNode) bool {
 	if t.active >= t.MaxParallel {
 		return false
 	}
-	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskProfiling, TaskVhostDiscov} {
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
 		if port.getAttackDataStatus(tt) == StatusPending {
 			port.setAttackDataStatus(tt, StatusInProgress)
 		}
@@ -1234,6 +1252,7 @@ type AttackDataNodeDTO struct {
 	Path         string              `json:"path"`
 	EndpointEnum AttackDataStatus    `json:"endpoint_enum"`
 	ParamFuzz    AttackDataStatus    `json:"param_fuzz"`
+	ValueFuzz    AttackDataStatus    `json:"value_fuzz"`
 	Profiling    AttackDataStatus    `json:"profiling"`
 	VhostDiscov  AttackDataStatus    `json:"vhost_discovery"`
 	Findings     []Finding           `json:"findings,omitempty"`
@@ -1296,6 +1315,7 @@ func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
 		Path:         node.Path,
 		EndpointEnum: node.EndpointEnum,
 		ParamFuzz:    node.ParamFuzz,
+		ValueFuzz:    node.ValueFuzz,
 		Profiling:    node.Profiling,
 		VhostDiscov:  node.VhostDiscov,
 		Findings:     node.Findings,
@@ -1318,6 +1338,7 @@ func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
 		Path:         dto.Path,
 		EndpointEnum: resetInProgress(dto.EndpointEnum),
 		ParamFuzz:    resetInProgress(dto.ParamFuzz),
+		ValueFuzz:    resetInProgress(dto.ValueFuzz),
 		Profiling:    resetInProgress(dto.Profiling),
 		VhostDiscov:  resetInProgress(dto.VhostDiscov),
 		Findings:     dto.Findings,
