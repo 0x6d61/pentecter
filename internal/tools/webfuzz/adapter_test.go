@@ -299,6 +299,137 @@ func TestWebfuzzTool_Execute_ContextCancel(t *testing.T) {
 	// キャンセルされたことだけ確認（エラーは出ない設計）
 }
 
+func TestExtractPathFromHitURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		hitURL     string
+		parentPath string
+		input      string
+		want       string
+	}{
+		{"valid URL", "http://example.com/admin", "/", "admin", "/admin"},
+		{"valid URL with subpath", "http://example.com/api/v1", "/api", "v1", "/api/v1"},
+		{"invalid URL fallback", "://invalid", "/api", "users", "/api/users"},
+		{"empty URL fallback", "", "/", "test", "/test"},
+		{"fallback without leading slash", "://bad", "dir", "file", "/dir/file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractPathFromHitURL(tt.hitURL, tt.parentPath, tt.input)
+			if got != tt.want {
+				t.Errorf("extractPathFromHitURL(%q, %q, %q) = %q, want %q",
+					tt.hitURL, tt.parentPath, tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractDomainFromHeaders_QuotedEnd(t *testing.T) {
+	// クォートで終端するケース
+	tests := []struct {
+		headers []string
+		want    string
+	}{
+		{[]string{`Host: FUZZ.example.com"`}, "example.com"},
+		{[]string{"Host: FUZZ.test.local'"}, "test.local"},
+		{[]string{"Host: FUZZ.space.end  extra"}, "space.end"},
+	}
+	for _, tt := range tests {
+		got := extractDomainFromHeaders(tt.headers)
+		if got != tt.want {
+			t.Errorf("extractDomainFromHeaders(%v) = %q, want %q", tt.headers, got, tt.want)
+		}
+	}
+}
+
+func TestWebfuzzTool_Execute_ParamMode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != "" {
+			w.WriteHeader(200)
+			fmt.Fprint(w, "found")
+			return
+		}
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	}))
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "id\nname\n")
+
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 256)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"param", "-u", srv.URL + "/page?FUZZ=test", "-w", wordlist, "-mc", "200", "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	// param モードでは CompleteTask が呼ばれる
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	if len(tree.completed) == 0 {
+		t.Error("expected CompleteTask to be called for param mode")
+	}
+}
+
+func TestWebfuzzTool_Execute_DirMode_CompletesTask(t *testing.T) {
+	// dir モードで列挙完了後に CompleteTask(taskType=0) が呼ばれることを確認
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	}))
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "nothing\n")
+
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 256)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"dir", "-u", srv.URL + "/FUZZ", "-w", wordlist, "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	// dir モード完了で CompleteTask(taskType=0=TaskEndpointEnum) が呼ばれる
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	found := false
+	for _, c := range tree.completed {
+		if c.taskType == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected CompleteTask(taskType=0) for dir mode completion")
+	}
+}
+
 func createTempWordlist(t *testing.T, content string) string {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "wordlist-*.txt")

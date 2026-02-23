@@ -526,6 +526,157 @@ func TestRun_LineFnSummary(t *testing.T) {
 	}
 }
 
+func TestRun_MatchStatusEmpty(t *testing.T) {
+	// MatchStatus が空なら全ステータスがマッチ
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			w.WriteHeader(200)
+			fmt.Fprint(w, "ok")
+		case "/err":
+			w.WriteHeader(500)
+			fmt.Fprint(w, "error")
+		default:
+			w.WriteHeader(404)
+			fmt.Fprint(w, "not found")
+		}
+	}))
+	defer ts.Close()
+
+	wl := writeWordlist(t, []string{"ok", "err", "missing"})
+	opts := Options{
+		Mode:        "dir",
+		URL:         ts.URL + "/FUZZ",
+		Wordlist:    wl,
+		Method:      "GET",
+		Threads:     1,
+		Timeout:     5 * time.Second,
+		MatchStatus: nil, // 空 → 全マッチ
+	}
+
+	var mu sync.Mutex
+	var hits []Hit
+	hitFn := func(h Hit) {
+		mu.Lock()
+		defer mu.Unlock()
+		hits = append(hits, h)
+	}
+	lineFn := func(string) {}
+
+	err := Run(context.Background(), opts, hitFn, lineFn)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	// 全3つがマッチするはず（200, 500, 404）
+	if len(hits) != 3 {
+		t.Errorf("got %d hits, want 3 (all match when MatchStatus empty)", len(hits))
+	}
+}
+
+func TestRun_WordlistNotFound(t *testing.T) {
+	opts := Options{
+		Mode:        "dir",
+		URL:         "http://example.com/FUZZ",
+		Wordlist:    "/nonexistent/path/wordlist.txt",
+		Method:      "GET",
+		Threads:     1,
+		Timeout:     5 * time.Second,
+		MatchStatus: []int{200},
+	}
+
+	err := Run(context.Background(), opts, func(Hit) {}, func(string) {})
+	if err == nil {
+		t.Fatal("expected error for non-existent wordlist")
+	}
+	if !strings.Contains(err.Error(), "wordlist") {
+		t.Errorf("error should mention wordlist, got: %v", err)
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"", 0},
+		{"hello", 1},
+		{"hello\n", 1},
+		{"hello\nworld", 2},
+		{"hello\nworld\n", 2},
+		{"a\nb\nc\n", 3},
+	}
+	for _, tt := range tests {
+		got := countLines(tt.input)
+		if got != tt.want {
+			t.Errorf("countLines(%q) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestShouldReport(t *testing.T) {
+	tests := []struct {
+		name string
+		hit  Hit
+		opts Options
+		want bool
+	}{
+		{
+			name: "filter status excludes even if match",
+			hit:  Hit{StatusCode: 403, Length: 100},
+			opts: Options{MatchStatus: []int{200, 403}, FilterStatus: []int{403}},
+			want: false,
+		},
+		{
+			name: "filter size excludes",
+			hit:  Hit{StatusCode: 200, Length: 42},
+			opts: Options{MatchStatus: []int{200}, FilterSize: []int{42}},
+			want: false,
+		},
+		{
+			name: "match status includes",
+			hit:  Hit{StatusCode: 200, Length: 100},
+			opts: Options{MatchStatus: []int{200}},
+			want: true,
+		},
+		{
+			name: "match status excludes",
+			hit:  Hit{StatusCode: 500, Length: 100},
+			opts: Options{MatchStatus: []int{200}},
+			want: false,
+		},
+		{
+			name: "empty match status matches all",
+			hit:  Hit{StatusCode: 999, Length: 100},
+			opts: Options{},
+			want: true,
+		},
+		{
+			name: "filter size with empty filter",
+			hit:  Hit{StatusCode: 200, Length: 100},
+			opts: Options{MatchStatus: []int{200}, FilterSize: []int{50}},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldReport(tt.hit, tt.opts)
+			if got != tt.want {
+				t.Errorf("shouldReport() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExpandExtensions_NonDirMode(t *testing.T) {
+	words := []string{"admin", "test"}
+	// param モードでは extensions を展開しない
+	result := expandExtensions(words, "param", []string{".php"})
+	if len(result) != 2 {
+		t.Errorf("param mode should not expand extensions, got %d words", len(result))
+	}
+}
+
 func TestRun_EmptyWordlist(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
