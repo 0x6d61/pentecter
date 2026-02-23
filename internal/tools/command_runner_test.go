@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -986,5 +987,86 @@ func TestCommandRunner_Execute_SavesResult(t *testing.T) {
 	}
 	if stored.ToolName != "echo" {
 		t.Errorf("stored ToolName: got %q, want %q", stored.ToolName, "echo")
+	}
+}
+
+// TestRegisterInternalTool_ConcurrentAccess は並行 RegisterInternalTool + ForceRun で
+// data race が発生しないことを検証する。go test -race で検出可能。
+func TestRegisterInternalTool_ConcurrentAccess(t *testing.T) {
+	runner := newTestRunner()
+
+	var wg sync.WaitGroup
+	// 並行で RegisterInternalTool を呼ぶ
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mock := &mockInternalTool{exitCode: 0}
+			runner.RegisterInternalTool("webfuzz", mock)
+		}()
+	}
+	// 同時に ForceRun で lookup を走らせる
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			lines, resultCh := runner.ForceRun(ctx, "echo concurrent-test")
+			for range lines {
+			}
+			<-resultCh
+		}()
+	}
+	wg.Wait()
+}
+
+// mockInternalTool は InternalTool のテスト用モック。
+type mockInternalTool struct {
+	exitCode int
+}
+
+func (m *mockInternalTool) Execute(_ context.Context, args []string, lineCh chan<- tools.OutputLine) (int, error) {
+	lineCh <- tools.OutputLine{Content: "mock output", Time: time.Now()}
+	return m.exitCode, nil
+}
+
+// TestExecuteInternal_TruncatedContainsOutput は内部ツール実行後の Truncated に
+// 実際の出力が含まれることを検証する。
+func TestExecuteInternal_TruncatedContainsOutput(t *testing.T) {
+	runner := newTestRunner()
+	mock := &mockInternalTool{exitCode: 0}
+	runner.RegisterInternalTool("testtool", mock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lines, resultCh := runner.ForceRun(ctx, "testtool arg1 arg2")
+	var collected []string
+	for line := range lines {
+		collected = append(collected, line.Content)
+	}
+	res := <-resultCh
+
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", res.ExitCode)
+	}
+
+	// Truncated に実際の出力が含まれること
+	if !strings.Contains(res.Truncated, "mock output") {
+		t.Errorf("Truncated should contain actual output, got %q", res.Truncated)
+	}
+
+	// ストリーム出力にも含まれること
+	if len(collected) == 0 || collected[0] != "mock output" {
+		t.Errorf("stream output should contain 'mock output', got %v", collected)
+	}
+
+	// Entities も抽出されること（RawLines から）
+	if res.RawLines == nil {
+		t.Error("expected RawLines to be populated")
 	}
 }

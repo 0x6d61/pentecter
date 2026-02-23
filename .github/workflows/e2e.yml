@@ -55,11 +55,11 @@ jobs:
         # env: で受け取った変数を使うことでシェルインジェクションを防ぐ
         run: ollama pull "$OLLAMA_MODEL"
 
-      - name: Metasploitable を起動
+      - name: ターゲットを起動 (Metasploitable + VulnBoard)
         run: |
-          docker compose -f testenv/docker-compose.yml up -d
+          docker compose -f demo/docker-compose.yml up -d target vulnboard
           for i in $(seq 1 12); do
-            if docker inspect --format='{{.State.Health.Status}}' pentecter-target 2>/dev/null | grep -q healthy; then
+            if docker inspect --format='{{.State.Health.Status}}' pentecter-demo-target 2>/dev/null | grep -q healthy; then
               echo "Metasploitable is healthy"
               break
             fi
@@ -75,6 +75,6 @@ jobs:
           PENTECTER_BASE_URL: http://localhost:11434
           PENTECTER_MODEL: ${{ github.event.inputs.ollama_model }}
 
-      - name: Metasploitable を停止
+      - name: ターゲットを停止
         if: always()
-        run: docker compose -f testenv/docker-compose.yml down
+        run: docker compose -f demo/docker-compose.yml down

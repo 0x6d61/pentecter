@@ -626,14 +626,14 @@ func TestIsWebReconCommand(t *testing.T) {
 		cmd  string
 		want bool
 	}{
-		{"ffuf command", "ffuf -w wordlist -u http://10.10.11.100/FUZZ", true},
+		{"webfuzz command", "webfuzz dir -w wordlist -u http://10.10.11.100/FUZZ", true},
 		{"dirb command", "dirb http://10.10.11.100/", true},
 		{"gobuster command", "gobuster dir -u http://10.10.11.100/ -w wordlist", true},
 		{"nikto command", "nikto -h 10.10.11.100", true},
 		{"nmap command", "nmap -sV 10.10.11.100", false},
 		{"curl command", "curl http://10.10.11.100/", false},
-		{"uppercase FFUF", "FFUF -w wordlist -u http://10.10.11.100/FUZZ", true},
-		{"path to ffuf", "/usr/bin/ffuf -w wordlist -u http://10.10.11.100/FUZZ", true},
+		{"uppercase WEBFUZZ", "WEBFUZZ dir -w wordlist -u http://10.10.11.100/FUZZ", true},
+		{"path to webfuzz", "/usr/bin/webfuzz dir -w wordlist -u http://10.10.11.100/FUZZ", true},
 		{"empty command", "", false},
 	}
 	for _, tt := range tests {

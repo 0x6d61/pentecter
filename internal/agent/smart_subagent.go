@@ -4,13 +4,13 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/tools"
+	"github.com/0x6d61/pentecter/internal/tools/webfuzz"
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
 
@@ -22,11 +22,18 @@ type SmartSubAgent struct {
 	events     chan<- Event
 	attackData *AttackDataTree
 	targetHost string
-	memDir     string // ffuf -o 出力先（空 = EnsureFfufOutput 無効）
+	memDir     string // webfuzz raw output 用
 }
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
 func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, attackData *AttackDataTree, targetHost string, memDir string) *SmartSubAgent {
+	// webfuzz 内部ツールを CommandRunner に登録
+	var tree webfuzz.TreeUpdater
+	if attackData != nil {
+		tree = &webfuzzTreeAdapter{tree: attackData}
+	}
+	runner.RegisterInternalTool("webfuzz", webfuzz.NewWebfuzzTool(tree, targetHost))
+
 	return &SmartSubAgent{
 		br:         br,
 		runner:     runner,
@@ -124,10 +131,8 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		switch action.Action {
 		case schema.ActionRun:
-			cmd := EnsureFfufSilent(action.Command)
-			cmd = EnsureFfufOutput(cmd, sa.memDir, sa.targetHost)
-			lastCommand = cmd
-			linesCh, resultCh := sa.runner.ForceRun(ctx, cmd)
+			lastCommand = action.Command
+			linesCh, resultCh := sa.runner.ForceRun(ctx, action.Command)
 
 			// ストリーム出力を収集
 			for line := range linesCh {
@@ -142,20 +147,14 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 			lastOutput = result.Truncated
 
 			// コマンド履歴を記録（直近10件）
-			history = append(history, cmdRecord{cmd: cmd, exitCode: result.ExitCode})
+			history = append(history, cmdRecord{cmd: action.Command, exitCode: result.ExitCode})
 			if len(history) > 10 {
 				history = history[len(history)-10:]
 			}
 
 			// AttackDataTree にパース結果を反映
 			if sa.attackData != nil {
-				parseOutput := result.Truncated
-				if ffufPath := ExtractFfufOutputPath(cmd); ffufPath != "" {
-					if data, err := os.ReadFile(ffufPath); err == nil {
-						parseOutput = string(data)
-					}
-				}
-				_ = DetectAndParse(cmd, parseOutput, sa.attackData, sa.targetHost)
+				_ = DetectAndParse(action.Command, result.Truncated, sa.attackData, sa.targetHost)
 			}
 
 			// Entity 抽出結果をタスクに追加

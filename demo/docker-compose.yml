@@ -6,6 +6,9 @@ services:
     container_name: pentecter
     stdin_open: true
     tty: true
+    cap_add:
+      - NET_RAW       # nmap SYN scan requires raw sockets
+      - NET_ADMIN     # nmap OS detection / advanced scans
     env_file:
       - path: .env
         required: false
@@ -15,13 +18,20 @@ services:
     depends_on:
       target:
         condition: service_healthy
+      vulnboard:
+        condition: service_healthy
 
-  target:
+  target: # nosemgrep: yaml.docker-compose.security.no-new-privileges.no-new-privileges, yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
     image: tleemcjr/metasploitable2:latest
     container_name: pentecter-demo-target
     hostname: metasploitable
     init: true
     command: ["sh", "-c", "/bin/services.sh && tail -f /dev/null"]
+    ports:
+      - "2121:21"     # FTP  (vsftpd 2.3.4 — バックドア CVE-2011-2523)
+      - "2222:22"     # SSH  (OpenSSH 4.7p1)
+      - "8080:80"     # HTTP (Apache + PHP/CGI 脆弱性)
+      - "3307:3306"   # MySQL (認証なし)
     healthcheck:
       test: ["CMD-SHELL", "netstat -tlnp | grep :80 || exit 1"]
       interval: 10s
@@ -36,6 +46,31 @@ services:
         limits:
           memory: 512M
           cpus: "1.0"
+
+  # VulnBoard: 意図的に脆弱な Flask 掲示板アプリ（ペンテスト練習用）
+  # OS Command Injection, SQL Injection, XSS, SSTI, IDOR, Path Traversal 等を含む。
+  vulnboard: # nosemgrep: yaml.docker-compose.security.no-new-privileges.no-new-privileges, yaml.docker-compose.security.writable-filesystem-service.writable-filesystem-service
+    build:
+      context: ./vulnboard
+    container_name: pentecter-demo-vulnboard
+    hostname: vulnboard
+    init: true
+    ports:
+      - "9080:80"     # HTTP (Flask — 脆弱な掲示板)
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      pentecter-demo:
+        ipv4_address: 172.30.0.30
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
 
 networks:
   pentecter-demo:

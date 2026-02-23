@@ -1,14 +1,11 @@
 package agent
 
 import (
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // --- nmap XML パーサー ---
@@ -101,118 +98,6 @@ func ParseNmapText(output string, tree *AttackDataTree) error {
 	return nil
 }
 
-// --- ffuf JSON パーサー ---
-
-// ffufOutput は ffuf -of json の出力構造
-type ffufOutput struct {
-	CommandLine string       `json:"commandline"`
-	Results     []ffufResult `json:"results"`
-}
-
-type ffufResult struct {
-	Input  map[string]string `json:"input"`
-	Status int               `json:"status"`
-	Length int               `json:"length"`
-	URL    string            `json:"url"`
-}
-
-// ParseFfufJSON は ffuf JSON 出力をパースし、結果を AttackDataTree に追加する。
-// taskType により追加方法が異なる:
-//   - TaskEndpointEnum: 各結果を endpoint として追加
-//   - TaskVhostDiscov: 各結果を vhost として追加
-//   - TaskParamFuzz: タスクを完了にするのみ
-func ParseFfufJSON(jsonData string, tree *AttackDataTree, host string, port int, parentPath string, taskType ReconTaskType) error {
-	// JSON 部分を抽出（前後にゴミがある場合）
-	start := strings.Index(jsonData, "{")
-	if start < 0 {
-		return nil
-	}
-	jsonData = jsonData[start:]
-
-	var output ffufOutput
-	if err := json.Unmarshal([]byte(jsonData), &output); err != nil {
-		return fmt.Errorf("ffuf JSON parse: %w", err)
-	}
-
-	// 結果が空ならタスクを完了にする
-	if len(output.Results) == 0 {
-		tree.CompleteTask(host, port, parentPath, taskType)
-		return nil
-	}
-
-	switch taskType {
-	case TaskEndpointEnum:
-		for _, r := range output.Results {
-			// URL フィールドからフルパスを抽出（再帰対応）
-			var newPath string
-			if r.URL != "" {
-				if parsed, err := url.Parse(r.URL); err == nil && parsed.Path != "" {
-					newPath = parsed.Path
-				}
-			}
-			// URL パースに失敗した場合は FUZZ + parentPath にフォールバック
-			if newPath == "" {
-				fuzz := r.Input["FUZZ"]
-				if fuzz == "" {
-					continue
-				}
-				newPath = path.Join(parentPath, fuzz)
-			}
-			if !strings.HasPrefix(newPath, "/") {
-				newPath = "/" + newPath
-			}
-			// 親パスは URL から算出（再帰 ffuf でも正しい親に配置される）
-			parent := path.Dir(newPath)
-			if parent == "." {
-				parent = "/"
-			}
-			tree.AddEndpointWithStatus(host, port, parent, newPath, r.Status)
-		}
-		// 親のenum完了（結果あり = 列挙できた）
-		tree.CompleteTask(host, port, parentPath, TaskEndpointEnum)
-
-	case TaskVhostDiscov:
-		// vhost 発見: コマンドラインからドメインを抽出
-		domain := extractDomainFromFfufCmd(output.CommandLine)
-		for _, r := range output.Results {
-			fuzz := r.Input["FUZZ"]
-			if fuzz == "" {
-				continue
-			}
-			vhostName := fuzz + "." + domain
-			tree.AddVhost(host, port, vhostName)
-		}
-		// 親の vhost discovery 完了
-		tree.CompleteTask(host, port, parentPath, TaskVhostDiscov)
-
-	case TaskParamFuzz:
-		// パラメータ発見は情報のみ、タスクを完了にする
-		tree.CompleteTask(host, port, parentPath, TaskParamFuzz)
-
-	case TaskProfiling:
-		tree.CompleteTask(host, port, parentPath, TaskProfiling)
-	}
-
-	return nil
-}
-
-// extractDomainFromFfufCmd は ffuf コマンドラインから "Host: FUZZ.<domain>" のドメイン部分を抽出する。
-func extractDomainFromFfufCmd(cmd string) string {
-	// -H "Host: FUZZ.example.com" or -H 'Host: FUZZ.example.com'
-	idx := strings.Index(cmd, "FUZZ.")
-	if idx < 0 {
-		return "unknown"
-	}
-	rest := cmd[idx+len("FUZZ."):]
-	// クォートまたはスペースで終端
-	for i, c := range rest {
-		if c == '"' || c == '\'' || c == ' ' || c == '\t' {
-			return rest[:i]
-		}
-	}
-	return rest
-}
-
 // --- 統合検出パーサー ---
 
 // DetectAndParse はコマンドと出力からツールを判定し、適切なパーサーを呼ぶ。
@@ -229,12 +114,6 @@ func DetectAndParse(command string, output string, tree *AttackDataTree, host st
 		return ParseNmapText(output, tree)
 	}
 
-	// ffuf 検出
-	if strings.Contains(cmdLower, "ffuf") && strings.Contains(output, `"results"`) {
-		port, parentPath, taskType := parseFfufCommand(command)
-		return ParseFfufJSON(output, tree, host, port, parentPath, taskType)
-	}
-
 	// curl 検出 → profiling 完了
 	if strings.Contains(cmdLower, "curl") {
 		port, curlPath := parseCurlCommand(command)
@@ -245,47 +124,6 @@ func DetectAndParse(command string, output string, tree *AttackDataTree, host st
 	}
 
 	return nil
-}
-
-// parseFfufCommand は ffuf コマンドからポート、パス、タスクタイプを抽出する。
-func parseFfufCommand(command string) (port int, parentPath string, taskType ReconTaskType) {
-	port = 80
-	parentPath = "/"
-	taskType = TaskEndpointEnum
-
-	// -H "Host:" があれば vhost discovery
-	if strings.Contains(command, "Host:") || strings.Contains(command, "host:") {
-		taskType = TaskVhostDiscov
-		// vhost の場合、-u から port を抽出
-		if u := extractURLFromFlag(command, "-u"); u != "" {
-			if parsed, err := url.Parse(u); err == nil {
-				port = portFromURL(parsed)
-			}
-		}
-		return
-	}
-
-	// ?FUZZ= や -d "FUZZ=value" があれば param fuzz
-	if strings.Contains(command, "?FUZZ=") || strings.Contains(command, "FUZZ=value") {
-		taskType = TaskParamFuzz
-	}
-
-	// -u フラグから URL を抽出
-	if u := extractURLFromFlag(command, "-u"); u != "" {
-		if parsed, err := url.Parse(u); err == nil {
-			port = portFromURL(parsed)
-			// パスから FUZZ を除去して親パスを得る
-			p := parsed.Path
-			p = strings.ReplaceAll(p, "/FUZZ", "")
-			p = strings.ReplaceAll(p, "FUZZ", "")
-			if p == "" {
-				p = "/"
-			}
-			parentPath = p
-		}
-	}
-
-	return
 }
 
 // parseCurlCommand は curl コマンドから URL のポートとパスを抽出する。
@@ -332,74 +170,6 @@ func ExtractNmapOutputFile(command string) string {
 			return val
 		case "-oA":
 			return val + ".xml"
-		}
-	}
-	return ""
-}
-
-// ExtractFfufOutputPath は ffuf コマンドから -o フラグの出力ファイルパスを抽出する。
-// ffuf でなければ、または -o がなければ空文字を返す。
-// -of（output format）は -o とは別フラグなので混同しない。
-func ExtractFfufOutputPath(command string) string {
-	if !strings.Contains(strings.ToLower(command), "ffuf") {
-		return ""
-	}
-	parts := strings.Fields(command)
-	for i, p := range parts {
-		if p == "-o" && i+1 < len(parts) {
-			return strings.Trim(parts[i+1], `"'`)
-		}
-	}
-	return ""
-}
-
-// EnsureFfufOutput は ffuf コマンドの -o フラグを memory ディレクトリ以下に強制する。
-// -o がない場合は追加し、既にある場合は memory 以下のパスに差し替える。
-// memDir が空の場合は何もしない。
-func EnsureFfufOutput(command string, memDir string, host string) string {
-	if !strings.Contains(command, "ffuf") || memDir == "" {
-		return command
-	}
-
-	// 出力パスを生成: memDir/<host>/raw/ffuf_<timestamp>.json
-	outPath := fmt.Sprintf("%s/%s/raw/ffuf_%s.json",
-		strings.TrimRight(memDir, "/"),
-		host,
-		time.Now().Format("20060102-150405"))
-
-	// 既に -o がある場合は差し替え
-	parts := strings.Fields(command)
-	for i, p := range parts {
-		if p == "-o" && i+1 < len(parts) {
-			parts[i+1] = outPath
-			return strings.Join(parts, " ")
-		}
-	}
-
-	// -o がない場合は追加
-	return strings.Replace(command, "ffuf ", fmt.Sprintf("ffuf -o %s ", outPath), 1)
-}
-
-// EnsureFfufSilent は ffuf コマンドに -s フラグを自動付与する。
-// プログレスバー出力を抑制し、TUI のフリーズを防止する。
-func EnsureFfufSilent(command string) string {
-	if !strings.Contains(command, "ffuf") {
-		return command
-	}
-	if strings.Contains(command, " -s ") || strings.HasSuffix(command, " -s") {
-		return command
-	}
-	// "ffuf" の直後に "-s" を挿入
-	return strings.Replace(command, "ffuf ", "ffuf -s ", 1)
-}
-
-// extractURLFromFlag はコマンドから指定フラグの値を抽出する。
-func extractURLFromFlag(command string, flag string) string {
-	parts := strings.Fields(command)
-	for i, p := range parts {
-		if p == flag && i+1 < len(parts) {
-			val := parts[i+1]
-			return strings.Trim(val, `"'`)
 		}
 	}
 	return ""

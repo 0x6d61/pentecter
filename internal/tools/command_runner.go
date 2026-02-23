@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,19 +21,31 @@ import (
 //   - Docker 設定なし → ホスト直接実行（要承認）
 //   - proposal_required 明示指定 → その値に従う
 type CommandRunner struct {
-	registry    *Registry
-	blacklist   *Blacklist
-	store       *LogStore
-	autoApprove bool // グローバル自動承認（true: 未登録ツールも自動実行）
+	registry      *Registry
+	blacklist     *Blacklist
+	store         *LogStore
+	autoApprove   bool // グローバル自動承認（true: 未登録ツールも自動実行）
+	itMu          sync.RWMutex // internalTools の並行アクセス保護
+	internalTools map[string]InternalTool
 }
 
 // NewCommandRunner は CommandRunner を構築する。
 func NewCommandRunner(registry *Registry, blacklist *Blacklist, store *LogStore) *CommandRunner {
 	return &CommandRunner{
-		registry:  registry,
-		blacklist: blacklist,
-		store:     store,
+		registry:      registry,
+		blacklist:     blacklist,
+		store:         store,
+		internalTools: make(map[string]InternalTool),
 	}
+}
+
+// RegisterInternalTool は内部ツールを登録する。
+// 登録された binary 名のコマンドは sh -c を経由せず、InternalTool.Execute() で実行される。
+// 同名のツールが既に登録されている場合は上書きする（SubAgent ごとに tree/host が異なるため意図的）。
+func (r *CommandRunner) RegisterInternalTool(name string, tool InternalTool) {
+	r.itMu.Lock()
+	r.internalTools[name] = tool
+	r.itMu.Unlock()
 }
 
 // Run はコマンドを実行する。
@@ -123,6 +136,7 @@ func (r *CommandRunner) needsProposal(def *ToolDef, useDocker bool, _ bool) bool
 }
 
 // execute は実際にコマンドを実行してストリームを返す。
+// 内部ツールが登録されている場合はプロセスを起動せず Go 内部で実行する。
 func (r *CommandRunner) execute(
 	ctx context.Context,
 	originalCommand, binary string,
@@ -130,6 +144,14 @@ func (r *CommandRunner) execute(
 	def *ToolDef,
 	useDocker bool,
 ) (<-chan OutputLine, <-chan *ToolResult) {
+	// 内部ツール分岐
+	r.itMu.RLock()
+	tool, isInternal := r.internalTools[binary]
+	r.itMu.RUnlock()
+	if isInternal {
+		return r.executeInternal(ctx, tool, originalCommand, binary, args)
+	}
+
 	linesCh := make(chan OutputLine, 256)
 	resultCh := make(chan *ToolResult, 1)
 
@@ -214,6 +236,79 @@ func (r *CommandRunner) execute(
 		}
 
 		truncated := Truncate(rawTextLines, truncCfg)
+		entities := ExtractEntities(rawTextLines)
+
+		res := &ToolResult{
+			ID:         id,
+			ToolName:   binary,
+			Args:       args,
+			ExitCode:   exitCode,
+			RawLines:   rawLines,
+			Truncated:  truncated,
+			Entities:   entities,
+			StartedAt:  startedAt,
+			FinishedAt: time.Now(),
+			Err:        runErr,
+		}
+		r.store.Save(res)
+		resultCh <- res
+	}()
+
+	return linesCh, resultCh
+}
+
+// executeInternal は内部ツールを Go 内部で実行する。
+// sh -c を経由せず InternalTool.Execute() を直接呼ぶ。
+// 出力は中間チャネルで傍受し、Truncated フィールドに実際の出力を格納する。
+func (r *CommandRunner) executeInternal(
+	ctx context.Context,
+	tool InternalTool,
+	originalCommand, binary string,
+	args []string,
+) (<-chan OutputLine, <-chan *ToolResult) {
+	linesCh := make(chan OutputLine, 256)
+	resultCh := make(chan *ToolResult, 1)
+
+	go func() {
+		defer close(linesCh)
+		defer close(resultCh)
+
+		startedAt := time.Now()
+		id := MakeID(binary, originalCommand, startedAt)
+
+		// 中間チャネルで出力を傍受し、Truncated を構築する
+		internalCh := make(chan OutputLine, 256)
+		var rawLines []OutputLine
+
+		var fwdWg sync.WaitGroup
+		fwdWg.Add(1)
+		go func() {
+			defer fwdWg.Done()
+			for line := range internalCh {
+				rawLines = append(rawLines, line)
+				select {
+				case linesCh <- line:
+				case <-ctx.Done():
+					// コンテキストキャンセル後は残りを収集のみ（転送しない）
+					for rem := range internalCh {
+						rawLines = append(rawLines, rem)
+					}
+					return
+				}
+			}
+		}()
+
+		exitCode, runErr := tool.Execute(ctx, args, internalCh)
+		close(internalCh)
+		fwdWg.Wait()
+
+		// 実際の出力から Truncated を構築（Brain が次ターンで参照する）
+		rawTextLines := make([]string, len(rawLines))
+		for i, l := range rawLines {
+			rawTextLines[i] = l.Content
+		}
+		truncated := Truncate(rawTextLines, DefaultHeadTailConfig)
+
 		entities := ExtractEntities(rawTextLines)
 
 		res := &ToolResult{

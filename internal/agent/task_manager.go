@@ -34,7 +34,7 @@ type SpawnTaskRequest struct {
 	TargetHost string
 	MaxTurns   int
 	AttackDataTree  *AttackDataTree
-	MemDir     string // ffuf -o 出力先（空 = EnsureFfufOutput 無効）
+	MemDir     string // webfuzz raw output 用
 }
 
 // NewTaskManager は TaskManager を構築する。

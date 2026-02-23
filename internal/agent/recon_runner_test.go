@@ -41,11 +41,8 @@ func TestReconRunner_BuildWebReconPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "80") {
 		t.Error("prompt should contain port")
 	}
-	if !strings.Contains(prompt, "ffuf") {
-		t.Error("prompt should mention ffuf")
-	}
-	if !strings.Contains(prompt, "-of json") {
-		t.Error("prompt should require json output format")
+	if !strings.Contains(prompt, "webfuzz") {
+		t.Error("prompt should mention webfuzz")
 	}
 
 	// VALUE FUZZING セクションの確認
