@@ -1,9 +1,9 @@
 //go:build e2e
 
 // E2E テストは以下の手順で実行する:
-//   1. docker compose -f testenv/docker-compose.yml up -d
+//   1. docker compose -f demo/docker-compose.yml up -d target vulnboard
 //   2. go test -v -tags=e2e -timeout 300s ./e2e/...
-//   3. docker compose -f testenv/docker-compose.yml down
+//   3. docker compose -f demo/docker-compose.yml down
 //
 // 環境変数:
 //   E2E_TARGET_IP   テスト対象の IP（デフォルト: 127.0.0.1）
