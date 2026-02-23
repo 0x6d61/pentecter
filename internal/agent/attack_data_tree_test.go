@@ -1950,3 +1950,30 @@ func TestAddEndpoint_DuplicateMultiplePaths(t *testing.T) {
 		t.Errorf("Children count = %d, want 2 (/api + /login)", len(tree.Ports[0].Children))
 	}
 }
+
+// --- "/" 重複防止テスト ---
+
+func TestAddEndpointWithStatus_RootSlash_SkippedOnPortNode(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// ffuf が "/" を返した場合、ポートノード（path=""）と重複するのでスキップ
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/", 200)
+
+	if len(tree.Ports[0].Children) != 0 {
+		t.Errorf("Children count = %d, want 0 (root '/' should not be added as child)", len(tree.Ports[0].Children))
+	}
+}
+
+func TestAddEndpointWithStatus_TrailingSlash_Normalized(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// "/controllers/" と "/controllers" は同じとして扱う
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/controllers", 301)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/controllers/", 301)
+
+	if len(tree.Ports[0].Children) != 1 {
+		t.Errorf("Children count = %d, want 1 (trailing slash normalized)", len(tree.Ports[0].Children))
+	}
+}

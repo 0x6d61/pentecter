@@ -262,8 +262,19 @@ func (t *AttackDataTree) AddEndpoint(host string, port int, parentPath, newPath 
 func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath, newPath string, httpStatus int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Trailing slash 正規化: "/controllers/" → "/controllers"（ルート "/" は除く）
+	if len(newPath) > 1 {
+		newPath = strings.TrimRight(newPath, "/")
+	}
+
 	parent := t.findNode(host, port, parentPath)
 	if parent == nil {
+		return
+	}
+
+	// "/" はポートノード（path=""）と重複するのでスキップ
+	if matchPath(parent.Path, newPath) {
 		return
 	}
 
