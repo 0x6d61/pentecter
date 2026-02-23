@@ -414,6 +414,52 @@ func TestTaskManager_DrainCompleted_Empty(t *testing.T) {
 	}
 }
 
+// context キャンセル後でも doneCh に完了通知が届くこと（race 修正の検証）
+func TestTaskManager_SpawnTask_DoneCh_AfterCancel(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "run", Action: schema.ActionRun, Command: "echo done-after-cancel"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+	tm := agent.NewTaskManager(runner, nil, events, mb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	taskID, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
+		Kind:       agent.TaskKindSmart,
+		Goal:       "test cancel race",
+		TargetHost: "10.0.0.5",
+		MaxTurns:   10,
+	})
+	if err != nil {
+		t.Fatalf("SpawnTask: %v", err)
+	}
+
+	// タスク完了を待つ
+	done := tm.WaitTask(ctx, taskID)
+	if !done {
+		t.Fatal("WaitTask should return true")
+	}
+
+	// タスク完了直後に context をキャンセル — race の再現
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+
+	// DrainCompleted で取得できること（doneCh に通知が届いていること）
+	completed := tm.DrainCompleted()
+	if len(completed) != 1 {
+		t.Fatalf("DrainCompleted after cancel: got %d, want 1 — doneCh notification was lost", len(completed))
+	}
+	if completed[0].ID != taskID {
+		t.Errorf("DrainCompleted[0].ID: got %q, want %q", completed[0].ID, taskID)
+	}
+}
+
 func TestTaskManager_SpawnTask_Smart_NoBrain(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)

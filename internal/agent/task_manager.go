@@ -34,6 +34,7 @@ type SpawnTaskRequest struct {
 	TargetHost string
 	MaxTurns   int
 	AttackDataTree  *AttackDataTree
+	MemDir     string // ffuf -o 出力先（空 = EnsureFfufOutput 無効）
 }
 
 // NewTaskManager は TaskManager を構築する。
@@ -79,14 +80,13 @@ func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (str
 		cancel()
 		return id, fmt.Errorf("sub-brain is not configured for smart tasks")
 	}
-	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events, req.AttackDataTree, req.TargetHost)
+	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events, req.AttackDataTree, req.TargetHost, req.MemDir)
 	go func() {
 		sa.Run(taskCtx, task, req.TargetHost)
-		select {
-		case tm.doneCh <- id:
-		case <-taskCtx.Done():
-			// context cancelled — 完了通知は不要
-		}
+		// context がキャンセルされても完了通知は必ず送る。
+		// select で taskCtx.Done() と競合すると通知が消え、
+		// active カウンタがデクリメントされず phase gate がデッドロックする。
+		tm.doneCh <- id
 	}()
 
 	return id, nil

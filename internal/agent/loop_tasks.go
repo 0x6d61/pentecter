@@ -11,7 +11,8 @@ import (
 
 // drainCompletedTasks は完了済みサブタスクの結果を取り出し、テキストとして返す。
 // Brain.Think() の直前に呼ばれ、結果が lastToolOutput に注入される。
-func (l *Loop) drainCompletedTasks() string {
+// SubAgent が MaxTurns で力尽きた場合、残タスクがあれば SubAgent を再 spawn する。
+func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 	if l.taskMgr == nil {
 		return ""
 	}
@@ -24,6 +25,16 @@ func (l *Loop) drainCompletedTasks() string {
 		fmt.Fprintf(&sb, "=== SubTask Completed: %s ===\n", task.ID)
 		sb.WriteString(l.buildTaskResult(task))
 		sb.WriteString("\n")
+
+		// Re-spawn: SubAgent が MaxTurns で力尽きた場合、残タスクがあれば再 spawn
+		if l.reconRunner != nil && l.attackData != nil &&
+			task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
+			if l.attackData.PortHasPendingChildren(task.Metadata.Port) {
+				if portNode := l.attackData.FindPortNode(task.Metadata.Port); portNode != nil {
+					l.reconRunner.SpawnWebReconForPort(ctx, portNode)
+				}
+			}
+		}
 	}
 	return sb.String()
 }

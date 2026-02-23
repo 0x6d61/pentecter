@@ -89,7 +89,7 @@ func TestSmartSubAgent_Run_MultiTurn(t *testing.T) {
 	task := agent.NewSubTask("smart-1", agent.TaskKindSmart, "enumerate services")
 	task.MaxTurns = 10
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -156,7 +156,7 @@ func TestSmartSubAgent_Run_MaxTurnsReached(t *testing.T) {
 	task := agent.NewSubTask("smart-2", agent.TaskKindSmart, "infinite thinker")
 	task.MaxTurns = 3
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -194,7 +194,7 @@ func TestSmartSubAgent_Run_BrainError(t *testing.T) {
 	task := agent.NewSubTask("smart-3", agent.TaskKindSmart, "error test")
 	task.MaxTurns = 5
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -238,7 +238,7 @@ func TestSmartSubAgent_Run_ContextCancel(t *testing.T) {
 	task := agent.NewSubTask("smart-4", agent.TaskKindSmart, "cancel test")
 	task.MaxTurns = 20
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -290,7 +290,7 @@ func TestSmartSubAgent_FfufSilent(t *testing.T) {
 	task := agent.NewSubTask("smart-ffuf", agent.TaskKindSmart, "test ffuf normalization")
 	task.MaxTurns = 5
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -338,7 +338,7 @@ func TestSmartSubAgent_UpdatesAttackDataTree(t *testing.T) {
 	task := agent.NewSubTask("smart-recon", agent.TaskKindSmart, "test recon tree update")
 	task.MaxTurns = 5
 
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, tree, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, tree, "10.0.0.5", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -370,7 +370,7 @@ func TestSmartSubAgent_Run_TaskInstructionEveryTurn(t *testing.T) {
 	}
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 32)
-	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5")
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
 
 	task := agent.NewSubTask("test-persist", agent.TaskKindSmart, "Test persistent instructions")
 	task.Command = "These are my detailed workflow instructions"

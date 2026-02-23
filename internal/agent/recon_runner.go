@@ -72,6 +72,7 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *AttackDat
 		TargetID:   rr.targetID,
 		MaxTurns:   50,
 		AttackDataTree:  rr.tree,
+		MemDir:     rr.memDir,
 		Metadata: TaskMetadata{
 			Port:    port.Port,
 			Service: port.Service,
@@ -151,26 +152,19 @@ WORKFLOW — Execute tasks in this order for each endpoint:
    If uncertain, use: -e .php,.jsp,.html,.txt,.bak
 
 2. ENDPOINT ENUMERATION (for each directory):
-   ffuf -w <wordlist> -u %s/<path>/FUZZ -e <extensions-from-step-1> -of json -t 50
+   ffuf -w /usr/share/wordlists/dirb/common.txt -u %s/<path>/FUZZ -e <extensions-from-step-1> -of json -t 50
+   IMPORTANT: Use ONLY /usr/share/wordlists/dirb/common.txt for directory enumeration.
+   Do NOT use raft-*, directory-list-*, or other large wordlists — they waste time with minimal gain.
    When new directories are discovered, enumerate each one separately.
 
-3. ENDPOINT PROFILING:
-   For EACH discovered endpoint:
-   curl -isk %s/<endpoint>
-   Record: response code, headers, body structure, technology indicators.
-
-   After profiling each endpoint:
-   - If static file (js/css/jpg/png/ico/svg/woff/font) or Content-Type indicates
-     non-dynamic content → skip param_fuzz and value_fuzz for that endpoint
-   - If dynamic (PHP/JSP/API/form/redirect/unknown) → proceed with param_fuzz + value_fuzz
-
-4. PARAMETER FUZZING:
-   For EACH dynamic endpoint:
+3. PARAMETER FUZZING:
+   For EACH endpoint where param_fuzz is "pending" in the tree:
    GET: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u "%s/<endpoint>?FUZZ=value" -of json -fs <default-size>
    POST: ffuf -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt -u %s/<endpoint> -X POST -d "FUZZ=value" -of json -fs <default-size>
+   Static files (css/js/png/jpg/ico/svg/woff/font) are already filtered out by the tree — skip if param_fuzz shows "none".
 
-5. PARAMETER VALUE FUZZING (MANDATORY):
-   After discovering parameters in step 4, you MUST test EACH parameter.
+4. PARAMETER VALUE FUZZING (MANDATORY):
+   After discovering parameters in step 3, you MUST test EACH parameter.
 
    For each discovered parameter:
    a. Send baseline: curl -s -w "\n%%{http_code} %%{size_download} %%{time_total}" "%s/<endpoint>?param=normalvalue"
@@ -192,6 +186,11 @@ WORKFLOW — Execute tasks in this order for each endpoint:
    Add context-specific payloads based on the parameter name.
    Example: "file" parameter → test OS path payloads, "id" → test more numeric sequences
 
+5. ENDPOINT PROFILING:
+   For EACH endpoint where profiling is "pending" in the tree:
+   curl -isk %s/<endpoint>
+   Record: response code, headers, body structure, technology indicators.
+
 6. VIRTUAL HOST DISCOVERY:
    First get the default response size:
    curl -s %s | wc -c
@@ -202,10 +201,9 @@ WORKFLOW — Execute tasks in this order for each endpoint:
 RULES (VIOLATION = FAILURE):
 - EVERY ffuf command MUST include -of json — no exceptions
 - Do NOT use -recursion or -recursion-depth flags
-- Do NOT skip any endpoint or task
-- ALL fuzz categories in step 5 are MANDATORY
-- Skip param_fuzz/value_fuzz for static files (js/css/jpg/png/ico/svg/woff/font)
+- Do NOT skip any endpoint or task — check the tree and process ALL pending tasks
+- ALL fuzz categories in step 4 are MANDATORY
 - Report all findings with "memory" action
 - When all tasks are complete, use "complete" action to finish
-`, host, port, url, url, url, url, url, url, catList.String(), url, url, url, host)
+`, host, port, url, url, url, url, url, catList.String(), url, url, url, url, host)
 }

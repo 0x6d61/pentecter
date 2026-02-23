@@ -178,11 +178,10 @@ func TestBuildWebReconPrompt_NoRecursion(t *testing.T) {
 
 func TestBuildWebReconPrompt_StaticFileSkip(t *testing.T) {
 	prompt := buildWebReconPrompt("10.10.11.100", 80)
-	if !strings.Contains(prompt, "static file") {
-		t.Error("prompt should mention static file skipping")
-	}
-	if !strings.Contains(prompt, "js/css/jpg") {
-		t.Error("prompt should list static file extensions to skip")
+	// 静的ファイルフィルタリングはコード側（AddEndpointWithStatus）で処理
+	// プロンプトでは tree の param_fuzz ステータスを参照するよう指示
+	if !strings.Contains(prompt, "Static files") {
+		t.Error("prompt should mention static file filtering by tree")
 	}
 }
 

@@ -224,7 +224,7 @@ func (l *Loop) Run(ctx context.Context) {
 		l.emit(Event{Type: EventTurnStart, TurnNumber: l.turnCount})
 
 		// 完了済みサブタスクの結果を自動注入（Push モデル）
-		if completedOutput := l.drainCompletedTasks(); completedOutput != "" {
+		if completedOutput := l.drainCompletedTasks(ctx); completedOutput != "" {
 			if l.lastToolOutput != "" {
 				l.lastToolOutput = completedOutput + "\n" + l.lastToolOutput
 			} else {
@@ -898,7 +898,7 @@ func (l *Loop) shouldGateForRecon(userMsg string) bool {
 func (l *Loop) waitForReconGate(ctx context.Context) string {
 	for {
 		// 完了タスクを drain（CompleteAllPortTasks が呼ばれ Active が減る可能性がある）
-		if completedOutput := l.drainCompletedTasks(); completedOutput != "" {
+		if completedOutput := l.drainCompletedTasks(ctx); completedOutput != "" {
 			l.lastToolOutput = completedOutput
 			return ""
 		}
