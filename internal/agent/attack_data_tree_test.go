@@ -2747,6 +2747,38 @@ func TestStartPortRecon_PendingChildren_Succeeds(t *testing.T) {
 	}
 }
 
+func TestPendingHTTPPorts_IncludesPortWithPendingChildren(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/api", 200)
+
+	port := tree.Ports[0]
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+
+	ports := tree.PendingHTTPPorts()
+	if len(ports) != 1 {
+		t.Fatalf("PendingHTTPPorts len = %d, want 1", len(ports))
+	}
+	if ports[0].Port != 80 {
+		t.Fatalf("PendingHTTPPorts[0].Port = %d, want 80", ports[0].Port)
+	}
+}
+
+func TestPendingHTTPPorts_ExcludesPortWithoutPending(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+
+	ports := tree.PendingHTTPPorts()
+	if len(ports) != 0 {
+		t.Fatalf("PendingHTTPPorts len = %d, want 0", len(ports))
+	}
+}
+
 func TestCompleteAllPortTasks_DecrementsActive_WithPendingChildrenOnly(t *testing.T) {
 	tree := NewAttackDataTree("10.0.0.1", 2, 3)
 	tree.AddPort(80, "http", "Apache")

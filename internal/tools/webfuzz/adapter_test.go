@@ -680,3 +680,132 @@ func createTempWordlist(t *testing.T, content string) string {
 	f.Close()
 	return f.Name()
 }
+
+func TestWebfuzzTool_Execute_DirMode_Subpath_SeedsBasePathAndAddsHit(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vulnboard/admin", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "admin")
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "admin\n")
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 64)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"dir", "-u", srv.URL + "/vulnboard/FUZZ", "-w", wordlist, "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+
+	hasBase := false
+	hasChild := false
+	for _, ep := range tree.endpoints {
+		if ep.newPath == "/vulnboard" {
+			hasBase = true
+		}
+		if ep.parentPath == "/vulnboard" && ep.newPath == "/vulnboard/admin" {
+			hasChild = true
+		}
+	}
+
+	if !hasBase {
+		t.Fatal("expected base path /vulnboard to be seeded before hit processing")
+	}
+	if !hasChild {
+		t.Fatal("expected discovered endpoint /vulnboard/admin to be added under /vulnboard")
+	}
+
+	if len(tree.completed) == 0 {
+		t.Fatal("expected completion record")
+	}
+	last := tree.completed[len(tree.completed)-1]
+	if last.path != "/vulnboard" {
+		t.Fatalf("completion path = %q, want /vulnboard", last.path)
+	}
+}
+
+func TestWebfuzzTool_Execute_DirMode_SubpathNestedWord_UsesHierarchicalParent(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vulnboard/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "login")
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "admin/login\n")
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 64)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"dir", "-u", srv.URL + "/vulnboard/FUZZ", "-w", wordlist, "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+
+	hasIntermediate := false
+	hasLeafWithHierarchicalParent := false
+	hasLeafWithFlatParent := false
+	for _, ep := range tree.endpoints {
+		if ep.parentPath == "/vulnboard" && ep.newPath == "/vulnboard/admin" {
+			hasIntermediate = true
+		}
+		if ep.parentPath == "/vulnboard/admin" && ep.newPath == "/vulnboard/admin/login" {
+			hasLeafWithHierarchicalParent = true
+		}
+		if ep.parentPath == "/vulnboard" && ep.newPath == "/vulnboard/admin/login" {
+			hasLeafWithFlatParent = true
+		}
+	}
+
+	if !hasIntermediate {
+		t.Fatal("expected intermediate endpoint /vulnboard/admin to be seeded")
+	}
+	if !hasLeafWithHierarchicalParent {
+		t.Fatal("expected /vulnboard/admin/login to be added under /vulnboard/admin")
+	}
+	if hasLeafWithFlatParent {
+		t.Fatal("unexpected flat parent mapping: /vulnboard/admin/login under /vulnboard")
+	}
+}

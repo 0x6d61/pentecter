@@ -11,8 +11,7 @@ import (
 	"github.com/0x6d61/pentecter/internal/tools"
 )
 
-// TreeUpdater は AttackDataTree への書き込みを抽象化するインターフェース。
-// agent パッケージへの直接依存を避けるために使用する。
+// TreeUpdater allows webfuzz to update AttackDataTree without depending on agent package types.
 type TreeUpdater interface {
 	AddEndpointWithStatus(host string, port int, parentPath, newPath string, httpStatus int)
 	AddVhost(parentHost string, port int, vhostName string)
@@ -21,20 +20,18 @@ type TreeUpdater interface {
 	AddFinding(host string, port int, path string, param, category, evidence, severity string)
 }
 
-// WebfuzzTool は InternalTool を実装し、結果を AttackDataTree に直接書き込む。
+// WebfuzzTool executes webfuzz and updates AttackDataTree.
 type WebfuzzTool struct {
 	tree TreeUpdater
 	host string
 }
 
-// NewWebfuzzTool は WebfuzzTool を構築する。
-// tree が nil の場合、ヒットはコールバックのみで通知される（ツリー更新なし）。
+// NewWebfuzzTool creates a new WebfuzzTool.
 func NewWebfuzzTool(tree TreeUpdater, host string) *WebfuzzTool {
 	return &WebfuzzTool{tree: tree, host: host}
 }
 
-// Execute は InternalTool インターフェースを実装する。
-// args はサブコマンドとフラグ（例: ["dir", "-u", "http://...", "-w", "..."]）。
+// Execute runs internal webfuzz.
 func (w *WebfuzzTool) Execute(ctx context.Context, args []string, lineCh chan<- tools.OutputLine) (int, error) {
 	opts, err := ParseArgs(args)
 	if err != nil {
@@ -50,24 +47,29 @@ func (w *WebfuzzTool) Execute(ctx context.Context, args []string, lineCh chan<- 
 		return 1, err
 	}
 
+	basePort, basePath := extractPortAndPath(opts.URL)
+	baseTreePath := normalizeTreePath(basePath)
+
+	if w.tree != nil && opts.Mode == "dir" && baseTreePath != "/" {
+		// Ensure scan root exists so discovered children are not dropped.
+		baseParent := normalizeTreePath(path.Dir(baseTreePath))
+		w.tree.AddEndpointWithStatus(w.host, basePort, baseParent, baseTreePath, 0)
+	}
+
 	hitFn := func(hit Hit) {
 		if w.tree == nil {
 			return
 		}
-		port, parentPath := extractPortAndPath(opts.URL)
 		switch opts.Mode {
 		case "dir":
-			// ヒットの URL からフルパスを抽出
-			newPath := normalizeTreePath(extractPathFromHitURL(hit.URL, parentPath, hit.Input))
-			parent := normalizeTreePath(path.Dir(newPath))
-			w.tree.AddEndpointWithStatus(w.host, port, parent, newPath, hit.StatusCode)
+			newPath := normalizeTreePath(extractPathFromHitURL(hit.URL, baseTreePath, hit.Input))
+			addDirEndpointWithAncestors(w.tree, w.host, basePort, baseTreePath, newPath, hit.StatusCode)
 		case "vhost":
 			domain := extractDomainFromHeaders(opts.Headers)
 			vhostName := hit.Input + "." + domain
-			w.tree.AddVhost(w.host, port, vhostName)
+			w.tree.AddVhost(w.host, basePort, vhostName)
 		case "param":
-			// ヒットしたパラメーター名をツリーに記録
-			w.tree.AddParameter(w.host, port, normalizeTreePath(parentPath), hit.Input, "query")
+			w.tree.AddParameter(w.host, basePort, baseTreePath, hit.Input, "query")
 		}
 	}
 
@@ -85,31 +87,26 @@ func (w *WebfuzzTool) Execute(ctx context.Context, args []string, lineCh chan<- 
 		return 1, err
 	}
 
-	// 各モードの列挙完了をマーク
 	if w.tree != nil {
-		port, parentPath := extractPortAndPath(opts.URL)
-		treePath := normalizeTreePath(parentPath)
 		switch opts.Mode {
 		case "dir":
-			// TaskEndpointEnum = 0 (agent パッケージの定数値)
-			w.tree.CompleteTask(w.host, port, treePath, 0)
+			// TaskEndpointEnum = 0
+			w.tree.CompleteTask(w.host, basePort, baseTreePath, 0)
 		case "vhost":
-			// TaskVhostDiscov = 4 (agent パッケージの定数値)
-			w.tree.CompleteTask(w.host, port, treePath, 4)
+			// TaskVhostDiscov = 4
+			w.tree.CompleteTask(w.host, basePort, baseTreePath, 4)
 		case "param":
-			// TaskParamFuzz = 1 (agent パッケージの定数値)
-			w.tree.CompleteTask(w.host, port, treePath, 1)
+			// TaskParamFuzz = 1
+			w.tree.CompleteTask(w.host, basePort, baseTreePath, 1)
 		}
 	}
 
 	return 0, nil
 }
 
-// extractPortAndPath は URL からポート番号とパス（FUZZ 除去済み）を抽出する。
+// extractPortAndPath extracts port and base path from URL template.
 func extractPortAndPath(rawURL string) (int, string) {
-	// FUZZ を除去してからパース
 	cleanURL := strings.ReplaceAll(rawURL, "FUZZ", "")
-	// クエリパラメーターの ? を除去
 	cleanURL = strings.TrimRight(cleanURL, "?=&")
 
 	parsed, err := url.Parse(cleanURL)
@@ -131,7 +128,7 @@ func extractPortAndPath(rawURL string) (int, string) {
 	return port, p
 }
 
-// extractPathFromHitURL は Hit の URL からフルパスを抽出する。
+// extractPathFromHitURL extracts path from a hit URL.
 func extractPathFromHitURL(hitURL, parentPath, input string) string {
 	parsed, err := url.Parse(hitURL)
 	if err == nil && parsed.Path != "" {
@@ -141,7 +138,7 @@ func extractPathFromHitURL(hitURL, parentPath, input string) string {
 		}
 		return newPath
 	}
-	// フォールバック: parentPath + input
+
 	newPath := path.Join(parentPath, input)
 	if !strings.HasPrefix(newPath, "/") {
 		newPath = "/" + newPath
@@ -149,10 +146,7 @@ func extractPathFromHitURL(hitURL, parentPath, input string) string {
 	return newPath
 }
 
-// normalizeTreePath normalizes tree paths so node lookup remains stable:
-// - ensures leading slash
-// - collapses duplicate slashes
-// - trims trailing slash except root
+// normalizeTreePath keeps path format stable for tree lookups.
 func normalizeTreePath(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -168,12 +162,56 @@ func normalizeTreePath(p string) string {
 	return cleaned
 }
 
-// extractDomainFromHeaders は -H "Host: FUZZ.<domain>" からドメイン部分を抽出する。
+func addDirEndpointWithAncestors(tree TreeUpdater, host string, port int, basePath string, newPath string, httpStatus int) {
+	basePath = normalizeTreePath(basePath)
+	newPath = normalizeTreePath(newPath)
+
+	if isPathUnderBase(newPath, basePath) {
+		baseParts := splitPathParts(basePath)
+		newParts := splitPathParts(newPath)
+		for ancestorLen := len(baseParts) + 1; ancestorLen < len(newParts); ancestorLen++ {
+			ancestorPath := joinPathParts(newParts[:ancestorLen])
+			ancestorParent := joinPathParts(newParts[:ancestorLen-1])
+			tree.AddEndpointWithStatus(host, port, ancestorParent, ancestorPath, 0)
+		}
+	}
+
+	parentPath := normalizeTreePath(path.Dir(newPath))
+	tree.AddEndpointWithStatus(host, port, parentPath, newPath, httpStatus)
+}
+
+func isPathUnderBase(candidate string, base string) bool {
+	candidate = normalizeTreePath(candidate)
+	base = normalizeTreePath(base)
+	if base == "/" {
+		return true
+	}
+	if candidate == base {
+		return true
+	}
+	return strings.HasPrefix(candidate, base+"/")
+}
+
+func splitPathParts(p string) []string {
+	trimmed := strings.Trim(normalizeTreePath(p), "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func joinPathParts(parts []string) string {
+	if len(parts) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(parts, "/")
+}
+
+// extractDomainFromHeaders extracts domain from Host: FUZZ.<domain> header.
 func extractDomainFromHeaders(headers []string) string {
 	for _, h := range headers {
 		if idx := strings.Index(h, "FUZZ."); idx >= 0 {
 			rest := h[idx+len("FUZZ."):]
-			// クォートまたはスペースで終端
 			for i, c := range rest {
 				if c == '"' || c == '\'' || c == ' ' || c == '\t' {
 					return rest[:i]
