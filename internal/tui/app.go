@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,8 +23,6 @@ const (
 	defaultWidth  = 80
 	defaultHeight = 24
 )
-
-var ansiStripRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // App is the terminal UI application.
 // It uses append-only terminal output and line-based input.
@@ -140,6 +137,14 @@ func (a *App) Run(ctx context.Context) error {
 		HistoryLimit:    500,
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
+		FuncFilterInputRune: func(r rune) (rune, bool) {
+			// Fallback for terminals that can't distinguish Ctrl+Enter and
+			// emit Ctrl+J instead.
+			if r == readline.CharCtrlJ {
+				return readline.CharCtrlEnter, true
+			}
+			return r, true
+		},
 		Listener: func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 			switch key {
 			case 15: // Ctrl+O
@@ -148,13 +153,6 @@ func (a *App) Run(ctx context.Context) error {
 			case 20: // Ctrl+T
 				a.toggleThinkingFold()
 				return line, pos, true
-			case readline.CharCtrlJ:
-				// Multiline fallback: Ctrl+J inserts newline.
-				next := make([]rune, 0, len(line)+1)
-				next = append(next, line[:pos]...)
-				next = append(next, '\n')
-				next = append(next, line[pos:]...)
-				return next, pos + 1, true
 			default:
 				return nil, 0, false
 			}
@@ -265,7 +263,6 @@ func (a *App) buildOutputLinesLocked(width int) []string {
 		copy(blocks, t.Blocks)
 
 		rendered := renderBlocks(blocks, width, a.logsExpanded, a.thinkingExpanded, a.currentSpinnerFrameLocked())
-		rendered = ansiStripRegex.ReplaceAllString(rendered, "")
 		rendered = strings.TrimSuffix(rendered, "\n")
 		if rendered != "" {
 			lines = append(lines, strings.Split(rendered, "\n")...)
@@ -397,7 +394,7 @@ func (a *App) buildPromptLocked() string {
 		if frame == "" {
 			frame = "⠋"
 		}
-		return frame + " Thinking... > "
+		return frame + " Thinking...\n> "
 	}
 	if hint == "" {
 		return "> "
@@ -532,7 +529,7 @@ func (a *App) printWelcome() {
 	lines = append(lines,
 		"Input: ip/domain or /target HOST",
 		"Commands: /targets, /model, /attackdata, /skip-recon, /fold, /status",
-		"Keys: Ctrl+O toggle tool output, Ctrl+T toggle thinking blocks",
+		"Keys: Ctrl+O toggle tool output, Ctrl+T toggle thinking blocks, Ctrl+Enter newline",
 	)
 	if a.CurrentModel != "" {
 		lines = append(lines, fmt.Sprintf("Model: %s/%s", a.CurrentProvider, a.CurrentModel))

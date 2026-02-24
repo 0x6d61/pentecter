@@ -199,10 +199,9 @@ func TestRenderThinkingBlock_InProgress(t *testing.T) {
 	b := agent.NewThinkingBlock()
 	b.ThinkingDone = false
 
-	result := renderThinkingBlock(b, "⠋", true)
-
+	result := renderThinkingBlock(b, "x", true)
 	if !strings.Contains(result, "Thinking...") {
-		t.Errorf("expected 'Thinking...' for in-progress thinking, got: %q", result)
+		t.Errorf("expected 'Thinking...' for in-progress thinking block, got: %q", result)
 	}
 }
 
@@ -210,14 +209,13 @@ func TestRenderThinkingBlock_InProgress_WithSpinner(t *testing.T) {
 	b := agent.NewThinkingBlock()
 	b.ThinkingDone = false
 
-	// 各スピナーフレームが出力に反映されることを確認
-	for _, frame := range []string{"⠋", "⠙", "⠹", "⠸"} {
+	for _, frame := range []string{"a", "b", "c", "d"} {
 		result := renderThinkingBlock(b, frame, true)
-		if !strings.Contains(result, frame) {
-			t.Errorf("expected spinner frame %q in output, got: %q", frame, result)
-		}
 		if !strings.Contains(result, "Thinking...") {
-			t.Errorf("expected 'Thinking...' text alongside spinner frame %q, got: %q", frame, result)
+			t.Errorf("expected 'Thinking...' text for active thinking frame %q, got: %q", frame, result)
+		}
+		if strings.Contains(result, frame) {
+			t.Errorf("expected no spinner frame %q in thinking block output, got: %q", frame, result)
 		}
 	}
 }
@@ -229,9 +227,6 @@ func TestRenderThinkingBlock_Completed(t *testing.T) {
 
 	result := renderThinkingBlock(b, "⠋", true)
 
-	if !strings.Contains(result, "✻") {
-		t.Error("expected '✻' in completed thinking block")
-	}
 	if !strings.Contains(result, "Completed in 12s") {
 		t.Errorf("expected 'Completed in 12s', got: %q", result)
 	}
@@ -643,17 +638,18 @@ func TestRenderBlocks_ThinkingThenCommand(t *testing.T) {
 }
 
 func TestRenderBlocks_SpinnerFramePassedToThinkingAndSubTask(t *testing.T) {
-	// 処理中の thinking + subtask の両方にスピナーフレームが渡されることを確認
 	blocks := []*agent.DisplayBlock{
 		agent.NewThinkingBlock(),
 		agent.NewSubTaskBlock("task-1", "Run exploit"),
 	}
 
-	result := renderBlocks(blocks, 80, false, true, "⠹")
+	result := renderBlocks(blocks, 80, false, true, "*")
 
-	// Both blocks should contain the spinner frame "⠹"
-	if !strings.Contains(result, "⠹") {
-		t.Errorf("expected spinner frame '⠹' in output for active blocks, got:\n%s", result)
+	if !strings.Contains(result, "Thinking...") {
+		t.Errorf("expected active thinking block to be visible, got:\n%s", result)
+	}
+	if !strings.Contains(result, "*") {
+		t.Errorf("expected spinner frame '*' in output for active subtask, got:\n%s", result)
 	}
 }
 

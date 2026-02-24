@@ -88,7 +88,7 @@ func renderCommandBlock(b *agent.DisplayBlock, width int, expanded bool) string 
 // renderThinkingBlock は思考中/処理中ブロックをレンダリングする。
 // 処理中: <spinnerFrame> Thinking... (アニメーション付きスピナー)
 // 完了: ✻ Completed in Xs
-func renderThinkingBlock(b *agent.DisplayBlock, spinnerFrame string, expanded bool) string {
+func renderThinkingBlock(b *agent.DisplayBlock, _ string, expanded bool) string {
 	if !expanded {
 		style := lipgloss.NewStyle().Foreground(colorMuted)
 		if b.ThinkingDone {
@@ -97,13 +97,15 @@ func renderThinkingBlock(b *agent.DisplayBlock, spinnerFrame string, expanded bo
 		return "\n" + style.Render("… Thinking… (folded, Ctrl+T to expand)") + "\n\n"
 	}
 
-	if b.ThinkingDone {
-		dur := formatDuration(b.ThinkDuration)
-		style := lipgloss.NewStyle().Foreground(colorSecondary)
-		return "\n" + style.Render(fmt.Sprintf("✻ Completed in %s", dur)) + "\n\n"
-	}
 	style := lipgloss.NewStyle().Foreground(colorSecondary)
-	return "\n" + style.Render(spinnerFrame+" Thinking...") + "\n\n"
+	if !b.ThinkingDone {
+		// Keep spinner animation in the prompt only, but keep a colored
+		// thinking marker in the log stream.
+		return "\n" + style.Render("✻ Thinking...") + "\n\n"
+	}
+
+	dur := formatDuration(b.ThinkDuration)
+	return "\n" + style.Render(fmt.Sprintf("✻ Completed in %s", dur)) + "\n\n"
 }
 
 // renderAIMessageBlock は AI レスポンスブロックをレンダリングする。

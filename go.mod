@@ -2,6 +2,8 @@ module github.com/0x6d61/pentecter
 
 go 1.25.0
 
+replace github.com/ergochat/readline => ./third_party/readline
+
 require (
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834

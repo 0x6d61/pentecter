@@ -34,6 +34,13 @@ func TestBuildPrompt(t *testing.T) {
 	if got := a.buildPrompt(); got != "select [1-2/q] > " {
 		t.Fatalf("select prompt mismatch: %q", got)
 	}
+
+	a.inputMode = ModeNormal
+	a.spinnerActive.Store(true)
+	a.spinnerIdx.Store(0)
+	if got := a.buildPrompt(); got != "⠋ Thinking...\n> " {
+		t.Fatalf("spinner prompt mismatch: %q", got)
+	}
 }
 
 func TestPrintWelcome_NoTargets(t *testing.T) {
