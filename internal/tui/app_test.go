@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
+
 	"github.com/0x6d61/pentecter/internal/agent"
 )
 
@@ -65,7 +67,7 @@ func TestBuildPrompt_NoTarget(t *testing.T) {
 	if !strings.Contains(prompt, ">") {
 		t.Error("prompt should contain > character")
 	}
-	// Simple prompt — no dividers
+	// Simple prompt - no dividers
 	if strings.Contains(prompt, "─") {
 		t.Error("prompt should not contain dividers")
 	}
@@ -197,7 +199,7 @@ func TestPrintWelcome_NoTargets(t *testing.T) {
 	if output == "" {
 		t.Error("expected non-empty welcome output")
 	}
-	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status") {
+	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /copy, /skip-recon, /fold, /status") {
 		t.Error("welcome output should include command list")
 	}
 	if !strings.Contains(output, "Input: ip/domain or /target HOST") {
@@ -217,7 +219,7 @@ func TestPrintWelcome_WithTargets(t *testing.T) {
 	if output == "" {
 		t.Error("expected non-empty welcome output")
 	}
-	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status") {
+	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /copy, /skip-recon, /fold, /status") {
 		t.Error("welcome output should include command list")
 	}
 	if !strings.Contains(output, "Input: ip/domain or /target HOST") {
@@ -300,7 +302,7 @@ func TestPromptEchoLines_EmptyText(t *testing.T) {
 func TestPromptEchoLines_WrappingText(t *testing.T) {
 	a := NewApp(nil)
 	a.width = 20
-	// blank(1) + "> " + 30 chars = 32 → ceil(32/20) = 2 input lines
+	// blank(1) + "> " + 30 chars = 32 -> ceil(32/20) = 2 input lines
 	// 1 + 2 = 3
 	longText := strings.Repeat("x", 30)
 	n := a.promptEchoLines(longText)
@@ -312,7 +314,7 @@ func TestPromptEchoLines_WrappingText(t *testing.T) {
 func TestPromptEchoLines_ExactWidthNoWrap(t *testing.T) {
 	a := NewApp(nil)
 	a.width = 80
-	// blank(1) + "> " + 78 chars = 80 → 1 input line
+	// blank(1) + "> " + 78 chars = 80 -> 1 input line
 	// 1 + 1 = 2
 	text := strings.Repeat("a", 78)
 	n := a.promptEchoLines(text)
@@ -324,7 +326,7 @@ func TestPromptEchoLines_ExactWidthNoWrap(t *testing.T) {
 func TestPromptEchoLines_OneCharOverWidth(t *testing.T) {
 	a := NewApp(nil)
 	a.width = 80
-	// blank(1) + "> " + 79 chars = 81 → ceil(81/80) = 2 input lines
+	// blank(1) + "> " + 79 chars = 81 -> ceil(81/80) = 2 input lines
 	// 1 + 2 = 3
 	text := strings.Repeat("a", 79)
 	n := a.promptEchoLines(text)
@@ -335,14 +337,14 @@ func TestPromptEchoLines_OneCharOverWidth(t *testing.T) {
 
 func TestClearPromptEcho_TestMode(t *testing.T) {
 	a := newTestApp(nil)
-	// Should not panic in test mode (testWriter != nil → no-op)
+	// Should not panic in test mode (testWriter != nil -> no-op)
 	a.clearPromptEcho("test")
 }
 
 func TestBuildStatusText_Empty(t *testing.T) {
 	a := NewApp(nil)
 	a.width = 80
-	// No target, no model → buildStatusText() == ""
+	// No target, no model -> buildStatusText() == ""
 	status := a.buildStatusText()
 	if status != "" {
 		t.Errorf("expected empty status, got %q", status)
@@ -410,9 +412,9 @@ func TestPromptEchoLines_MultilineMode(t *testing.T) {
 	a.width = 80
 	a.multilineMode = true
 
-	// Empty prompt + text → promptEchoLines should return 1
+	// Empty prompt + text -> promptEchoLines should return 1
 	n := a.promptEchoLines("hello")
-	// "hello" = 5 chars → fits in 80 cols → 1 line
+	// "hello" = 5 chars -> fits in 80 cols -> 1 line
 	if n != 1 {
 		t.Errorf("expected 1 line for multiline prompt, got %d", n)
 	}
@@ -499,27 +501,24 @@ func TestPrintAttackData_BoxOutput(t *testing.T) {
 	a.testWriter = &buf
 	a.width = 60
 
-	treeOutput := "10.0.0.5\n├── :22 (ssh) [Done]\n└── :80 (http) [InProgress]"
+	treeOutput := "10.0.0.5\n+-- :22 (ssh) [Done]\n+-- :80 (http) [InProgress]"
 	a.printAttackData("10.0.0.5", treeOutput)
 
 	output := buf.String()
-	// Should contain the title
 	if !strings.Contains(output, "ATTACK DATA") {
 		t.Error("expected output to contain 'ATTACK DATA'")
 	}
 	if !strings.Contains(output, "10.0.0.5") {
 		t.Error("expected output to contain host '10.0.0.5'")
 	}
-	// Should contain the tree content
 	if !strings.Contains(output, ":22") {
 		t.Error("expected output to contain port ':22'")
 	}
 	if !strings.Contains(output, ":80") {
 		t.Error("expected output to contain port ':80'")
 	}
-	// Should contain rounded border characters
-	if !strings.Contains(output, "╭") || !strings.Contains(output, "╰") {
-		t.Error("expected output to contain rounded border characters")
+	if !strings.Contains(output, "+") || !strings.Contains(output, "|") {
+		t.Error("expected output to contain ASCII box border characters")
 	}
 }
 
@@ -529,12 +528,131 @@ func TestPrintAttackData_NarrowWidth(t *testing.T) {
 	a.testWriter = &buf
 	a.width = 30
 
-	a.printAttackData("host", "tree")
+	a.printAttackData("host", "this-is-a-very-long-line-that-must-be-clipped")
 
-	output := buf.String()
-	// Should still produce bordered output
-	if !strings.Contains(output, "╭") || !strings.Contains(output, "╰") {
+	output := strings.TrimSuffix(buf.String(), "\n")
+	if !strings.Contains(output, "+") || !strings.Contains(output, "|") {
 		t.Error("expected bordered output even at narrow width")
+	}
+	for i, line := range strings.Split(output, "\n") {
+		if w := displayWidth(line); w > a.width {
+			t.Fatalf("line %d width exceeds app width: got %d > %d (%q)", i, w, a.width, line)
+		}
+	}
+}
+
+func TestPrintAttackData_FullWidthKeepsBoxAligned(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewApp(nil)
+	a.testWriter = &buf
+	a.width = 80
+
+	treeOutput := "/\n+-- finding: \u7ba1\u7406\u8005\u30d1\u30cd\u30eb \u8a8d\u8a3c\u56de\u907f"
+	a.printAttackData("10.0.0.5", treeOutput)
+
+	output := strings.TrimSuffix(buf.String(), "\n")
+	lines := strings.Split(output, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 lines, got %d", len(lines))
+	}
+	wantW := displayWidth(lines[0])
+	for i, line := range lines {
+		if gotW := displayWidth(line); gotW != wantW {
+			t.Fatalf("line %d width mismatch: got %d, want %d (%q)", i, gotW, wantW, line)
+		}
+	}
+}
+
+func TestPrintAttackData_SanitizesAndTruncatesRows(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewApp(nil)
+	a.testWriter = &buf
+	a.width = 28
+
+	treeOutput := "finding: <html><body>very long long long payload</body></html>\nrow\twith\rcontrols\x07bell"
+	a.printAttackData("host", treeOutput)
+
+	output := strings.TrimSuffix(buf.String(), "\n")
+	if strings.Contains(output, "\t") || strings.Contains(output, "\r") || strings.Contains(output, "\x07") {
+		t.Fatal("expected control/tab characters to be sanitized in attack data output")
+	}
+	if !strings.Contains(output, "...") {
+		t.Fatal("expected long row to be truncated with ellipsis")
+	}
+	for i, line := range strings.Split(output, "\n") {
+		if w := displayWidth(line); w > a.width {
+			t.Fatalf("line %d width exceeds app width: got %d > %d (%q)", i, w, a.width, line)
+		}
+	}
+}
+
+func TestHandleKeyEvent_CtrlY_EntersCopyMode(t *testing.T) {
+	a := NewApp(nil)
+	a.width = 80
+	a.height = 24
+	a.globalLogs = []string{"alpha", "beta", "gamma"}
+
+	quit := a.handleKeyEvent(tcell.NewEventKey(tcell.KeyCtrlY, 0, tcell.ModNone))
+	if quit {
+		t.Fatal("Ctrl+Y should not request quit")
+	}
+	if a.inputMode != ModeCopy {
+		t.Fatalf("expected ModeCopy after Ctrl+Y, got %d", a.inputMode)
+	}
+}
+
+func TestCopyMode_ExitRestoresPreviousMode(t *testing.T) {
+	a := NewApp(nil)
+	a.width = 80
+	a.height = 24
+	a.inputMode = ModeProposal
+	a.globalLogs = []string{"alpha", "beta"}
+
+	quit := a.handleKeyEvent(tcell.NewEventKey(tcell.KeyCtrlY, 0, tcell.ModNone))
+	if quit {
+		t.Fatal("Ctrl+Y should not request quit")
+	}
+	if a.inputMode != ModeCopy {
+		t.Fatalf("expected ModeCopy after Ctrl+Y, got %d", a.inputMode)
+	}
+
+	quit = a.handleKeyEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
+	if quit {
+		t.Fatal("Esc in copy mode should not request quit")
+	}
+	if a.inputMode != ModeProposal {
+		t.Fatalf("expected mode to restore to ModeProposal, got %d", a.inputMode)
+	}
+}
+
+func TestCopyMode_YankSelectionToClipboard(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatalf("simulation screen init failed: %v", err)
+	}
+	defer sim.Fini()
+
+	a := NewApp(nil)
+	a.SetScreen(sim)
+	a.width = 80
+	a.height = 24
+	a.globalLogs = []string{"line-a", "line-b", "line-c"}
+
+	a.mu.Lock()
+	a.enterCopyModeLocked()
+	if a.copyCursor != 2 {
+		a.mu.Unlock()
+		t.Fatalf("expected copy cursor at latest line index 2, got %d", a.copyCursor)
+	}
+	a.copyAnchor = a.copyCursor
+	a.moveCopyCursorLocked(-1)
+	a.yankCopySelectionLocked()
+	a.exitCopyModeLocked()
+	a.mu.Unlock()
+
+	got := string(sim.GetClipboardData())
+	if got != "line-b\nline-c" {
+		t.Fatalf("unexpected yanked clipboard content: %q", got)
 	}
 }
 

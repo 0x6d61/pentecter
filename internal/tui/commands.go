@@ -38,6 +38,9 @@ func (a *App) handleCommand(fullText string) bool {
 	case "/status":
 		a.printStatusLine()
 		return true
+	case "/copy":
+		a.handleCopyCommand()
+		return true
 	default:
 		return false
 	}
@@ -254,4 +257,11 @@ func (a *App) handleSkipReconCommand() {
 	pending := rt.CountPending()
 	rt.Unlock()
 	a.logSystem(fmt.Sprintf("RECON phase unlocked (%d pending tasks skipped). Agent will proceed to ANALYZE.", pending))
+}
+
+// handleCopyCommand enters log copy mode.
+func (a *App) handleCopyCommand() {
+	a.mu.Lock()
+	a.enterCopyModeLocked()
+	a.mu.Unlock()
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/0x6d61/pentecter/internal/agent"
 )
@@ -82,40 +83,47 @@ func (a *App) clearAndReprint() {
 
 // printAttackData appends attack data tree output as a system block.
 func (a *App) printAttackData(host, treeOutput string) {
-	title := "ATTACK DATA - " + host
-	body := strings.Split(treeOutput, "\n")
-	rows := append([]string{title}, body...)
+	a.mu.Lock()
+	width := a.width
+	a.mu.Unlock()
+	if width <= 0 {
+		width = defaultWidth
+	}
 
-	maxW := 0
+	maxContentWidth := width - 4 // "| " + " |"
+	if maxContentWidth < 1 {
+		maxContentWidth = 1
+	}
+
+	body := strings.Split(treeOutput, "\n")
+	rows := make([]string, 0, len(body)+1)
+	rows = append(rows, trimToDisplayWidth(sanitizeAttackDataRow("ATTACK DATA - "+host), maxContentWidth))
+	for _, row := range body {
+		rows = append(rows, trimToDisplayWidth(sanitizeAttackDataRow(row), maxContentWidth))
+	}
+
+	maxW := 1
 	for _, row := range rows {
-		if w := runeLen(row); w > maxW {
+		if w := displayWidth(row); w > maxW {
 			maxW = w
 		}
 	}
-	if maxW < 1 {
-		maxW = 1
-	}
 
 	var b strings.Builder
-	b.WriteString("╭")
-	b.WriteString(strings.Repeat("─", maxW+2))
-	b.WriteString("╮\n")
+	b.WriteString("+")
+	b.WriteString(strings.Repeat("-", maxW+2))
+	b.WriteString("+\n")
 	for i, row := range rows {
-		pad := maxW - runeLen(row)
-		if pad < 0 {
-			pad = 0
-		}
-		b.WriteString("│ ")
-		b.WriteString(row)
-		b.WriteString(strings.Repeat(" ", pad))
-		b.WriteString(" │")
+		b.WriteString("| ")
+		b.WriteString(padRightDisplayWidth(row, maxW))
+		b.WriteString(" |")
 		if i < len(rows)-1 {
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\n╰")
-	b.WriteString(strings.Repeat("─", maxW+2))
-	b.WriteString("╯")
+	b.WriteString("\n+")
+	b.WriteString(strings.Repeat("-", maxW+2))
+	b.WriteString("+")
 
 	msg := b.String()
 
@@ -131,6 +139,76 @@ func (a *App) printAttackData(host, treeOutput string) {
 		_, _ = fmt.Fprintln(a.testWriter, msg)
 	}
 	a.mu.Unlock()
+}
+
+func sanitizeAttackDataRow(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	lastWasSpace := false
+	for _, r := range s {
+		switch {
+		case r == '\r' || r == '\n' || r == '\t':
+			if !lastWasSpace {
+				b.WriteByte(' ')
+				lastWasSpace = true
+			}
+		case unicode.IsControl(r):
+			// Drop control characters from display-only output.
+		default:
+			b.WriteRune(r)
+			lastWasSpace = r == ' '
+		}
+	}
+	return strings.TrimRight(b.String(), " ")
+}
+
+func trimToDisplayWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if displayWidth(s) <= maxWidth {
+		return s
+	}
+
+	const ellipsis = "..."
+	ellipsisWidth := displayWidth(ellipsis)
+
+	limit := maxWidth
+	appendEllipsis := false
+	if maxWidth > ellipsisWidth {
+		limit = maxWidth - ellipsisWidth
+		appendEllipsis = true
+	}
+
+	var b strings.Builder
+	curW := 0
+	for _, r := range s {
+		rw := displayWidth(string(r))
+		if rw == 0 {
+			b.WriteRune(r)
+			continue
+		}
+		if curW+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		curW += rw
+	}
+	if appendEllipsis {
+		b.WriteString(ellipsis)
+	}
+	return b.String()
+}
+
+func padRightDisplayWidth(s string, width int) string {
+	pad := width - displayWidth(s)
+	if pad <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", pad)
 }
 
 // printStatusLine writes current status into the log stream.

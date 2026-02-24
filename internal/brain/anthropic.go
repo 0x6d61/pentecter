@@ -17,6 +17,7 @@ const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
 	anthropicMessagesPath   = "/v1/messages"
 	anthropicVersion        = "2023-06-01"
+	anthropicThinkMaxTokens = 2048
 )
 
 type anthropicBrain struct {
@@ -38,7 +39,7 @@ func (b *anthropicBrain) Think(ctx context.Context, input Input) (*schema.Action
 
 	body := map[string]any{
 		"model":      b.cfg.Model,
-		"max_tokens": 1024,
+		"max_tokens": anthropicThinkMaxTokens,
 		"system":     buildSystemPromptForConfig(b.cfg),
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},

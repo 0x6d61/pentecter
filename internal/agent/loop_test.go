@@ -396,6 +396,43 @@ func TestLoop_Run_BrainError_Retries(t *testing.T) {
 	}
 }
 
+func TestLoop_Run_BrainError_JSONParseRetryHintInjected(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			nil, // 1st call -> error
+			{Thought: "retry with short command", Action: schema.ActionThink}, // 2nd call -> success
+		},
+		errors: []error{
+			fmt.Errorf("anthropic: parse action: invalid JSON from LLM: unexpected end of JSON input"),
+			nil,
+		},
+	}
+
+	loop, events, _, _ := newTestLoop(target, mb)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventComplete {
+				if len(mb.inputs) < 2 {
+					t.Fatalf("expected at least 2 Think() calls, got %d", len(mb.inputs))
+				}
+				if !strings.Contains(mb.inputs[1].ToolOutput, "invalid or truncated JSON") {
+					t.Fatalf("expected retry hint in second Think() ToolOutput, got: %q", mb.inputs[1].ToolOutput)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout: expected completion after retry")
+		}
+	}
+}
+
 func TestLoop_Run_BrainError_MaxRetries_Fails(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 	// 3 consecutive errors → should fail

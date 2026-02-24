@@ -18,6 +18,7 @@ const (
 	ModeSelect                       // numbered selection UI
 	ModeProposal                     // y/n/e proposal approval
 	ModeConfirmQuit                  // y/n quit confirmation
+	ModeCopy                         // log copy/select mode
 )
 
 // SelectOption represents a single option in a selection UI.
@@ -42,6 +43,9 @@ func (a *App) handleInputLine(line string) bool {
 		return false
 	case ModeSelect:
 		a.handleSelectInput(line)
+		return false
+	case ModeCopy:
+		a.handleCopyInput(line)
 		return false
 	default:
 		a.handleNormalInput(line)
@@ -146,6 +150,21 @@ func (a *App) handleSelectInput(line string) {
 
 	if cb != nil {
 		cb(a, value)
+	}
+}
+
+// handleCopyInput processes line input while copy mode is active.
+func (a *App) handleCopyInput(line string) {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "q", "quit", "exit":
+		a.mu.Lock()
+		a.exitCopyModeLocked()
+		a.mu.Unlock()
+	case "y", "yes", "yank":
+		a.mu.Lock()
+		a.yankCopySelectionLocked()
+		a.exitCopyModeLocked()
+		a.mu.Unlock()
 	}
 }
 
