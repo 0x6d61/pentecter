@@ -286,6 +286,17 @@ func TestHandleCommand_Status(t *testing.T) {
 	a.handleCommand("/status")
 }
 
+func TestHandleCommand_Copy(t *testing.T) {
+	a := newTestApp(nil)
+
+	if !a.handleCommand("/copy") {
+		t.Fatal("expected /copy command to be handled")
+	}
+	if a.inputMode != ModeCopy {
+		t.Fatalf("expected ModeCopy after /copy, got %d", a.inputMode)
+	}
+}
+
 func TestHandleTargetsCommand_SwitchToProposalTarget(t *testing.T) {
 	t1 := agent.NewTarget(1, "10.0.0.1")
 	t2 := agent.NewTarget(2, "10.0.0.2")

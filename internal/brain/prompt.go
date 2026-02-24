@@ -68,6 +68,9 @@ SECURITY ASSESSMENT GUIDELINES:
 - Use run for standard reconnaissance and vulnerability verification
 - Use propose for credential testing, active exploitation, or post-access activities
 - The "command" field must be a full shell command (e.g. "nmap -sV -p- 10.0.0.5")
+- Keep "command" concise (target: <= 300 characters).
+- Never embed full report bodies or large documents in "command" (no huge heredoc payloads).
+- If detailed reporting is needed, use memory/think for summary and run a short command only.
 - Record important findings with the memory action
 - When you discover new hosts, use add_target to expand the assessment scope
 - Prefer targeted, precise commands over broad scans
@@ -479,6 +482,13 @@ func hasNonASCII(s string) bool {
 // jsonBlockRe は LLM がコードブロックで JSON を返した場合に抽出するパターン。
 var jsonBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*({.*?})\\s*```")
 
+const (
+	// Keep parse errors readable in logs/TUI by truncating raw model output.
+	maxActionParseErrorRawRunes = 800
+	// Oversized command payloads (e.g., full report heredoc) frequently cause JSON truncation.
+	maxActionCommandRunes = 600
+)
+
 // parseActionJSON は LLM のレスポンステキストから schema.Action を抽出・パースする。
 func parseActionJSON(text string) (*schema.Action, error) {
 	text = strings.TrimSpace(text)
@@ -497,12 +507,97 @@ func parseActionJSON(text string) (*schema.Action, error) {
 
 	var action schema.Action
 	if err := json.Unmarshal([]byte(text), &action); err != nil {
-		return nil, fmt.Errorf("invalid JSON from LLM: %w\nraw: %s", err, text)
+		if repaired, ok := repairLikelyTruncatedJSONObject(text); ok {
+			if err2 := json.Unmarshal([]byte(repaired), &action); err2 == nil {
+				if err3 := validateParsedAction(&action); err3 != nil {
+					return nil, err3
+				}
+				return &action, nil
+			}
+		}
+		return nil, fmt.Errorf("invalid JSON from LLM: %w\nraw: %s", err, truncateForError(text, maxActionParseErrorRawRunes))
 	}
 
-	if action.Action == "" {
-		return nil, fmt.Errorf("LLM response missing 'action' field: %s", text)
+	if err := validateParsedAction(&action); err != nil {
+		return nil, err
 	}
 
 	return &action, nil
+}
+
+func validateParsedAction(action *schema.Action) error {
+	if action.Action == "" {
+		return fmt.Errorf("LLM response missing 'action' field")
+	}
+
+	switch action.Action {
+	case schema.ActionRun, schema.ActionPropose:
+		cmd := strings.TrimSpace(action.Command)
+		if cmd == "" {
+			return fmt.Errorf("LLM response missing 'command' for action %q", action.Action)
+		}
+		if len([]rune(cmd)) > maxActionCommandRunes {
+			return fmt.Errorf(
+				"LLM command too long (%d > %d runes): use a concise command without embedding long report bodies",
+				len([]rune(cmd)),
+				maxActionCommandRunes,
+			)
+		}
+	}
+	return nil
+}
+
+func repairLikelyTruncatedJSONObject(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+
+	inString := false
+	escaped := false
+	braceBalance := 0
+
+	for _, r := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch r {
+		case '\\':
+			if inString {
+				escaped = true
+			}
+		case '"':
+			inString = !inString
+		case '{':
+			if !inString {
+				braceBalance++
+			}
+		case '}':
+			if !inString && braceBalance > 0 {
+				braceBalance--
+			}
+		}
+	}
+
+	// Only auto-repair missing trailing braces when outside a string.
+	if inString || braceBalance <= 0 {
+		return "", false
+	}
+	return s + strings.Repeat("}", braceBalance), true
+}
+
+func truncateForError(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) <= maxRunes {
+		return s
+	}
+	const suffix = "...(truncated)"
+	suffixRunes := []rune(suffix)
+	if maxRunes <= len(suffixRunes) {
+		return string(rs[:maxRunes])
+	}
+	return string(rs[:maxRunes-len(suffixRunes)]) + suffix
 }

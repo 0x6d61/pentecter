@@ -243,6 +243,39 @@ func TestParseActionJSON_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseActionJSON_TruncatedMissingBrace_Repaired(t *testing.T) {
+	raw := `{"thought":"continue","action":"think"`
+	action, err := parseActionJSON(raw)
+	if err != nil {
+		t.Fatalf("parseActionJSON (truncated brace repair): %v", err)
+	}
+	if action.Action != "think" {
+		t.Errorf("Action: got %q, want %q", action.Action, "think")
+	}
+}
+
+func TestParseActionJSON_RunCommandTooLong(t *testing.T) {
+	raw := `{"thought":"report","action":"run","command":"` + strings.Repeat("A", maxActionCommandRunes+1) + `"}`
+	_, err := parseActionJSON(raw)
+	if err == nil {
+		t.Fatal("expected error for oversized command, got nil")
+	}
+	if !strings.Contains(err.Error(), "command too long") {
+		t.Fatalf("expected oversized command error, got: %v", err)
+	}
+}
+
+func TestParseActionJSON_ErrorRawIsTruncated(t *testing.T) {
+	raw := `{"thought":"x","action":"run","command":"` + strings.Repeat("A", maxActionParseErrorRawRunes+200)
+	_, err := parseActionJSON(raw)
+	if err == nil {
+		t.Fatal("expected parse error, got nil")
+	}
+	if !strings.Contains(err.Error(), "...(truncated)") {
+		t.Fatalf("expected truncated raw marker in error, got: %v", err)
+	}
+}
+
 func TestParseActionJSON_MissingActionField(t *testing.T) {
 	raw := `{"thought":"analyzing"}`
 	_, err := parseActionJSON(raw)

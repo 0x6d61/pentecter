@@ -24,6 +24,8 @@ const (
 	maxConsecutiveFailures = 3
 )
 
+const invalidJSONRetryHint = "[SYSTEM] Previous model response was invalid or truncated JSON. Return STRICT JSON only. Keep command concise (<=300 chars) and do not embed long report bodies."
+
 // commandEntry はコマンド履歴の1エントリを保持する。
 type commandEntry struct {
 	Command  string
@@ -288,13 +290,21 @@ func (l *Loop) Run(ctx context.Context) {
 
 		var action *schema.Action
 		var brainErr error
+		retryHint := ""
 		for attempt := 1; attempt <= maxBrainRetries; attempt++ {
 			l.brMu.Lock()
 			currentBrain := l.br
 			l.brMu.Unlock()
+			toolOutput := l.lastToolOutput
+			if retryHint != "" {
+				if toolOutput != "" {
+					toolOutput += "\n\n"
+				}
+				toolOutput += retryHint
+			}
 			action, brainErr = currentBrain.Think(ctx, brain.Input{
 				TargetSnapshot: l.buildSnapshot(),
-				ToolOutput:     l.lastToolOutput,
+				ToolOutput:     toolOutput,
 				LastCommand:    l.lastCommand,
 				LastExitCode:   l.lastExitCode,
 				CommandHistory: l.buildHistory(),
@@ -306,6 +316,7 @@ func (l *Loop) Run(ctx context.Context) {
 			if brainErr == nil {
 				break
 			}
+			retryHint = buildBrainRetryHint(brainErr)
 			if attempt < maxBrainRetries {
 				l.emit(Event{Type: EventLog, Source: SourceSystem,
 					Message: fmt.Sprintf("Brain error: %v — retrying (%d/%d)", brainErr, attempt, maxBrainRetries)})
@@ -718,6 +729,7 @@ func (l *Loop) handleEventDrivenTrigger(ctx context.Context, userMsg string) {
 func (l *Loop) thinkOnEvent(ctx context.Context, userMsg string) (*schema.Action, error) {
 	var action *schema.Action
 	var brainErr error
+	retryHint := ""
 	for attempt := 1; attempt <= maxBrainRetries; attempt++ {
 		l.brMu.Lock()
 		currentBrain := l.br
@@ -725,9 +737,16 @@ func (l *Loop) thinkOnEvent(ctx context.Context, userMsg string) (*schema.Action
 		if currentBrain == nil {
 			return nil, fmt.Errorf("brain is not configured")
 		}
+		toolOutput := l.lastToolOutput
+		if retryHint != "" {
+			if toolOutput != "" {
+				toolOutput += "\n\n"
+			}
+			toolOutput += retryHint
+		}
 		action, brainErr = currentBrain.Think(ctx, brain.Input{
 			TargetSnapshot: l.buildSnapshot(),
-			ToolOutput:     l.lastToolOutput,
+			ToolOutput:     toolOutput,
 			LastCommand:    l.lastCommand,
 			LastExitCode:   l.lastExitCode,
 			CommandHistory: l.buildHistory(),
@@ -739,6 +758,7 @@ func (l *Loop) thinkOnEvent(ctx context.Context, userMsg string) (*schema.Action
 		if brainErr == nil {
 			return action, nil
 		}
+		retryHint = buildBrainRetryHint(brainErr)
 		if attempt < maxBrainRetries {
 			select {
 			case <-ctx.Done():
@@ -748,6 +768,17 @@ func (l *Loop) thinkOnEvent(ctx context.Context, userMsg string) (*schema.Action
 		}
 	}
 	return nil, fmt.Errorf("brain error after %d retries: %w", maxBrainRetries, brainErr)
+}
+
+func buildBrainRetryHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "invalid json from llm") || strings.Contains(msg, "unexpected end of json input") {
+		return invalidJSONRetryHint
+	}
+	return "[SYSTEM] Previous model response caused an error. Return STRICT JSON only."
 }
 
 func (l *Loop) handleEventDrivenAction(ctx context.Context, action *schema.Action) {
