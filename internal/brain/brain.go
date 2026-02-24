@@ -1,5 +1,5 @@
 // Package brain は LLM クライアントを共通インターフェースで抽象化する。
-// Anthropic（API キー）、OpenAI、Ollama をサポートする。
+// Anthropic（API キー）、OpenAI、Ollama、OpenRouter をサポートする。
 package brain
 
 import (
@@ -17,10 +17,14 @@ type Provider string
 const (
 	ProviderAnthropic Provider = "anthropic"
 	ProviderOpenAI    Provider = "openai"
+	// ProviderOpenRouter は OpenAI 互換 API 経由で OpenRouter に接続する。
+	ProviderOpenRouter Provider = "openrouter"
 	// ProviderOllama は OpenAI 互換 API 経由でローカル/リモートの Ollama サーバーに接続する。
 	// API キー不要。OLLAMA_BASE_URL でサーバーを指定する（デフォルト: http://localhost:11434）。
 	ProviderOllama Provider = "ollama"
 )
+
+const defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
 
 // AuthType は認証方式を識別する。
 type AuthType string
@@ -117,6 +121,16 @@ func New(cfg Config) (Brain, error) {
 		}
 		return newOpenAIBrain(cfg)
 
+	case ProviderOpenRouter:
+		if cfg.Token == "" {
+			return nil, errors.New("brain: OpenRouter API key is required")
+		}
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = defaultOpenRouterBaseURL
+		}
+		cfg.BaseURL = ensureV1Path(cfg.BaseURL)
+		return newOpenRouterBrain(cfg)
+
 	case ProviderOllama:
 		// Ollama は認証不要。Token が空でも動く。
 		if cfg.Token == "" {
@@ -129,7 +143,10 @@ func New(cfg Config) (Brain, error) {
 		return newOllamaBrain(cfg) // 変更に強い薄いラッパー経由で実行
 
 	default:
-		return nil, fmt.Errorf("brain: unknown provider %q (supported: anthropic, openai, ollama)", cfg.Provider)
+		return nil, fmt.Errorf(
+			"brain: unknown provider %q (supported: anthropic, openai, openrouter, ollama)",
+			cfg.Provider,
+		)
 	}
 }
 
@@ -187,6 +204,11 @@ type ConfigHint struct {
 // OpenAI:
 //  1. OPENAI_API_KEY          → AuthAPIKey
 //
+// OpenRouter:
+//  1. OPENROUTER_API_KEY      → AuthAPIKey
+//  2. OPENROUTER_BASE_URL     → BaseURL（デフォルト: https://openrouter.ai/api/v1）
+//  3. OPENROUTER_MODEL        → Model（デフォルト: openai/gpt-4o-mini）
+//
 // Ollama:
 //  1. OLLAMA_BASE_URL         → サーバー URL（デフォルト: http://localhost:11434）
 //  2. 認証不要
@@ -227,6 +249,31 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 		}
 		return cfg, errors.New(
 			"brain: OpenAI credentials not found, set OPENAI_API_KEY",
+		)
+
+	case ProviderOpenRouter:
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = os.Getenv("OPENROUTER_BASE_URL")
+		}
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = defaultOpenRouterBaseURL
+		}
+		cfg.BaseURL = ensureV1Path(cfg.BaseURL)
+
+		if cfg.Model == "" {
+			cfg.Model = os.Getenv("OPENROUTER_MODEL")
+		}
+		if cfg.Model == "" {
+			cfg.Model = "openai/gpt-4o-mini"
+		}
+
+		if key := os.Getenv("OPENROUTER_API_KEY"); key != "" {
+			cfg.Token = key
+			cfg.AuthType = AuthAPIKey
+			return cfg, nil
+		}
+		return cfg, errors.New(
+			"brain: OpenRouter credentials not found, set OPENROUTER_API_KEY",
 		)
 
 	case ProviderOllama:

@@ -203,6 +203,9 @@ func TestRenderThinkingBlock_InProgress(t *testing.T) {
 	if !strings.Contains(result, "Thinking...") {
 		t.Errorf("expected 'Thinking...' for in-progress thinking block, got: %q", result)
 	}
+	if strings.Contains(result, "✻") {
+		t.Errorf("in-progress thinking should not contain completion marker, got: %q", result)
+	}
 }
 
 func TestRenderThinkingBlock_InProgress_WithSpinner(t *testing.T) {
@@ -227,6 +230,9 @@ func TestRenderThinkingBlock_Completed(t *testing.T) {
 
 	result := renderThinkingBlock(b, "⠋", true)
 
+	if !strings.Contains(result, "✻") {
+		t.Error("expected '✻' in completed thinking block")
+	}
 	if !strings.Contains(result, "Completed in 12s") {
 		t.Errorf("expected 'Completed in 12s', got: %q", result)
 	}
