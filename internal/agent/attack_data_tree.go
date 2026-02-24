@@ -1688,7 +1688,10 @@ func (t *AttackDataTree) PendingHTTPPorts() []*AttackDataNode {
 	defer t.mu.RUnlock()
 	var result []*AttackDataNode
 	for _, port := range t.Ports {
-		if port.isHTTP() && port.EndpointEnum == StatusPending {
+		if !port.isHTTP() {
+			continue
+		}
+		if nodeHasPending(port) {
 			result = append(result, port)
 		}
 	}
