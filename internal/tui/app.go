@@ -67,10 +67,11 @@ type App struct {
 	globalLogs []string
 
 	// External dependencies
-	CurrentProvider string
-	CurrentModel    string
-	Runner          *tools.CommandRunner
-	BrainFactory    func(brain.ConfigHint) (brain.Brain, error)
+	CurrentProvider        string
+	CurrentModel           string
+	Runner                 *tools.CommandRunner
+	BrainFactory           func(brain.ConfigHint) (brain.Brain, error)
+	OpenRouterModelFetcher func(ctx context.Context) ([]brain.OpenRouterModel, error)
 
 	// For tests
 	testWriter io.Writer
