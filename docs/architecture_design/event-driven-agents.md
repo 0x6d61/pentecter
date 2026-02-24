@@ -484,10 +484,10 @@ type Insight struct {
 > 2. ルールベースルーティングを追加（既存判断ロジックと共存）
 > 3. 最後に自律ループを廃止
 
-1. イベントループに書き換え（自律ループ廃止）
-2. ~~ルールベースルーティング実装~~（HTTP→WebRecon, WebReconComplete→WebAttack は実装済み）
-3. Brain 呼び出しをイベントトリガーに限定
-4. Phase gate 廃止
+1. ~~イベントループに書き換え（自律ループ廃止）~~（EventDrivenMain モードで実装済み）
+2. ~~ルールベースルーティング実装~~（HTTP→WebRecon, WebReconComplete→WebAttack, ServiceIdentified→Attack は実装済み）
+3. ~~Brain 呼び出しをイベントトリガーに限定~~（ユーザー入力/完了タスク時のみ Think）
+4. ~~Phase gate 廃止~~（wait は event-driven mode で無効化）
 
 ### Phase 4: WebAttackAgent 実装
 1. ~~WebReconComplete イベント受信で起動~~

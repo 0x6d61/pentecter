@@ -197,6 +197,12 @@ func TestPrintWelcome_NoTargets(t *testing.T) {
 	if output == "" {
 		t.Error("expected non-empty welcome output")
 	}
+	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status") {
+		t.Error("welcome output should include command list")
+	}
+	if !strings.Contains(output, "Input: ip/domain or /target HOST") {
+		t.Error("welcome output should include input usage")
+	}
 }
 
 func TestPrintWelcome_WithTargets(t *testing.T) {
@@ -210,6 +216,12 @@ func TestPrintWelcome_WithTargets(t *testing.T) {
 	output := buf.String()
 	if output == "" {
 		t.Error("expected non-empty welcome output")
+	}
+	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status") {
+		t.Error("welcome output should include command list")
+	}
+	if !strings.Contains(output, "Input: ip/domain or /target HOST") {
+		t.Error("welcome output should include input usage")
 	}
 }
 

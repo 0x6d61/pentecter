@@ -83,6 +83,11 @@ type Loop struct {
 
 	// ReconAgent 自動 spawn 済みフラグ
 	reconSpawned bool
+
+	// eventDrivenMain が true の場合、MainAgent はイベント駆動モードで動作する。
+	// ユーザー入力またはサブタスク完了をトリガーにのみ Brain を呼び出し、
+	// propose/call_mcp は実行せず、run は必要時のみ直接実行する。
+	eventDrivenMain bool
 }
 
 // NewLoop は Loop を構築する。
@@ -137,6 +142,12 @@ func (l *Loop) WithKnowledge(ks *knowledge.Store) *Loop {
 // WithAttackData は AttackDataTree をセットする（メソッドチェーン用）。
 func (l *Loop) WithAttackData(rt *AttackDataTree) *Loop {
 	l.attackData = rt
+	return l
+}
+
+// WithEventDrivenMain は MainAgent のイベント駆動モードを設定する。
+func (l *Loop) WithEventDrivenMain(enabled bool) *Loop {
+	l.eventDrivenMain = enabled
 	return l
 }
 
@@ -219,6 +230,11 @@ func (l *Loop) Run(ctx context.Context) {
 		}
 	}
 
+	if l.eventDrivenMain {
+		l.runEventDriven(ctx)
+		return
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -261,6 +277,7 @@ func (l *Loop) Run(ctx context.Context) {
 				l.lastToolOutput = completedOutput
 			}
 		}
+		l.emitReconCompleteIfReady(ctx, AgentKindMain)
 
 		l.emit(Event{Type: EventThinkStart})
 
@@ -393,6 +410,14 @@ func isWebReconCommand(cmd string) bool {
 func (l *Loop) runCommand(ctx context.Context, command string) {
 	if command == "" {
 		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "run: command is empty"})
+		return
+	}
+	if l.runner == nil {
+		msg := "CommandRunner not configured - cannot execute run action"
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: msg})
+		l.lastCommand = command
+		l.lastToolOutput = "Error: " + msg
+		l.lastExitCode = 1
 		return
 	}
 
@@ -622,6 +647,146 @@ func (l *Loop) waitForUserMsgAfterComplete(ctx context.Context) string {
 	}
 }
 
+// runEventDriven は MainAgent をイベント駆動で実行する。
+// ユーザー入力またはサブタスク完了をトリガーにのみ Brain を呼び出す。
+func (l *Loop) runEventDriven(ctx context.Context) {
+	l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Event-driven main mode enabled (think-on-event)"})
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			l.emit(Event{Type: EventLog, Source: SourceSystem, Message: "Agent stopped"})
+			return
+		case msg := <-l.userMsg:
+			if l.skillsReg != nil {
+				msg = l.skillsReg.Expand(msg)
+			}
+			if msg != "" {
+				l.handleEventDrivenTrigger(ctx, msg)
+			}
+			// バースト入力を取りこぼさないように即時 drain
+			for {
+				next := l.drainUserMsg()
+				if next == "" {
+					break
+				}
+				if next != "" {
+					l.handleEventDrivenTrigger(ctx, next)
+				}
+			}
+		case <-ticker.C:
+			if completedOutput := l.drainCompletedTasks(ctx); completedOutput != "" {
+				if l.lastToolOutput != "" {
+					l.lastToolOutput = completedOutput + "\n" + l.lastToolOutput
+				} else {
+					l.lastToolOutput = completedOutput
+				}
+				l.handleEventDrivenTrigger(ctx, "")
+			}
+			l.emitReconCompleteIfReady(ctx, AgentKindMain)
+		}
+	}
+}
+
+func (l *Loop) handleEventDrivenTrigger(ctx context.Context, userMsg string) {
+	l.turnCount++
+	l.emit(Event{Type: EventTurnStart, TurnNumber: l.turnCount})
+	l.emit(Event{Type: EventThinkStart})
+	thinkStartTime := time.Now()
+
+	action, err := l.thinkOnEvent(ctx, userMsg)
+	thinkDuration := time.Since(thinkStartTime)
+	l.emit(Event{Type: EventThinkDone, Duration: thinkDuration})
+	if err != nil {
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: fmt.Sprintf("Brain error: %v", err)})
+		return
+	}
+	if action == nil {
+		return
+	}
+	if action.Thought != "" {
+		l.emit(Event{Type: EventLog, Source: SourceAI, Message: action.Thought})
+	}
+	l.handleEventDrivenAction(ctx, action)
+}
+
+func (l *Loop) thinkOnEvent(ctx context.Context, userMsg string) (*schema.Action, error) {
+	var action *schema.Action
+	var brainErr error
+	for attempt := 1; attempt <= maxBrainRetries; attempt++ {
+		l.brMu.Lock()
+		currentBrain := l.br
+		l.brMu.Unlock()
+		if currentBrain == nil {
+			return nil, fmt.Errorf("brain is not configured")
+		}
+		action, brainErr = currentBrain.Think(ctx, brain.Input{
+			TargetSnapshot: l.buildSnapshot(),
+			ToolOutput:     l.lastToolOutput,
+			LastCommand:    l.lastCommand,
+			LastExitCode:   l.lastExitCode,
+			CommandHistory: l.buildHistory(),
+			UserMessage:    userMsg,
+			TurnCount:      l.turnCount,
+			Memory:         l.buildMemory(),
+			ReconQueue:     l.buildReconQueue(),
+		})
+		if brainErr == nil {
+			return action, nil
+		}
+		if attempt < maxBrainRetries {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+	}
+	return nil, fmt.Errorf("brain error after %d retries: %w", maxBrainRetries, brainErr)
+}
+
+func (l *Loop) handleEventDrivenAction(ctx context.Context, action *schema.Action) {
+	switch action.Action {
+	case schema.ActionRun:
+		l.runCommand(ctx, action.Command)
+		l.evaluateResult(ctx)
+	case schema.ActionSpawnTask:
+		l.handleSpawnTask(ctx, action)
+	case schema.ActionKillTask:
+		l.handleKillTask(action)
+	case schema.ActionMemory:
+		l.recordMemory(action.Memory)
+	case schema.ActionAddTarget:
+		if action.Target != "" {
+			l.emit(Event{Type: EventAddTarget, NewHost: action.Target})
+			msg := fmt.Sprintf("Lateral movement: adding new target %s", action.Target)
+			l.emit(Event{Type: EventLog, Source: SourceAI, Message: msg})
+		}
+	case schema.ActionSearchKnowledge:
+		l.handleSearchKnowledge(action)
+	case schema.ActionReadKnowledge:
+		l.handleReadKnowledge(action)
+	case schema.ActionComplete:
+		l.target.SetStatusSafe(StatusPwned)
+		l.emit(Event{Type: EventComplete, Message: "Assessment complete — waiting for further instructions (report, cleanup, etc.)"})
+	case schema.ActionWait:
+		msg := "wait action is ignored in event-driven mode (no phase gate; waiting is automatic)."
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: msg})
+		l.lastToolOutput = msg
+	case schema.ActionPropose, schema.ActionCallMCP:
+		msg := "propose/call_mcp are disabled in event-driven mode. Use run or spawn_task."
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: msg})
+		l.lastToolOutput = msg
+		l.lastExitCode = 1
+	case schema.ActionThink:
+		// no-op
+	default:
+		l.emit(Event{Type: EventLog, Source: SourceSystem, Message: fmt.Sprintf("Unknown action: %q", action.Action)})
+	}
+}
+
 // evaluateResult はコマンド実行結果を評価し、成功/失敗を判定する。
 // 2つのシグナルで判定: exit code, 出力パターン。
 // AttackDataTree が有効な場合、ツール出力をパースして偵察状態を更新する。
@@ -693,16 +858,7 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 		}
 
 		// Recon 完了検出: 全タスク + チェックリスト完了時に一度だけイベントを emit
-		if !l.reconCompleteEmitted && l.attackData.IsReconComplete() {
-			l.reconCompleteEmitted = true
-			l.emit(Event{Type: EventReconComplete,
-				Message: "Recon phase complete — all tasks finished"})
-			l.emitDomainEvent(ctx, ReconComplete{
-				DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindMain),
-				Ports:           l.buildReconPortInfos(),
-				Summary:         "Recon phase complete — all tasks finished",
-			})
-		}
+		l.emitReconCompleteIfReady(ctx, AgentKindMain)
 	}
 }
 

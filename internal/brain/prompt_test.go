@@ -154,7 +154,6 @@ func TestBuildPrompt_NoHistory(t *testing.T) {
 	}
 }
 
-
 func TestBuildPrompt_ContainsReconQueue(t *testing.T) {
 	input := Input{
 		TargetSnapshot: `{"host":"10.10.11.100"}`,
@@ -872,5 +871,35 @@ func TestBuildSystemPrompt_ReconAgent(t *testing.T) {
 	// exploitation を行わない指示
 	if !strings.Contains(prompt, "Do NOT attempt exploitation") {
 		t.Error("ReconAgent prompt should prohibit exploitation")
+	}
+}
+
+func TestBuildSystemPromptForConfig_EventDrivenMain(t *testing.T) {
+	cfg := Config{
+		ToolNames:         []string{"nmap", "curl"},
+		IsEventDrivenMain: true,
+	}
+	prompt := buildSystemPromptForConfig(cfg)
+
+	if !strings.Contains(prompt, "EVENT-DRIVEN MODE") {
+		t.Error("event-driven main prompt should identify event-driven mode")
+	}
+	if !strings.Contains(prompt, "\"action\": \"run\" | \"spawn_task\"") {
+		t.Error("event-driven main prompt should allow run and spawn_task actions")
+	}
+	if !strings.Contains(prompt, "Do NOT use \"propose\" or \"call_mcp\"") {
+		t.Error("event-driven main prompt should prohibit propose/call_mcp")
+	}
+	if !strings.Contains(prompt, "Act as a conductor first") {
+		t.Error("event-driven main prompt should enforce conductor-first behavior")
+	}
+	if !strings.Contains(prompt, "Use \"run\" for direct local work") {
+		t.Error("event-driven main prompt should allow run for local file/report tasks")
+	}
+	if !strings.Contains(prompt, "delegate through spawn_task by default") {
+		t.Error("event-driven main prompt should require spawn_task-first orchestration")
+	}
+	if strings.Contains(prompt, "do NOT use spawn_task during reconnaissance") {
+		t.Error("event-driven main prompt should not contain legacy no-spawn-task recon rule")
 	}
 }

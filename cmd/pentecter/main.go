@@ -103,6 +103,7 @@ Chat commands:
 		os.Exit(1)
 	}
 	brainCfg.ToolNames = toolNames
+	brainCfg.IsEventDrivenMain = true
 
 	// MCP ツールスキーマを Brain に注入
 	if mcpMgr != nil {
@@ -132,6 +133,7 @@ Chat commands:
 	// （spawn_task 等の無限ループを防ぐ）。
 	subBrainCfg := brainCfg // copy main config
 	subBrainCfg.IsSubAgent = true
+	subBrainCfg.IsEventDrivenMain = false
 	if model := os.Getenv("SUBAGENT_MODEL"); model != "" {
 		subBrainCfg.Model = model
 	}
@@ -146,6 +148,7 @@ Chat commands:
 			subBrainCfg = reloaded
 			subBrainCfg.ToolNames = toolNames
 			subBrainCfg.IsSubAgent = true
+			subBrainCfg.IsEventDrivenMain = false
 		}
 	}
 	subBrain, err := brain.New(subBrainCfg)
@@ -163,6 +166,7 @@ Chat commands:
 		reconBrainCfg := subBrainCfg // copy sub config
 		reconBrainCfg.IsSubAgent = false
 		reconBrainCfg.IsReconAgent = true
+		reconBrainCfg.IsEventDrivenMain = false
 		reconBrain, err = brain.New(reconBrainCfg)
 		if err != nil {
 			log.Printf("ReconBrain creation failed (ReconAgent disabled): %v", err)
@@ -234,6 +238,7 @@ Chat commands:
 		MCPManager:       mcpMgr,
 		KnowledgeStore:   knowledgeStore,
 		MaxParallelRecon: appCfg.Recon.MaxParallel,
+		EventDrivenMain:  true,
 	})
 
 	// CLI ターゲットを事前追加
@@ -263,6 +268,7 @@ Chat commands:
 			return nil, err
 		}
 		cfg.ToolNames = toolNames
+		cfg.IsEventDrivenMain = true
 		return brain.New(cfg)
 	}
 

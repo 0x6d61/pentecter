@@ -91,3 +91,24 @@ func (l *Loop) buildReconPortInfos() []PortReconInfo {
 	}
 	return out
 }
+
+func (l *Loop) emitReconCompleteIfReady(ctx context.Context, kind AgentKind) {
+	if l == nil || l.attackData == nil || l.reconCompleteEmitted {
+		return
+	}
+	if !l.attackData.IsReconComplete() {
+		return
+	}
+	l.reconCompleteEmitted = true
+	summary := "Recon phase complete — all tasks finished"
+	l.emit(Event{
+		Type:      EventReconComplete,
+		Message:   summary,
+		AgentKind: kind,
+	})
+	l.emitDomainEvent(ctx, ReconComplete{
+		DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, kind),
+		Ports:           l.buildReconPortInfos(),
+		Summary:         summary,
+	})
+}
