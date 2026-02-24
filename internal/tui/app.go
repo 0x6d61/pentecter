@@ -192,18 +192,6 @@ func (a *App) writeLines(lines []string) {
 	}
 }
 
-func (a *App) commonPrefixLen(prev, next []string) int {
-	n := len(prev)
-	if len(next) < n {
-		n = len(next)
-	}
-	i := 0
-	for i < n && prev[i] == next[i] {
-		i++
-	}
-	return i
-}
-
 func (a *App) currentSpinnerFrameLocked() string {
 	if len(a.spinnerFrames) == 0 || !a.spinnerActive.Load() {
 		return ""
@@ -267,11 +255,13 @@ func (a *App) clearAndReprint() {
 	a.renderedLines = cloneStrings(lines)
 	a.mu.Unlock()
 
-	start := a.commonPrefixLen(prev, lines)
-	if start >= len(lines) {
+	// Line-mode UI is append-only: never rewrite historical lines.
+	// This avoids duplicated logs when transient lines (e.g. spinner frames)
+	// change text in the middle of already printed output.
+	if len(lines) <= len(prev) {
 		return
 	}
-	a.writeLines(lines[start:])
+	a.writeLines(lines[len(prev):])
 }
 
 func (a *App) proposalLinesLocked(p *agent.Proposal) []string {
