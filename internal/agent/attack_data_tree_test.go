@@ -2818,3 +2818,87 @@ func TestSnapshotWebSurface(t *testing.T) {
 		t.Fatal("expected discovered vhost in snapshot")
 	}
 }
+
+func TestAddCredentialAndInsight_DedupAndRender(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH")
+
+	cred := Credential{
+		Service:  "ssh",
+		Username: "root",
+		Password: "toor",
+		Source:   "attack",
+	}
+	insight := Insight{
+		Source: "hacktricks",
+		Topic:  "CVE-2016-0777",
+		Detail: "Potential client-side leak",
+	}
+
+	tree.AddCredential("10.0.0.1", 22, cred)
+	tree.AddCredential("10.0.0.1", 22, cred) // duplicate
+	tree.AddInsight("10.0.0.1", 22, insight)
+	tree.AddInsight("10.0.0.1", 22, insight) // duplicate
+
+	node := tree.FindPortNode(22)
+	if node == nil {
+		t.Fatal("port node 22 not found")
+	}
+	if len(node.Credentials) != 1 {
+		t.Fatalf("Credentials len = %d, want 1 (dedup)", len(node.Credentials))
+	}
+	if len(node.Insights) != 1 {
+		t.Fatalf("Insights len = %d, want 1 (dedup)", len(node.Insights))
+	}
+
+	renderedTree := tree.RenderTree()
+	if !strings.Contains(renderedTree, "credential: ssh root:toor [attack]") {
+		t.Fatalf("RenderTree should include credential line, got:\n%s", renderedTree)
+	}
+	if !strings.Contains(renderedTree, "insight: CVE-2016-0777 [hacktricks] Potential client-side leak") {
+		t.Fatalf("RenderTree should include insight line, got:\n%s", renderedTree)
+	}
+
+	renderedIntel := tree.RenderIntel()
+	if !strings.Contains(renderedIntel, "[CREDENTIALS]") {
+		t.Fatalf("RenderIntel should include [CREDENTIALS], got:\n%s", renderedIntel)
+	}
+	if !strings.Contains(renderedIntel, "[INSIGHTS]") {
+		t.Fatalf("RenderIntel should include [INSIGHTS], got:\n%s", renderedIntel)
+	}
+}
+
+func TestSnapshotRestore_PreservesCredentialAndInsight(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(21, "ftp", "vsftpd")
+	tree.AddCredential("10.0.0.1", 21, Credential{
+		Service:  "ftp",
+		Username: "anonymous",
+		Password: "anonymous",
+		Source:   "default",
+	})
+	tree.AddInsight("10.0.0.1", 21, Insight{
+		Source: "hacktricks",
+		Topic:  "default_credentials",
+		Detail: "Anonymous login may be enabled",
+	})
+
+	snapshot := tree.Snapshot()
+	restored := RestoreAttackDataTree(snapshot)
+	node := restored.FindPortNode(21)
+	if node == nil {
+		t.Fatal("restored port node 21 not found")
+	}
+	if len(node.Credentials) != 1 {
+		t.Fatalf("restored credentials len = %d, want 1", len(node.Credentials))
+	}
+	if len(node.Insights) != 1 {
+		t.Fatalf("restored insights len = %d, want 1", len(node.Insights))
+	}
+	if node.Credentials[0].Username != "anonymous" {
+		t.Fatalf("restored credential username = %q, want anonymous", node.Credentials[0].Username)
+	}
+	if node.Insights[0].Topic != "default_credentials" {
+		t.Fatalf("restored insight topic = %q, want default_credentials", node.Insights[0].Topic)
+	}
+}

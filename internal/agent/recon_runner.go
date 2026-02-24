@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// MaxRespawns はポートあたりの SubAgent 最大リスポーン回数。
-const MaxRespawns = 3
-
 // ReconRunnerConfig は ReconRunner の構築パラメーター。
 type ReconRunnerConfig struct {
 	Tree       *AttackDataTree

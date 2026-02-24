@@ -12,6 +12,12 @@ import (
 )
 
 var cvePattern = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,7}\b`)
+var pathPattern = regexp.MustCompile(`(/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+)`)
+var paramPattern = regexp.MustCompile(`(?i)\b(?:param(?:eter)?|field|key)\s*[:=]?\s*([A-Za-z_][A-Za-z0-9_-]{0,63})`)
+var queryParamPattern = regexp.MustCompile(`[?&]([A-Za-z_][A-Za-z0-9_-]{0,63})=`)
+var userPattern = regexp.MustCompile(`(?i)\b(?:user(?:name)?|login)\s*[:=]\s*([^\s,;]+)`)
+var passPattern = regexp.MustCompile(`(?i)\b(?:pass(?:word)?|pwd)\s*[:=]\s*([^\s,;]+)`)
+var pairPattern = regexp.MustCompile(`\b([A-Za-z0-9_.-]{1,64}):([^\s,;]{1,128})\b`)
 
 // drainCompletedTasks は完了済みサブタスクの結果を取り出し、テキストとして返す。
 // Brain.Think() の直前に呼ばれ、結果が lastToolOutput に注入される。
@@ -35,18 +41,8 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 			task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
 			if l.attackData.PortHasPendingChildren(task.Metadata.Port) {
 				if portNode := l.attackData.FindPortNode(task.Metadata.Port); portNode != nil {
-					if portNode.SpawnCount >= MaxRespawns {
-						// リスポーン上限到達 — 残タスクをスキップ
-						l.attackData.SkipAllPendingChildren(task.Metadata.Port)
-						l.emit(Event{
-							Type:     EventLog,
-							Source:   SourceSystem,
-							Message:  fmt.Sprintf("[RECON] Max re-spawns reached for port %d — skipping remaining tasks", task.Metadata.Port),
-							TargetID: l.target.ID,
-						})
-					} else {
-						l.reconRunner.SpawnWebReconForPort(ctx, portNode)
-					}
+					// No respawn cap: as long as pending tasks remain, retry web recon.
+					l.reconRunner.SpawnWebReconForPort(ctx, portNode)
 				}
 			}
 		}
@@ -70,6 +66,7 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 			}
 		}
 		if task.Metadata.Phase == "web_attack" && task.Metadata.Port > 0 {
+			l.emitAttackDomainEvents(ctx, task, AgentKindWebAttack)
 			l.emitDomainEvent(ctx, AgentComplete{
 				DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindWebAttack),
 				AgentID:         task.ID,
@@ -78,6 +75,7 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 			})
 		}
 		if task.Metadata.Phase == "attack" && task.Metadata.Port > 0 {
+			l.emitAttackDomainEvents(ctx, task, AgentKindAttack)
 			l.emitDomainEvent(ctx, AgentComplete{
 				DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindAttack),
 				AgentID:         task.ID,
@@ -125,6 +123,17 @@ func (l *Loop) emitServiceIdentifiedFromRecon(ctx context.Context, task *SubTask
 		cves := extractCVEs(scope)
 		vectors := inferAttackVectors(scope, cves)
 		notes := buildServiceNotes(cves, vectors)
+		if l.attackData != nil {
+			topic := port.Service
+			if len(cves) > 0 {
+				topic = cves[0]
+			}
+			l.attackData.AddInsight(l.target.Host, port.Port, Insight{
+				Source: "hacktricks",
+				Topic:  topic,
+				Detail: notes,
+			})
+		}
 
 		l.emitDomainEvent(ctx, ServiceIdentified{
 			DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindRecon),
@@ -253,6 +262,365 @@ func buildServiceNotes(cves, vectors []string) string {
 		return "Recon research completed"
 	}
 	return strings.Join(parts, " | ")
+}
+
+func (l *Loop) emitAttackDomainEvents(ctx context.Context, task *SubTask, kind AgentKind) {
+	if l == nil || task == nil || task.Status != TaskStatusCompleted || task.Metadata.Port <= 0 {
+		return
+	}
+
+	host := l.target.Host
+	port := task.Metadata.Port
+	service := normalizeTaskServiceName(task.Metadata.Service)
+	if service == "" && l.attackData != nil {
+		if node := l.attackData.FindPortNode(port); node != nil {
+			service = normalizeTaskServiceName(node.Service)
+		}
+	}
+	if service == "" {
+		service = "unknown"
+	}
+	source := string(kind)
+
+	seenVuln := make(map[string]struct{})
+	seenCred := make(map[string]struct{})
+	emitted := 0
+	exploitEmitted := false
+	accessEmitted := false
+
+	emitExploit := func(vulnType, detail string) {
+		if exploitEmitted {
+			return
+		}
+		vt := vulnType
+		if vt == "" {
+			vt = detectVulnType(detail)
+		}
+		if vt == "" {
+			vt = "generic"
+		}
+		impact := inferExploitImpact(detail)
+		l.emitDomainEvent(ctx, ExploitSuccess{
+			DomainEventBase: NewDomainEventBase(l.target.ID, host, kind),
+			Port:            port,
+			VulnType:        vt,
+			Impact:          impact,
+			Detail:          strings.TrimSpace(detail),
+		})
+		if l.attackData != nil {
+			l.attackData.AddInsight(host, port, Insight{
+				Source: source,
+				Topic:  "exploit:" + vt,
+				Detail: strings.TrimSpace(detail),
+			})
+		}
+		exploitEmitted = true
+		emitted++
+	}
+
+	emitAccess := func(level, detail string) {
+		if accessEmitted {
+			return
+		}
+		lvl := level
+		if lvl == "" {
+			lvl = "user"
+		}
+		l.emitDomainEvent(ctx, AccessGained{
+			DomainEventBase: NewDomainEventBase(l.target.ID, host, kind),
+			Port:            port,
+			Service:         service,
+			Level:           lvl,
+		})
+		if l.attackData != nil {
+			l.attackData.AddInsight(host, port, Insight{
+				Source: source,
+				Topic:  "access_gained",
+				Detail: strings.TrimSpace(detail),
+			})
+		}
+		accessEmitted = true
+		emitted++
+	}
+
+	for _, mem := range task.Memories {
+		if mem == nil {
+			continue
+		}
+		text := strings.TrimSpace(mem.Title + " " + mem.Description)
+		switch mem.Type {
+		case schema.MemoryVulnerability:
+			vulnType := detectVulnType(text)
+			if vulnType == "" {
+				vulnType = "generic"
+			}
+			path := extractPathFromText(text)
+			param := extractParamFromText(text)
+			severity := detectSeverity(mem.Severity, text)
+			evidence := strings.TrimSpace(mem.Description)
+			if evidence == "" {
+				evidence = strings.TrimSpace(mem.Title)
+			}
+			if evidence == "" {
+				evidence = "vulnerability recorded by sub-agent"
+			}
+			key := fmt.Sprintf("%d|%s|%s|%s|%s", port, vulnType, path, param, evidence)
+			if _, exists := seenVuln[key]; !exists {
+				seenVuln[key] = struct{}{}
+				l.emitDomainEvent(ctx, VulnFound{
+					DomainEventBase: NewDomainEventBase(l.target.ID, host, kind),
+					Port:            port,
+					Path:            path,
+					Param:           param,
+					VulnType:        vulnType,
+					Evidence:        evidence,
+					Severity:        severity,
+				})
+				if l.attackData != nil {
+					treePath := path
+					if treePath == "" {
+						if isHTTPService(service) {
+							treePath = "/"
+						} else {
+							treePath = ""
+						}
+					}
+					if treePath != "" && isHTTPService(service) && l.attackData.findNode(host, port, treePath) == nil {
+						// Attack stage may discover a path not present in recon tree yet.
+						// Fall back to port root to avoid dropping findings.
+						treePath = "/"
+					}
+					l.attackData.AddFinding(host, port, treePath, Finding{
+						Param:    param,
+						Category: vulnType,
+						Evidence: evidence,
+						Severity: severity,
+					})
+					l.attackData.AddInsight(host, port, Insight{
+						Source: source,
+						Topic:  "vuln:" + vulnType,
+						Detail: evidence,
+					})
+				}
+				emitted++
+			}
+			if hasExploitSignal(text) {
+				emitExploit(vulnType, text)
+			}
+
+		case schema.MemoryCredential:
+			user, pass := extractCredentialPair(text)
+			if user == "" && pass == "" {
+				continue
+			}
+			if user == "" {
+				user = "unknown"
+			}
+			if pass == "" {
+				pass = "unknown"
+			}
+			credService := inferServiceFromText(text, service)
+			credKey := fmt.Sprintf("%s|%s|%s|%d", credService, user, pass, port)
+			if _, exists := seenCred[credKey]; exists {
+				continue
+			}
+			seenCred[credKey] = struct{}{}
+			l.emitDomainEvent(ctx, CredentialFound{
+				DomainEventBase: NewDomainEventBase(l.target.ID, host, kind),
+				Port:            port,
+				Service:         credService,
+				Username:        user,
+				Password:        pass,
+			})
+			if l.attackData != nil {
+				l.attackData.AddCredential(host, port, Credential{
+					Service:  credService,
+					Username: user,
+					Password: pass,
+					Source:   source,
+				})
+				l.attackData.AddInsight(host, port, Insight{
+					Source: source,
+					Topic:  "credential_found",
+					Detail: fmt.Sprintf("%s %s:%s", credService, user, pass),
+				})
+			}
+			emitted++
+
+		case schema.MemoryArtifact, schema.MemoryNote:
+			if hasExploitSignal(text) {
+				emitExploit(detectVulnType(text), text)
+			}
+		}
+
+		if !accessEmitted {
+			if level, ok := inferAccessLevel(text); ok {
+				emitAccess(level, text)
+			}
+		}
+	}
+
+	output := task.FullOutput()
+	if !exploitEmitted && hasExploitSignal(output) {
+		emitExploit("", output)
+	}
+	if !accessEmitted {
+		if level, ok := inferAccessLevel(output); ok {
+			emitAccess(level, output)
+		}
+	}
+
+	if emitted > 0 {
+		l.emit(Event{
+			Type:    EventLog,
+			Source:  SourceSystem,
+			Message: fmt.Sprintf("%s %s emitted %d domain security events", kind, task.ID, emitted),
+		})
+	}
+}
+
+func normalizeTaskServiceName(service string) string {
+	return strings.ToLower(strings.TrimSpace(service))
+}
+
+func detectVulnType(text string) string {
+	switch {
+	case containsCI(text, "sql injection"), containsCI(text, "sqli"):
+		return "sqli"
+	case containsCI(text, "xss"), containsCI(text, "cross-site scripting"):
+		return "xss"
+	case containsCI(text, "ssti"), containsCI(text, "template injection"):
+		return "ssti"
+	case containsCI(text, "command injection"):
+		return "command_injection"
+	case containsCI(text, "path traversal"), containsCI(text, "directory traversal"), containsCI(text, "lfi"):
+		return "path_traversal"
+	case containsCI(text, "idor"):
+		return "idor"
+	case containsCI(text, "rce"), containsCI(text, "remote code execution"):
+		return "rce"
+	case containsCI(text, "backdoor"):
+		return "backdoor"
+	default:
+		return ""
+	}
+}
+
+func detectSeverity(preferred, text string) string {
+	s := strings.ToLower(strings.TrimSpace(preferred))
+	switch s {
+	case "critical", "high", "medium", "low", "info":
+		return s
+	}
+	switch {
+	case containsCI(text, "critical"):
+		return "critical"
+	case containsCI(text, "high"):
+		return "high"
+	case containsCI(text, "medium"):
+		return "medium"
+	case containsCI(text, "low"):
+		return "low"
+	default:
+		return "info"
+	}
+}
+
+func extractPathFromText(text string) string {
+	if m := pathPattern.FindStringSubmatch(text); len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
+func extractParamFromText(text string) string {
+	if m := paramPattern.FindStringSubmatch(text); len(m) > 1 {
+		return sanitizeToken(m[1])
+	}
+	if m := queryParamPattern.FindStringSubmatch(text); len(m) > 1 {
+		return sanitizeToken(m[1])
+	}
+	return ""
+}
+
+func extractCredentialPair(text string) (string, string) {
+	var user string
+	var pass string
+
+	if m := userPattern.FindStringSubmatch(text); len(m) > 1 {
+		user = sanitizeToken(m[1])
+	}
+	if m := passPattern.FindStringSubmatch(text); len(m) > 1 {
+		pass = sanitizeToken(m[1])
+	}
+	if (user == "" || pass == "") && pairPattern.MatchString(text) {
+		m := pairPattern.FindStringSubmatch(text)
+		if len(m) > 2 {
+			if user == "" {
+				user = sanitizeToken(m[1])
+			}
+			if pass == "" {
+				pass = sanitizeToken(m[2])
+			}
+		}
+	}
+	return user, pass
+}
+
+func sanitizeToken(s string) string {
+	return strings.Trim(s, " \t\r\n\"'`[](){}")
+}
+
+func inferServiceFromText(text, fallback string) string {
+	for _, svc := range []string{
+		"ftp", "ssh", "mysql", "mssql", "postgresql", "redis", "smb", "winrm", "rdp", "http", "https",
+	} {
+		if containsCI(text, svc) {
+			return svc
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "unknown"
+}
+
+func hasExploitSignal(text string) bool {
+	return containsCI(text, "exploit success") ||
+		containsCI(text, "successfully exploited") ||
+		containsCI(text, "auth bypass") ||
+		containsCI(text, "bypass successful") ||
+		containsCI(text, "shell obtained") ||
+		containsCI(text, "got shell") ||
+		containsCI(text, "rce achieved") ||
+		containsCI(text, "code execution achieved") ||
+		containsCI(text, "pwned")
+}
+
+func inferExploitImpact(text string) string {
+	switch {
+	case containsCI(text, "auth bypass"):
+		return "authentication bypass"
+	case containsCI(text, "code execution"), containsCI(text, "rce"), containsCI(text, "command injection"):
+		return "remote code execution"
+	case containsCI(text, "shell"):
+		return "shell access"
+	default:
+		return "exploit validation succeeded"
+	}
+}
+
+func inferAccessLevel(text string) (string, bool) {
+	switch {
+	case containsCI(text, "root"), containsCI(text, "system"):
+		return "root", true
+	case containsCI(text, "admin"):
+		return "admin", true
+	case containsCI(text, "user shell"), containsCI(text, "access gained"), containsCI(text, "shell obtained"):
+		return "user", true
+	default:
+		return "", false
+	}
 }
 
 // handleSpawnTask は spawn_task アクションを処理する。

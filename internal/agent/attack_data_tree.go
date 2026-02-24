@@ -66,6 +66,21 @@ type Parameter struct {
 	Type string `json:"type"` // query, form, header, cookie, path
 }
 
+// Credential is an authentication artifact discovered during attack execution.
+type Credential struct {
+	Service  string `json:"service"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Source   string `json:"source"` // "brute_force", "sqli_dump", "default", "config_leak", etc.
+}
+
+// Insight is a structured attack/research note tied to a service/port.
+type Insight struct {
+	Source string `json:"source"` // "hacktricks", "nmap_script", "manual", etc.
+	Topic  string `json:"topic"`  // "CVE-2011-2523", "default_credentials", etc.
+	Detail string `json:"detail"`
+}
+
 // TaskProgress は特定タスクタイプの進捗
 type TaskProgress struct {
 	Done         int
@@ -99,10 +114,12 @@ type AttackDataNode struct {
 	Profiling    AttackDataStatus
 	VhostDiscov  AttackDataStatus
 
-	Findings   []Finding
-	Parameters []Parameter
-	Checklist  *ServiceChecklist
-	SpawnCount int // SubAgent がこのポートに対して spawn された回数
+	Findings    []Finding
+	Parameters  []Parameter
+	Credentials []Credential
+	Insights    []Insight
+	Checklist   *ServiceChecklist
+	SpawnCount  int // SubAgent がこのポートに対して spawn された回数
 
 	Children []*AttackDataNode
 }
@@ -636,7 +653,7 @@ func nodeHasPending(node *AttackDataNode) bool {
 
 // FindPortNode は指定ポート番号のノードを返す。見つからなければ nil。
 // SkipAllPendingChildren は指定ポートのノードとその子孫で Pending なタスクを StatusSkipped に変更する。
-// MaxRespawns に達した場合に呼ばれ、残りのタスクを意図的にスキップする。
+// オペレーター判断で残タスクを明示的に打ち切る用途で使用する。
 func (t *AttackDataTree) SkipAllPendingChildren(port int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -907,6 +924,66 @@ func (t *AttackDataTree) AddFinding(host string, port int, path string, finding 
 	node.Findings = append(node.Findings, finding)
 }
 
+// AddCredential records a discovered credential on a port node.
+// Duplicate entries (same service/username/password/source) are ignored.
+func (t *AttackDataTree) AddCredential(host string, port int, cred Credential) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	node := t.findNode(host, port, "")
+	if node == nil {
+		// fallback: resolve by port when host/path does not match exactly.
+		for _, p := range t.Ports {
+			if p.Port == port {
+				node = p
+				break
+			}
+		}
+	}
+	if node == nil {
+		return
+	}
+
+	for _, existing := range node.Credentials {
+		if existing.Service == cred.Service &&
+			existing.Username == cred.Username &&
+			existing.Password == cred.Password &&
+			existing.Source == cred.Source {
+			return
+		}
+	}
+	node.Credentials = append(node.Credentials, cred)
+}
+
+// AddInsight records a service/attack insight on a port node.
+// Duplicate entries (same source/topic/detail) are ignored.
+func (t *AttackDataTree) AddInsight(host string, port int, insight Insight) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	node := t.findNode(host, port, "")
+	if node == nil {
+		for _, p := range t.Ports {
+			if p.Port == port {
+				node = p
+				break
+			}
+		}
+	}
+	if node == nil {
+		return
+	}
+
+	for _, existing := range node.Insights {
+		if existing.Source == insight.Source &&
+			existing.Topic == insight.Topic &&
+			existing.Detail == insight.Detail {
+			return
+		}
+	}
+	node.Insights = append(node.Insights, insight)
+}
+
 // CountFindings は全ノードの finding 数を返す
 func (t *AttackDataTree) CountFindings() int {
 	t.mu.RLock()
@@ -986,7 +1063,11 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 			}
 
 			// ルート "/" ノード（ポートノードのタスク・パラメータ・ファインディングを表示）
-			hasRootData := hasRootTasks || len(node.Parameters) > 0 || len(node.Findings) > 0
+			hasRootData := hasRootTasks ||
+				len(node.Parameters) > 0 ||
+				len(node.Findings) > 0 ||
+				len(node.Credentials) > 0 ||
+				len(node.Insights) > 0
 			if hasRootData {
 				rootPrefix := childPrefix + "|-- "
 				rootChildPrefix := childPrefix + "|   "
@@ -1002,6 +1083,8 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 					Profiling:    node.Profiling,
 					Parameters:   node.Parameters,
 					Findings:     node.Findings,
+					Credentials:  node.Credentials,
+					Insights:     node.Insights,
 				}
 				renderEndpointNode(sb, rootNode, rootPrefix, rootChildPrefix)
 			}
@@ -1019,6 +1102,20 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 			}
 		} else {
 			sb.WriteString("\n")
+			hasRootData := len(node.Parameters) > 0 ||
+				len(node.Findings) > 0 ||
+				len(node.Credentials) > 0 ||
+				len(node.Insights) > 0
+			if hasRootData {
+				rootNode := &AttackDataNode{
+					Path:        "/",
+					Parameters:  node.Parameters,
+					Findings:    node.Findings,
+					Credentials: node.Credentials,
+					Insights:    node.Insights,
+				}
+				renderEndpointNode(sb, rootNode, childPrefix+"+-- ", childPrefix+"    ")
+			}
 		}
 	} else {
 		// endpoint ノード
@@ -1046,7 +1143,12 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 	}
 
 	// parameters + findings + children + taskLines の合計で最終要素を判定
-	totalItems := len(taskLines) + len(node.Parameters) + len(node.Findings) + len(node.Children)
+	totalItems := len(taskLines) +
+		len(node.Parameters) +
+		len(node.Findings) +
+		len(node.Credentials) +
+		len(node.Insights) +
+		len(node.Children)
 	itemIdx := 0
 
 	for _, line := range taskLines {
@@ -1077,6 +1179,54 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 			fp = childPrefix + "+-- "
 		}
 		fmt.Fprintf(sb, "%sfinding: param \"%s\" \u2014 %s (%s)\n", fp, f.Param, f.Category, f.Evidence)
+	}
+
+	for _, c := range node.Credentials {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		cp := childPrefix + "|-- "
+		if isLast {
+			cp = childPrefix + "+-- "
+		}
+		service := c.Service
+		if service == "" {
+			service = "unknown"
+		}
+		user := c.Username
+		if user == "" {
+			user = "?"
+		}
+		pass := c.Password
+		if pass == "" {
+			pass = "?"
+		}
+		source := c.Source
+		if source == "" {
+			source = "unknown"
+		}
+		fmt.Fprintf(sb, "%scredential: %s %s:%s [%s]\n", cp, service, user, pass, source)
+	}
+
+	for _, in := range node.Insights {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		ip := childPrefix + "|-- "
+		if isLast {
+			ip = childPrefix + "+-- "
+		}
+		topic := in.Topic
+		if topic == "" {
+			topic = "note"
+		}
+		source := in.Source
+		if source == "" {
+			source = "unknown"
+		}
+		detail := strings.TrimSpace(in.Detail)
+		if detail == "" {
+			detail = "(no detail)"
+		}
+		fmt.Fprintf(sb, "%sinsight: %s [%s] %s\n", ip, topic, source, detail)
 	}
 
 	for _, child := range node.Children {
@@ -1339,6 +1489,30 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		sb.WriteString("\n")
 	}
 
+	// [CREDENTIALS]: 収集済み認証情報
+	hasCreds := false
+	for _, node := range t.Ports {
+		t.renderNodeCredentials(&sb, node, &hasCreds)
+	}
+	for _, node := range t.Vhosts {
+		t.renderNodeCredentials(&sb, node, &hasCreds)
+	}
+	if hasCreds {
+		sb.WriteString("\n")
+	}
+
+	// [INSIGHTS]: 攻撃・調査メモ
+	hasInsights := false
+	for _, node := range t.Ports {
+		t.renderNodeInsights(&sb, node, &hasInsights)
+	}
+	for _, node := range t.Vhosts {
+		t.renderNodeInsights(&sb, node, &hasInsights)
+	}
+	if hasInsights {
+		sb.WriteString("\n")
+	}
+
 	// [ATTACK SURFACE]: 全ポート + ステータス
 	sb.WriteString("[ATTACK SURFACE]\n")
 	for _, node := range t.Ports {
@@ -1400,6 +1574,64 @@ func (t *AttackDataTree) renderNodeFindings(sb *strings.Builder, node *AttackDat
 	}
 	for _, child := range node.Children {
 		t.renderNodeFindings(sb, child, hasFindings)
+	}
+}
+
+func (t *AttackDataTree) renderNodeCredentials(sb *strings.Builder, node *AttackDataNode, hasCreds *bool) {
+	if len(node.Credentials) > 0 {
+		if !*hasCreds {
+			sb.WriteString("[CREDENTIALS]\n")
+			*hasCreds = true
+		}
+		for _, c := range node.Credentials {
+			user := c.Username
+			if user == "" {
+				user = "?"
+			}
+			pass := c.Password
+			if pass == "" {
+				pass = "?"
+			}
+			service := c.Service
+			if service == "" {
+				service = node.Service
+			}
+			source := c.Source
+			if source == "" {
+				source = "unknown"
+			}
+			fmt.Fprintf(sb, "  Port %d/%s: %s:%s [%s]\n", node.Port, service, user, pass, source)
+		}
+	}
+	for _, child := range node.Children {
+		t.renderNodeCredentials(sb, child, hasCreds)
+	}
+}
+
+func (t *AttackDataTree) renderNodeInsights(sb *strings.Builder, node *AttackDataNode, hasInsights *bool) {
+	if len(node.Insights) > 0 {
+		if !*hasInsights {
+			sb.WriteString("[INSIGHTS]\n")
+			*hasInsights = true
+		}
+		for _, in := range node.Insights {
+			topic := in.Topic
+			if topic == "" {
+				topic = "note"
+			}
+			source := in.Source
+			if source == "" {
+				source = "unknown"
+			}
+			detail := strings.TrimSpace(in.Detail)
+			if detail == "" {
+				detail = "(no detail)"
+			}
+			fmt.Fprintf(sb, "  Port %d: %s [%s] %s\n", node.Port, topic, source, detail)
+		}
+	}
+	for _, child := range node.Children {
+		t.renderNodeInsights(sb, child, hasInsights)
 	}
 }
 
@@ -1546,6 +1778,8 @@ type AttackDataNodeDTO struct {
 	VhostDiscov  AttackDataStatus    `json:"vhost_discovery"`
 	Findings     []Finding           `json:"findings,omitempty"`
 	Parameters   []Parameter         `json:"parameters,omitempty"`
+	Credentials  []Credential        `json:"credentials,omitempty"`
+	Insights     []Insight           `json:"insights,omitempty"`
 	Checklist    *ServiceChecklist   `json:"checklist,omitempty"`
 	SpawnCount   int                 `json:"spawn_count"`
 	Children     []AttackDataNodeDTO `json:"children,omitempty"`
@@ -1612,6 +1846,8 @@ func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
 		VhostDiscov:  node.VhostDiscov,
 		Findings:     node.Findings,
 		Parameters:   node.Parameters,
+		Credentials:  node.Credentials,
+		Insights:     node.Insights,
 		Checklist:    node.Checklist,
 		SpawnCount:   node.SpawnCount,
 	}
@@ -1638,6 +1874,8 @@ func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
 		VhostDiscov:  resetInProgress(dto.VhostDiscov),
 		Findings:     dto.Findings,
 		Parameters:   dto.Parameters,
+		Credentials:  dto.Credentials,
+		Insights:     dto.Insights,
 		Checklist:    dto.Checklist,
 		SpawnCount:   dto.SpawnCount,
 	}

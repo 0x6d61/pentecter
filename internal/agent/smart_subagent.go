@@ -206,6 +206,8 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 				finding := fmt.Sprintf("[%s] %s: %s",
 					action.Memory.Type, action.Memory.Title, action.Memory.Description)
 				task.Findings = append(task.Findings, finding)
+				memCopy := *action.Memory
+				task.Memories = append(task.Memories, &memCopy)
 				task.AppendOutput("[memory] " + action.Memory.Title)
 				sa.emitLog(task, SourceAI, fmt.Sprintf("Memory: %s", action.Memory.Title))
 			}

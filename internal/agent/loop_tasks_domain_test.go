@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"testing"
+
+	"github.com/0x6d61/pentecter/pkg/schema"
 )
 
 func TestDrainCompletedTasks_WebReconComplete_OnlyWhenNoPending(t *testing.T) {
@@ -254,6 +256,113 @@ func TestDrainCompletedTasks_AttackTask_EmitsAgentComplete(t *testing.T) {
 		}
 	}
 	t.Fatal("expected AgentComplete event for attack task")
+}
+
+func TestDrainCompletedTasks_WebAttackTask_EmitsSecurityDomainEvents(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	loop, tm, domainEvents := newDomainDrainTestLoop(tree)
+	task := NewSubTask("task-web-attack-2", TaskKindSmart, "web attack 80")
+	task.Metadata = TaskMetadata{Phase: "web_attack", Port: 80, Service: "http"}
+	task.Memories = []*schema.Memory{
+		{
+			Type:        schema.MemoryVulnerability,
+			Title:       "SQLi on /login",
+			Description: "SQL injection on /login parameter=username caused auth bypass",
+			Severity:    "high",
+		},
+		{
+			Type:        schema.MemoryCredential,
+			Title:       "Creds",
+			Description: "service=ssh username=admin password=admin123",
+		},
+		{
+			Type:        schema.MemoryNote,
+			Title:       "Exploit note",
+			Description: "shell obtained root",
+		},
+	}
+	task.Status = TaskStatusCompleted
+	task.Complete()
+	tm.InjectTask(task.ID, task)
+	tm.InjectDone(task.ID)
+
+	_ = loop.drainCompletedTasks(context.Background())
+	events := drainDomainEvents(domainEvents)
+
+	var vulnFound, exploitSuccess, credFound, accessFound bool
+	for _, evt := range events {
+		switch evt.(type) {
+		case VulnFound:
+			vulnFound = true
+		case ExploitSuccess:
+			exploitSuccess = true
+		case CredentialFound:
+			credFound = true
+		case AccessGained:
+			accessFound = true
+		}
+	}
+	if !vulnFound {
+		t.Fatal("expected VulnFound event from web_attack memory")
+	}
+	if !exploitSuccess {
+		t.Fatal("expected ExploitSuccess event from exploit signal")
+	}
+	if !credFound {
+		t.Fatal("expected CredentialFound event from credential memory")
+	}
+	if !accessFound {
+		t.Fatal("expected AccessGained event from shell/root signal")
+	}
+
+	portNode := tree.FindPortNode(80)
+	if portNode == nil {
+		t.Fatal("expected port node 80")
+	}
+	if len(portNode.Findings) == 0 {
+		t.Fatal("expected finding persisted into AttackDataTree")
+	}
+	if len(portNode.Credentials) == 0 {
+		t.Fatal("expected credential persisted into AttackDataTree")
+	}
+}
+
+func TestDrainCompletedTasks_AttackFailed_NoSecurityDomainEvents(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(21, "ftp", "vsftpd")
+
+	loop, tm, domainEvents := newDomainDrainTestLoop(tree)
+	task := NewSubTask("task-attack-failed-1", TaskKindSmart, "attack 21 failed")
+	task.Metadata = TaskMetadata{Phase: "attack", Port: 21, Service: "ftp"}
+	task.Status = TaskStatusFailed
+	task.Error = "simulated failure"
+	task.Memories = []*schema.Memory{
+		{
+			Type:        schema.MemoryVulnerability,
+			Title:       "Should not emit",
+			Description: "SQL injection on / should not be emitted on failed task",
+			Severity:    "high",
+		},
+	}
+	task.Complete()
+	tm.InjectTask(task.ID, task)
+	tm.InjectDone(task.ID)
+
+	_ = loop.drainCompletedTasks(context.Background())
+	events := drainDomainEvents(domainEvents)
+
+	hasSecurity := false
+	for _, evt := range events {
+		switch evt.(type) {
+		case VulnFound, ExploitSuccess, CredentialFound, AccessGained:
+			hasSecurity = true
+		}
+	}
+	if hasSecurity {
+		t.Fatal("security domain events should not be emitted for failed attack tasks")
+	}
 }
 
 func newDomainDrainTestLoop(tree *AttackDataTree) (*Loop, *TaskManager, chan DomainEvent) {

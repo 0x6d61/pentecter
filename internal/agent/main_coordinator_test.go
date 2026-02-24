@@ -561,6 +561,145 @@ func TestBuildWebAttackPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Do NOT run broad web reconnaissance tools") {
 		t.Fatal("expected prohibition for broad web recon tools")
 	}
+	if !strings.Contains(prompt, "Attack plan (endpoint + parameter based)") {
+		t.Fatal("expected endpoint/parameter based attack planning section")
+	}
+}
+
+func TestMainCoordinator_VulnFound_UpdatesTree(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 64)
+	domainEvents := make(chan DomainEvent, 8)
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		AttackData:   tree,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	domainEvents <- VulnFound{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindWebAttack),
+		Port:            80,
+		Path:            "", // should map to "/" for HTTP port root
+		Param:           "id",
+		VulnType:        "sqli",
+		Evidence:        "SQL syntax error near quote",
+		Severity:        "high",
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		node := tree.FindPortNode(80)
+		return node != nil && len(node.Findings) > 0
+	}, "expected finding to be recorded from VulnFound")
+
+	node := tree.FindPortNode(80)
+	if node == nil || len(node.Findings) == 0 {
+		t.Fatal("expected findings on port 80")
+	}
+	got := node.Findings[0]
+	if got.Category != "sqli" {
+		t.Fatalf("finding category = %q, want sqli", got.Category)
+	}
+	if got.Param != "id" {
+		t.Fatalf("finding param = %q, want id", got.Param)
+	}
+	if len(node.Insights) == 0 {
+		t.Fatal("expected insight from VulnFound")
+	}
+}
+
+func TestMainCoordinator_CredentialFound_RoutesPivotAttack(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(21, "ftp", "vsftpd")
+	tree.AddPort(22, "ssh", "OpenSSH 7.2")
+	tree.AddInsight("10.0.0.1", 22, Insight{
+		Source: "hacktricks",
+		Topic:  "CVE-2016-0777",
+		Detail: "Potential roaming vulnerability in older OpenSSH clients",
+	})
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 8)
+	tm := newCoordinatorTaskManager(uiEvents)
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	domainEvents <- CredentialFound{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindAttack),
+		Port:            21,
+		Service:         "ftp",
+		Username:        "root",
+		Password:        "toor",
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.attackByPort[22]
+		return ok
+	}, "expected credential pivot to spawn attack task for port 22")
+
+	if _, exists := coordinator.attackByPort[21]; exists {
+		t.Fatal("credential origin port should not be pivot target")
+	}
+
+	taskID := coordinator.attackByPort[22]
+	task, ok := tm.GetTask(taskID)
+	if !ok {
+		t.Fatalf("spawned pivot task %s not found", taskID)
+	}
+	if task.Metadata.Phase != "attack" {
+		t.Fatalf("task phase = %q, want attack", task.Metadata.Phase)
+	}
+	if !strings.Contains(task.Command, "Known reusable credentials") {
+		t.Fatalf("attack prompt should include credential section, got: %q", task.Command)
+	}
+	if !strings.Contains(task.Command, "root:toor") {
+		t.Fatalf("attack prompt should include pivot credential, got: %q", task.Command)
+	}
+	if !strings.Contains(task.Command, "HackTricks-driven priorities") {
+		t.Fatalf("attack prompt should include HackTricks priority guidance, got: %q", task.Command)
+	}
+}
+
+func TestBuildAttackPrompt_ServiceSpecificAndCreds(t *testing.T) {
+	prompt := buildAttackPrompt("10.0.0.1", ServiceIdentified{
+		Port:          22,
+		Service:       "ssh",
+		CVEs:          []string{"CVE-2016-0777"},
+		AttackVectors: []string{"credential brute force"},
+		Notes:         "HackTricks note: test roaming bug and weak auth",
+	}, []Credential{
+		{Service: "ssh", Username: "admin", Password: "admin123", Source: "attack"},
+	})
+
+	if !strings.Contains(prompt, "Service-specific attack logic") {
+		t.Fatal("expected service-specific section")
+	}
+	if !strings.Contains(prompt, "Known reusable credentials") {
+		t.Fatal("expected credentials section")
+	}
+	if !strings.Contains(prompt, "admin:admin123") {
+		t.Fatal("expected credential value in prompt")
+	}
+	if !strings.Contains(prompt, "HackTricks-driven priorities") {
+		t.Fatal("expected HackTricks guidance in prompt")
+	}
 }
 
 func waitUntil(t *testing.T, timeout time.Duration, cond func() bool, msg string) {

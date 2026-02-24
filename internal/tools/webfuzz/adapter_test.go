@@ -260,6 +260,8 @@ func TestExtractPortAndPath(t *testing.T) {
 		{"http://example.com:8080/FUZZ", 8080, "/"},
 		{"http://example.com/admin/FUZZ", 80, "/admin"},
 		{"http://example.com/page?FUZZ=value", 80, "/page"},
+		{"http://example.com//FUZZ", 80, "/"},
+		{"http://example.com///api//FUZZ", 80, "/api"},
 	}
 
 	for _, tt := range tests {
@@ -272,6 +274,28 @@ func TestExtractPortAndPath(t *testing.T) {
 				t.Errorf("path: got %q, want %q", path, tt.wantPath)
 			}
 		})
+	}
+}
+
+func TestNormalizeTreePath(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", "/"},
+		{"/", "/"},
+		{"//", "/"},
+		{"admin", "/admin"},
+		{"/admin/", "/admin"},
+		{"//admin//login/", "/admin/login"},
+		{"  /api/v1  ", "/api/v1"},
+	}
+
+	for _, tt := range tests {
+		got := normalizeTreePath(tt.in)
+		if got != tt.want {
+			t.Errorf("normalizeTreePath(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
@@ -541,6 +565,106 @@ func TestWebfuzzTool_Execute_DirMode_CompletesTask(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected CompleteTask(taskType=0) for dir mode completion")
+	}
+}
+
+func TestWebfuzzTool_Execute_DirMode_DoubleSlashURL_ParentNormalized(t *testing.T) {
+	// URL が //FUZZ でも parentPath が "/" として処理されることを確認
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "admin")
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "admin\n")
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 64)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"dir", "-u", srv.URL + "//FUZZ", "-w", wordlist, "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	if len(tree.endpoints) == 0 {
+		t.Fatal("expected endpoint to be recorded")
+	}
+	got := tree.endpoints[0]
+	if got.parentPath != "/" {
+		t.Fatalf("parentPath = %q, want /", got.parentPath)
+	}
+	if got.newPath != "/admin" {
+		t.Fatalf("newPath = %q, want /admin", got.newPath)
+	}
+}
+
+func TestWebfuzzTool_Execute_DirMode_TrailingSlashWord_ParentNormalized(t *testing.T) {
+	// ワードリストに "admin/" があっても parentPath は "/"、newPath は "/admin" になること
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprint(w, "admin slash")
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		fmt.Fprint(w, "not found")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wordlist := createTempWordlist(t, "admin/\n")
+	tree := &mockTreeUpdater{}
+	tool := NewWebfuzzTool(tree, "10.0.0.1")
+
+	lineCh := make(chan tools.OutputLine, 64)
+	go func() {
+		for range lineCh {
+		}
+	}()
+
+	exitCode, err := tool.Execute(context.Background(),
+		[]string{"dir", "-u", srv.URL + "/FUZZ", "-w", wordlist, "-t", "1"},
+		lineCh)
+	close(lineCh)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	if len(tree.endpoints) == 0 {
+		t.Fatal("expected endpoint to be recorded")
+	}
+	got := tree.endpoints[0]
+	if got.parentPath != "/" {
+		t.Fatalf("parentPath = %q, want /", got.parentPath)
+	}
+	if got.newPath != "/admin" {
+		t.Fatalf("newPath = %q, want /admin", got.newPath)
 	}
 }
 

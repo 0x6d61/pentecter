@@ -381,8 +381,8 @@ WebAttackAgent(port 80):
 | ~~vhost タスク完了漏れ~~ | ~~CompleteTask(TaskVhostDiscov) を webfuzz vhost モード完了時に呼ぶ~~ |
 | ~~パラメータ未記録~~ | ~~`AddParameter()` を TreeUpdater に追加~~ |
 | ~~Finding 未記録~~ | ~~`AddFinding()` を TreeUpdater に追加~~ |
-| 認証情報 | `AddCredential()` を新設 |
-| HackTricks 知見 | `AddInsight()` を新設 |
+| ~~認証情報~~ | ~~`AddCredential()` を新設~~ |
+| ~~HackTricks 知見~~ | ~~`AddInsight()` を新設~~ |
 
 ### TreeUpdater インターフェース拡張
 
@@ -407,7 +407,7 @@ func (t *AttackDataTree) AddFinding(host string, port int, path string, finding 
 > Credential/Insight は webfuzz 経由でなく `AttackDataTree` を直接呼ぶため、このパターンの対象外。
 
 ```go
-// 新規（未実装）— AttackDataTree に直接追加する（webfuzz.TreeUpdater には含めない）
+// 新規（実装済み）— AttackDataTree に直接追加する（webfuzz.TreeUpdater には含めない）
 // 理由: webfuzz.TreeUpdater は webfuzz 由来の更新に限定すべき。
 //       Credential/Insight は webfuzz 以外のエージェント（AttackAgent, WebAttackAgent）が
 //       直接 AttackDataTree を呼んで記録する。
@@ -491,13 +491,13 @@ type Insight struct {
 
 ### Phase 4: WebAttackAgent 実装
 1. ~~WebReconComplete イベント受信で起動~~
-2. パラメータ+エンドポイントベースの攻撃計画
-3. VulnFound / ExploitSuccess イベント emit
+2. ~~パラメータ+エンドポイントベースの攻撃計画~~
+3. ~~VulnFound / ExploitSuccess イベント emit~~
 
 ### Phase 5: AttackAgent 実装
-1. サービス固有攻撃ロジック
-2. HackTricks 知見ベースの攻撃選択
-3. 横展開提案（CredentialFound → 他サービスへ）
+1. ~~サービス固有攻撃ロジック~~
+2. ~~HackTricks 知見ベースの攻撃選択~~
+3. ~~横展開提案（CredentialFound → 他サービスへ）~~
 
 ---
 
