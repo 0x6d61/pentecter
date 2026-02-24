@@ -348,3 +348,260 @@ func TestSmartSubAgent_Run_TaskInstructionEveryTurn(t *testing.T) {
 		}
 	}
 }
+
+func TestSmartSubAgent_SearchKnowledge(t *testing.T) {
+	// Test that SmartSubAgent handles search_knowledge action
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{
+				Thought:        "searching for exploit info",
+				Action:         schema.ActionSearchKnowledge,
+				KnowledgeQuery: "vsftpd 2.3.4 exploit",
+			},
+			{
+				Thought: "done",
+				Action:  schema.ActionComplete,
+			},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	task := agent.NewSubTask("smart-knowledge-1", agent.TaskKindSmart, "test search_knowledge")
+	task.MaxTurns = 10
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
+	// No knowledge store → should get error message
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	if task.Status != agent.TaskStatusCompleted {
+		t.Errorf("Status: got %q, want completed", task.Status)
+	}
+
+	// Without knowledge store, the output should mention "not configured"
+	output := task.FullOutput()
+	if !strings.Contains(output, "not configured") {
+		t.Errorf("Output should contain 'not configured' when knowledge store is nil, got: %q", output)
+	}
+}
+
+func TestSmartSubAgent_ReadKnowledge(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{
+				Thought:       "reading article",
+				Action:        schema.ActionReadKnowledge,
+				KnowledgePath: "pentesting-web/sql-injection/README.md",
+			},
+			{
+				Thought: "done",
+				Action:  schema.ActionComplete,
+			},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	task := agent.NewSubTask("smart-knowledge-2", agent.TaskKindSmart, "test read_knowledge")
+	task.MaxTurns = 10
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	if task.Status != agent.TaskStatusCompleted {
+		t.Errorf("Status: got %q, want completed", task.Status)
+	}
+
+	output := task.FullOutput()
+	if !strings.Contains(output, "not configured") {
+		t.Errorf("Output should contain 'not configured' when knowledge store is nil, got: %q", output)
+	}
+}
+
+func TestSmartSubAgent_AgentKindInEvents(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	task := agent.NewSubTask("smart-kind-1", agent.TaskKindSmart, "test agent kind")
+	task.MaxTurns = 10
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "").
+		WithAgentKind(agent.AgentKindRecon)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	// Collect events and check that AgentKind is set
+	var foundReconKind bool
+	for {
+		select {
+		case e := <-events:
+			if e.AgentKind == agent.AgentKindRecon {
+				foundReconKind = true
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	if !foundReconKind {
+		t.Error("Expected at least one event with AgentKind=recon")
+	}
+}
+
+func TestSmartSubAgent_BlacklistedCommand(t *testing.T) {
+	// Brain が rm -rf / を返す → ブラックリストで阻止されること
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{
+				Thought: "cleaning up",
+				Action:  schema.ActionRun,
+				Command: "rm -rf /",
+			},
+			{
+				Thought: "done",
+				Action:  schema.ActionComplete,
+			},
+		},
+	}
+
+	// ブラックリスト付き runner を構築
+	falseVal := false
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ToolDef{
+		Name:             "echo",
+		ProposalRequired: &falseVal,
+		Output: tools.OutputConfig{
+			Strategy:  tools.StrategyHeadTail,
+			HeadLines: 5,
+			TailLines: 5,
+		},
+	})
+	runner := tools.NewCommandRunner(reg, tools.NewBlacklist([]string{`rm\s+-rf\s+/`}), tools.NewLogStore())
+
+	events := make(chan agent.Event, 64)
+	task := agent.NewSubTask("smart-bl-1", agent.TaskKindSmart, "test blacklist blocking")
+	task.MaxTurns = 10
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, nil, "10.0.0.5", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	// タスクは complete すべき（blacklist でブロック後、次ターンで complete）
+	if task.Status != agent.TaskStatusCompleted {
+		t.Errorf("Status: got %q, want completed", task.Status)
+	}
+
+	// 出力にブラックリストエラーが含まれること
+	output := task.FullOutput()
+	if !strings.Contains(output, "blacklist") {
+		t.Errorf("Output should contain 'blacklist' error, got: %q", output)
+	}
+
+	// イベントにブラックリストブロックのログが含まれること
+	var foundBlockedLog bool
+	for {
+		select {
+		case e := <-events:
+			if strings.Contains(e.Message, "blacklisted command blocked") {
+				foundBlockedLog = true
+			}
+		default:
+			goto checkDone
+		}
+	}
+checkDone:
+	if !foundBlockedLog {
+		t.Error("Expected event log containing 'blacklisted command blocked'")
+	}
+}
+
+func TestSmartSubAgent_ReconSpawnCallback(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{
+				Thought: "running nmap scan",
+				Action:  schema.ActionRun,
+				Command: "nmap -sV 10.0.0.5",
+			},
+			{
+				Thought: "done",
+				Action:  schema.ActionComplete,
+			},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	var callbackCalled bool
+	task := agent.NewSubTask("smart-callback-1", agent.TaskKindSmart, "test recon callback")
+	task.MaxTurns = 10
+
+	// AttackDataTree を提供（reconSpawnCb は nmap コマンド実行時のみ呼ばれる）
+	tree := agent.NewAttackDataTree("10.0.0.5", 2, 0)
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, tree, "10.0.0.5", "").
+		WithReconSpawnCallback(func(ctx context.Context) {
+			callbackCalled = true
+		})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	if !callbackCalled {
+		t.Error("reconSpawnCb should have been called after ActionRun")
+	}
+}

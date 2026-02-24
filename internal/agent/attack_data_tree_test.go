@@ -2634,3 +2634,74 @@ func TestStatusSkipped_NotCountedAsPending_InPortHasPendingChildren(t *testing.T
 		t.Error("PortHasPendingChildren should return false when all pending are skipped")
 	}
 }
+
+func TestRollbackPortRecon(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// StartPortRecon increments active and SpawnCount
+	if !tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should succeed")
+	}
+	if tree.Active() != 1 {
+		t.Fatalf("Active = %d, want 1", tree.Active())
+	}
+	if port.SpawnCount != 1 {
+		t.Fatalf("SpawnCount = %d, want 1", port.SpawnCount)
+	}
+
+	// RollbackPortRecon reverses the effects
+	tree.RollbackPortRecon(port)
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0 after rollback", tree.Active())
+	}
+	if port.SpawnCount != 0 {
+		t.Errorf("SpawnCount = %d, want 0 after rollback", port.SpawnCount)
+	}
+
+	// Tasks should be back to Pending
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskVhostDiscov} {
+		if port.getAttackDataStatus(tt) != StatusPending {
+			t.Errorf("task %s should be Pending after rollback, got %d", tt, port.getAttackDataStatus(tt))
+		}
+	}
+}
+
+func TestRollbackPortRecon_ActiveFloor(t *testing.T) {
+	// RollbackPortRecon should not decrement active below 0
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// Manually set active to 0 and call rollback — active should stay 0
+	tree.RollbackPortRecon(port)
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0 (should not go negative)", tree.Active())
+	}
+}
+
+func TestRollbackPortRecon_OnlyInProgressReverted(t *testing.T) {
+	// Only InProgress tasks should be reverted; Complete tasks should stay Complete
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// Start recon (marks Pending tasks as InProgress)
+	tree.StartPortRecon(port)
+
+	// Mark EndpointEnum as Complete (simulating partial completion)
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+
+	tree.RollbackPortRecon(port)
+
+	// Complete task should stay Complete
+	if port.getAttackDataStatus(TaskEndpointEnum) != StatusComplete {
+		t.Errorf("EndpointEnum should remain Complete after rollback, got %d", port.getAttackDataStatus(TaskEndpointEnum))
+	}
+
+	// VhostDiscov was InProgress, should be back to Pending
+	if port.getAttackDataStatus(TaskVhostDiscov) != StatusPending {
+		t.Errorf("VhostDiscov should be Pending after rollback, got %d", port.getAttackDataStatus(TaskVhostDiscov))
+	}
+}

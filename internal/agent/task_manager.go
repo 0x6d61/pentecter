@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/knowledge"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/tools"
 )
@@ -20,8 +21,9 @@ type TaskManager struct {
 	runner   *tools.CommandRunner
 	mcpMgr   *mcp.MCPManager
 	events   chan<- Event
-	subBrain brain.Brain
-	doneCh   chan string // バッファ: 64
+	subBrain   brain.Brain
+	reconBrain brain.Brain // ReconAgent 用 Brain（nil = ReconAgent 不可）
+	doneCh     chan string // バッファ: 64
 }
 
 // SpawnTaskRequest はサブタスクの生成リクエスト。
@@ -34,18 +36,23 @@ type SpawnTaskRequest struct {
 	TargetHost string
 	MaxTurns   int
 	AttackDataTree  *AttackDataTree
-	MemDir     string // webfuzz raw output 用
+	MemDir          string              // webfuzz raw output 用
+	KnowledgeStore  *knowledge.Store    // ReconAgent 用ナレッジベース
+	ReconSpawnCb    func(context.Context) // HTTP ポート検出時 WebRecon spawn コールバック
+	AgentKind       AgentKind           // エージェント種別
+	IsReconAgent    bool                // true の場合 reconBrain を使用
 }
 
 // NewTaskManager は TaskManager を構築する。
-func NewTaskManager(runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, subBrain brain.Brain) *TaskManager {
+func NewTaskManager(runner *tools.CommandRunner, mcpMgr *mcp.MCPManager, events chan<- Event, subBrain brain.Brain, reconBrain brain.Brain) *TaskManager {
 	return &TaskManager{
-		tasks:    make(map[string]*SubTask),
-		runner:   runner,
-		mcpMgr:   mcpMgr,
-		events:   events,
-		subBrain: subBrain,
-		doneCh:   make(chan string, 64),
+		tasks:      make(map[string]*SubTask),
+		runner:     runner,
+		mcpMgr:     mcpMgr,
+		events:     events,
+		subBrain:   subBrain,
+		reconBrain: reconBrain,
+		doneCh:     make(chan string, 256),
 	}
 }
 
@@ -55,8 +62,24 @@ func (tm *TaskManager) CanSpawnSmart() bool {
 	return tm != nil && tm.subBrain != nil
 }
 
+// CanSpawnRecon は ReconAgent を起動可能かどうかを返す。
+// ReconBrain が設定されていない場合は false を返す。
+func (tm *TaskManager) CanSpawnRecon() bool {
+	return tm != nil && tm.reconBrain != nil
+}
+
 // SpawnTask は新しいサブタスクを生成し、バックグラウンドで実行する。
 func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (string, error) {
+	// Brain の選択: IsReconAgent → reconBrain, それ以外 → subBrain
+	// マップ登録前にバリデーションし、失敗タスクがマップに残るリソースリークを防止する。
+	selectedBrain := tm.subBrain
+	if req.IsReconAgent {
+		selectedBrain = tm.reconBrain
+	}
+	if selectedBrain == nil {
+		return "", fmt.Errorf("brain is not configured for agent type (isRecon=%v)", req.IsReconAgent)
+	}
+
 	id := fmt.Sprintf("task-%d", tm.nextID.Add(1))
 
 	task := NewSubTask(id, req.Kind, req.Goal)
@@ -73,14 +96,16 @@ func (tm *TaskManager) SpawnTask(ctx context.Context, req SpawnTaskRequest) (str
 	tm.tasks[id] = task
 	tm.mu.Unlock()
 
-	if tm.subBrain == nil {
-		task.Status = TaskStatusFailed
-		task.Error = "sub-brain is not configured"
-		task.Complete()
-		cancel()
-		return id, fmt.Errorf("sub-brain is not configured for smart tasks")
+	sa := NewSmartSubAgent(selectedBrain, tm.runner, tm.mcpMgr, tm.events, req.AttackDataTree, req.TargetHost, req.MemDir)
+	if req.KnowledgeStore != nil {
+		sa.WithKnowledge(req.KnowledgeStore)
 	}
-	sa := NewSmartSubAgent(tm.subBrain, tm.runner, tm.mcpMgr, tm.events, req.AttackDataTree, req.TargetHost, req.MemDir)
+	if req.ReconSpawnCb != nil {
+		sa.WithReconSpawnCallback(req.ReconSpawnCb)
+	}
+	if req.AgentKind != "" {
+		sa.WithAgentKind(req.AgentKind)
+	}
 	go func() {
 		sa.Run(taskCtx, task, req.TargetHost)
 		// context がキャンセルされても完了通知は必ず送る。

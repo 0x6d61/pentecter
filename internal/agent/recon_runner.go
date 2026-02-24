@@ -76,6 +76,7 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *AttackDat
 		MaxTurns:   50,
 		AttackDataTree:  rr.tree,
 		MemDir:     rr.memDir,
+		AgentKind:  AgentKindWebRecon,
 		Metadata: TaskMetadata{
 			Port:    port.Port,
 			Service: port.Service,
@@ -83,6 +84,7 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *AttackDat
 		},
 	})
 	if err != nil {
+		rr.tree.RollbackPortRecon(port)
 		rr.emitLog(fmt.Sprintf("[RECON] SubAgent spawn error for :%d: %v", port.Port, err))
 	}
 }

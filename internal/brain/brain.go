@@ -59,6 +59,9 @@ type Config struct {
 	// IsSubAgent が true の場合、SubAgent 用のシステムプロンプトを使用する。
 	// SubAgent は spawn_task / wait / check_task / kill_task を使わない。
 	IsSubAgent bool
+	// IsReconAgent が true の場合、ReconAgent 用のシステムプロンプトを使用する。
+	// ReconAgent は nmap + HackTricks 知識ベース調査を自律的に行う。
+	IsReconAgent bool
 }
 
 // Input は Brain に渡す思考コンテキスト。

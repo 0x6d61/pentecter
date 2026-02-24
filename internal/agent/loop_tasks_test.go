@@ -501,6 +501,56 @@ func TestBuildTaskResult_WebReconUpdatesAttackDataTree(t *testing.T) {
 	}
 }
 
+// TestDrainCompletedTasks_ReconFailed_NoChecklist tests that failed recon tasks
+// do NOT trigger checklist generation.
+func TestDrainCompletedTasks_ReconFailed_NoChecklist(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "checking", Action: schema.ActionThink},
+		},
+	}
+	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	// Set up AttackDataTree with a non-HTTP port that would get a checklist
+	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH")
+	loop.WithAttackData(tree)
+
+	// Inject a FAILED recon task
+	task := agent.NewSubTask("task-recon-fail", agent.TaskKindSmart, "recon failed")
+	task.Metadata = agent.TaskMetadata{
+		Phase: "recon",
+	}
+	task.Status = agent.TaskStatusFailed
+	task.Complete()
+	taskMgr.InjectTask("task-recon-fail", task)
+	taskMgr.InjectDone("task-recon-fail")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+	deadline := time.After(8 * time.Second)
+
+	gotChecklistLog := false
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "checklists generated") {
+				gotChecklistLog = true
+			}
+			if e.Type == agent.EventComplete {
+				if gotChecklistLog {
+					t.Error("checklist generation should NOT happen for failed recon tasks")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
 // TestDrainCompletedTasks_RespawnLimit verifies that after MaxRespawns, no more
 // re-spawns happen and remaining tasks are skipped.
 func TestDrainCompletedTasks_RespawnLimit(t *testing.T) {

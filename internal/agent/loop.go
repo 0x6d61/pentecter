@@ -78,6 +78,9 @@ type Loop struct {
 
 	// Recon 完了イベントの重複 emit 防止
 	reconCompleteEmitted bool
+
+	// ReconAgent 自動 spawn 済みフラグ
+	reconSpawned bool
 }
 
 // NewLoop は Loop を構築する。
@@ -176,6 +179,37 @@ func (l *Loop) Run(ctx context.Context) {
 			MemDir:     memDir,
 		})
 		l.target.SetAttackData(l.attackData)
+	}
+
+	// ReconAgent 自動 spawn: nmap + HackTricks 調査を自律実行
+	if l.taskMgr != nil && l.taskMgr.CanSpawnRecon() && l.attackData != nil && !l.reconSpawned {
+		memDir := ""
+		if l.memoryStore != nil {
+			memDir = l.memoryStore.BaseDir()
+		}
+		taskID, err := SpawnReconAgent(ctx, SpawnReconAgentConfig{
+			TaskMgr:        l.taskMgr,
+			KnowledgeStore: l.knowledgeStore,
+			AttackData:     l.attackData,
+			ReconRunner:    l.reconRunner,
+			TargetHost:     l.target.Host,
+			TargetID:       l.target.ID,
+			MemDir:         memDir,
+		})
+		if err != nil {
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("ReconAgent spawn failed: %v", err)})
+		} else {
+			l.reconSpawned = true
+			l.emit(Event{
+				Type:      EventSubTaskStart,
+				TaskID:    taskID,
+				Message:   fmt.Sprintf("Reconnaissance on %s", l.target.Host),
+				AgentKind: AgentKindRecon,
+			})
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("ReconAgent spawned: %s (nmap + HackTricks research)", taskID)})
+		}
 	}
 
 	for {

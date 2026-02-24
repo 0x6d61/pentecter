@@ -21,7 +21,7 @@ func TestTaskManager_SpawnTask_Smart_Basic(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -67,7 +67,7 @@ func TestTaskManager_WaitTask(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -105,7 +105,7 @@ func TestTaskManager_GetTask(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -150,7 +150,7 @@ func TestTaskManager_KillTask(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -193,7 +193,7 @@ func TestTaskManager_ActiveTasks(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -254,7 +254,7 @@ func TestTaskManager_WaitAny_MultipleCompleted(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -309,7 +309,7 @@ func TestTaskManager_SpawnTask_Smart(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -361,7 +361,7 @@ func TestTaskManager_DrainCompleted(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -406,7 +406,7 @@ func TestTaskManager_DrainCompleted_Empty(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, nil, nil)
 
 	completed := tm.DrainCompleted()
 	if completed != nil {
@@ -425,7 +425,7 @@ func TestTaskManager_SpawnTask_DoneCh_AfterCancel(t *testing.T) {
 
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
-	tm := agent.NewTaskManager(runner, nil, events, mb)
+	tm := agent.NewTaskManager(runner, nil, events, mb, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -465,12 +465,12 @@ func TestTaskManager_SpawnTask_Smart_NoBrain(t *testing.T) {
 	events := make(chan agent.Event, 64)
 
 	// subBrain を nil にして作成
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
+	id, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
 		Kind:       agent.TaskKindSmart,
 		Goal:       "should fail",
 		TargetHost: "10.0.0.5",
@@ -478,8 +478,72 @@ func TestTaskManager_SpawnTask_Smart_NoBrain(t *testing.T) {
 	if err == nil {
 		t.Fatal("SpawnTask (smart) should return error when subBrain is nil")
 	}
-	if !strings.Contains(err.Error(), "sub-brain") {
-		t.Errorf("Error should mention sub-brain, got: %q", err.Error())
+	if !strings.Contains(err.Error(), "brain is not configured") {
+		t.Errorf("Error should mention brain not configured, got: %q", err.Error())
+	}
+	// Brain nil の場合、タスク ID は空文字列であること
+	if id != "" {
+		t.Errorf("SpawnTask should return empty ID when brain is nil, got: %q", id)
+	}
+	// マップにタスクが登録されていないこと（リソースリーク防止）
+	allTasks := tm.AllTasks(0)
+	if len(allTasks) != 0 {
+		t.Errorf("No tasks should be registered in the map when brain is nil, got %d", len(allTasks))
+	}
+}
+
+func TestSpawnTask_NoBrain_NoMapEntry(t *testing.T) {
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+
+	// subBrain と reconBrain の両方を nil にして作成
+	tm := agent.NewTaskManager(runner, nil, events, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 複数回 SpawnTask を呼んでも、失敗タスクがマップに蓄積しないこと
+	for i := 0; i < 10; i++ {
+		id, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
+			Kind:       agent.TaskKindSmart,
+			Goal:       "should fail",
+			TargetHost: "10.0.0.5",
+			TargetID:   1,
+		})
+		if err == nil {
+			t.Fatalf("Iteration %d: SpawnTask should return error", i)
+		}
+		if id != "" {
+			t.Fatalf("Iteration %d: SpawnTask should return empty ID, got: %q", i, id)
+		}
+	}
+
+	// 10 回失敗しても、マップにタスクが 0 であること
+	allTasks := tm.AllTasks(1)
+	if len(allTasks) != 0 {
+		t.Errorf("AllTasks should return 0 after repeated failures, got %d", len(allTasks))
+	}
+
+	// ReconAgent も同様にテスト
+	for i := 0; i < 5; i++ {
+		id, err := tm.SpawnTask(ctx, agent.SpawnTaskRequest{
+			Kind:         agent.TaskKindSmart,
+			Goal:         "recon should fail",
+			TargetHost:   "10.0.0.5",
+			TargetID:     2,
+			IsReconAgent: true,
+		})
+		if err == nil {
+			t.Fatalf("Recon iteration %d: SpawnTask should return error", i)
+		}
+		if id != "" {
+			t.Fatalf("Recon iteration %d: SpawnTask should return empty ID, got: %q", i, id)
+		}
+	}
+
+	allReconTasks := tm.AllTasks(2)
+	if len(allReconTasks) != 0 {
+		t.Errorf("AllTasks should return 0 after repeated recon failures, got %d", len(allReconTasks))
 	}
 }
 
@@ -490,7 +554,7 @@ func TestTaskManager_ActiveTasks_Empty(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, nil, nil)
 
 	active := tm.ActiveTasks(1)
 	if len(active) != 0 {
@@ -503,7 +567,7 @@ func TestTaskManager_ActiveTasks_FiltersByTarget(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, nil, nil)
 
 	// Target 1 の pending タスク
 	task1 := agent.NewSubTask("task-inject-1", agent.TaskKindSmart, "scan ports")
@@ -574,7 +638,7 @@ func TestTaskManager_DoneCh(t *testing.T) {
 	runner := newSmartTestRunner()
 	events := make(chan agent.Event, 64)
 
-	tm := agent.NewTaskManager(runner, nil, events, nil)
+	tm := agent.NewTaskManager(runner, nil, events, nil, nil)
 
 	ch := tm.DoneCh()
 	if ch == nil {
@@ -602,13 +666,13 @@ func TestTaskManager_CanSpawnSmart(t *testing.T) {
 	}
 
 	// TaskManager with nil subBrain
-	tm2 := agent.NewTaskManager(nil, nil, make(chan agent.Event, 1), nil)
+	tm2 := agent.NewTaskManager(nil, nil, make(chan agent.Event, 1), nil, nil)
 	if tm2.CanSpawnSmart() {
 		t.Error("TaskManager with nil subBrain should return false")
 	}
 
 	// TaskManager with subBrain
-	tm3 := agent.NewTaskManager(nil, nil, make(chan agent.Event, 1), &mockBrain{})
+	tm3 := agent.NewTaskManager(nil, nil, make(chan agent.Event, 1), &mockBrain{}, nil)
 	if !tm3.CanSpawnSmart() {
 		t.Error("TaskManager with subBrain should return true")
 	}

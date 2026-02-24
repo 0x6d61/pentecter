@@ -24,7 +24,7 @@ type CommandRunner struct {
 	registry      *Registry
 	blacklist     *Blacklist
 	store         *LogStore
-	autoApprove   bool // グローバル自動承認（true: 未登録ツールも自動実行）
+	autoApprove   bool         // グローバル自動承認（true: 未登録ツールも自動実行）
 	itMu          sync.RWMutex // internalTools の並行アクセス保護
 	internalTools map[string]InternalTool
 }
@@ -80,6 +80,15 @@ func (r *CommandRunner) Run(ctx context.Context, command string) (needsProposal 
 	// 実行
 	l, res := r.execute(ctx, command, binary, args, def, useDocker)
 	return false, l, res, nil
+}
+
+// CheckBlacklist はコマンドがブラックリストに一致するかチェックする。
+// 一致する場合はエラーを返す。SubAgent 等の自動実行経路で使用する。
+func (r *CommandRunner) CheckBlacklist(command string) error {
+	if r.blacklist.Match(command) {
+		return fmt.Errorf("blacklist: command blocked — %q", command)
+	}
+	return nil
 }
 
 // ForceRun はユーザーが承認した後に強制実行する（proposal フロー用）。
@@ -174,13 +183,13 @@ func (r *CommandRunner) execute(
 			cmd = buildDockerCmd(ctx, def.Docker, binary, args)
 		} else {
 			// sh -c でシェル経由実行（パイプ・リダイレクト・変数展開を有効化）
-			shPath, err := resolveBinary("sh")
+			shellPath, shellArgs, err := resolveShellCommand(originalCommand)
 			if err != nil {
 				resultCh <- &ToolResult{ID: id, ToolName: binary, StartedAt: startedAt,
 					FinishedAt: time.Now(), Err: fmt.Errorf("shell not found: %w", err)}
 				return
 			}
-			cmd = exec.CommandContext(ctx, shPath, "-c", originalCommand) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- originalCommand はブラックリスト検証済み
+			cmd = exec.CommandContext(ctx, shellPath, shellArgs...) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- originalCommand はブラックリスト検証済み
 		}
 
 		cmd.Stdin = nil // stdin 奪取防止: 子プロセスが親の stdin を読めないようにする
@@ -328,6 +337,24 @@ func (r *CommandRunner) executeInternal(
 	}()
 
 	return linesCh, resultCh
+}
+
+// resolveShellCommand は利用可能なシェルを検出し、実行引数を返す。
+// 優先順: sh -> bash -> pwsh -> powershell
+func resolveShellCommand(command string) (string, []string, error) {
+	if shPath, err := resolveBinary("sh"); err == nil {
+		return shPath, []string{"-c", command}, nil
+	}
+	if bashPath, err := resolveBinary("bash"); err == nil {
+		return bashPath, []string{"-lc", command}, nil
+	}
+	if pwshPath, err := resolveBinary("pwsh"); err == nil {
+		return pwshPath, []string{"-NoProfile", "-NonInteractive", "-Command", command}, nil
+	}
+	if psPath, err := resolveBinary("powershell"); err == nil {
+		return psPath, []string{"-NoProfile", "-NonInteractive", "-Command", command}, nil
+	}
+	return "", nil, errors.New(`neither "sh", "bash", "pwsh", nor "powershell" is available in PATH`)
 }
 
 // buildDockerCmd は docker run コマンドを構築する。

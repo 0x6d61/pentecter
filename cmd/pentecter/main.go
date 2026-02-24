@@ -155,6 +155,21 @@ Chat commands:
 		subBrain = nil
 	}
 
+	// --- ReconBrain for ReconAgent ---
+	// SubBrain と同じプロバイダー/モデルを使用し、IsReconAgent = true で構築。
+	// ReconAgent は nmap + HackTricks 知識ベース調査を自律的に行う。
+	var reconBrain brain.Brain
+	if subBrain != nil {
+		reconBrainCfg := subBrainCfg // copy sub config
+		reconBrainCfg.IsSubAgent = false
+		reconBrainCfg.IsReconAgent = true
+		reconBrain, err = brain.New(reconBrainCfg)
+		if err != nil {
+			log.Printf("ReconBrain creation failed (ReconAgent disabled): %v", err)
+			reconBrain = nil
+		}
+	}
+
 	// --- App Config (knowledge + blacklist) ---
 	appCfg, cfgErr := config.Load("config/config.yaml")
 	if cfgErr != nil {
@@ -212,6 +227,7 @@ Chat commands:
 		Events:           events,
 		Brain:            br,
 		SubBrain:         subBrain,
+		ReconBrain:       reconBrain,
 		Runner:           runner,
 		SkillsReg:        skillsReg,
 		MemoryStore:      memoryStore,

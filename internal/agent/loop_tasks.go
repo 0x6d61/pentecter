@@ -46,6 +46,17 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 				}
 			}
 		}
+
+		// ReconAgent 完了時: 非 HTTP ポートのチェックリスト生成
+		if task.Metadata.Phase == "recon" && l.attackData != nil && task.Status == TaskStatusCompleted {
+			hasKnowledge := l.knowledgeStore != nil
+			for _, port := range l.attackData.NonHTTPPortsWithoutChecklist() {
+				cl := GenerateChecklist(port.Service, port.Banner, hasKnowledge)
+				l.attackData.SetChecklist(port.Port, cl)
+			}
+			l.emit(Event{Type: EventLog, Source: SourceSystem,
+				Message: fmt.Sprintf("ReconAgent %s completed — checklists generated for non-HTTP ports", task.ID)})
+		}
 	}
 	return sb.String()
 }

@@ -21,6 +21,7 @@ type TeamConfig struct {
 	MemoryStore *memory.Store      // nil = メモリ無効
 	MCPManager  *mcp.MCPManager    // nil = MCP 無効
 	SubBrain       brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
+	ReconBrain     brain.Brain        // ReconAgent 用 Brain（nil = ReconAgent 不可）
 	KnowledgeStore *knowledge.Store   // ナレッジベース検索（nil = 無効）
 	MaxParallelRecon int // AttackDataTree の並列数（0 = デフォルト 2）
 }
@@ -38,6 +39,7 @@ type Team struct {
 	mcpMgr      *mcp.MCPManager
 	taskMgr        *TaskManager     // 全 Loop で共有
 	subBrain         brain.Brain
+	reconBrain       brain.Brain
 	knowledgeStore   *knowledge.Store
 	maxParallelRecon int
 	nextID           int
@@ -55,11 +57,12 @@ func NewTeam(cfg TeamConfig) *Team {
 		memoryStore: cfg.MemoryStore,
 		mcpMgr:      cfg.MCPManager,
 		subBrain:         cfg.SubBrain,
+		reconBrain:       cfg.ReconBrain,
 		knowledgeStore:   cfg.KnowledgeStore,
 		maxParallelRecon: cfg.MaxParallelRecon,
 	}
 	// TaskManager を作成（全 Loop で共有）
-	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain)
+	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain, cfg.ReconBrain)
 	return t
 }
 

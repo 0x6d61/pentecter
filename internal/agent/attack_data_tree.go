@@ -1337,6 +1337,24 @@ func (t *AttackDataTree) StartPortRecon(port *AttackDataNode) bool {
 	return true
 }
 
+// RollbackPortRecon は StartPortRecon の逆操作を行う。
+// SpawnTask が失敗した場合に active カウントを戻し、タスクを Pending に戻す。
+func (t *AttackDataTree) RollbackPortRecon(port *AttackDataNode) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
+		if port.getAttackDataStatus(tt) == StatusInProgress {
+			port.setAttackDataStatus(tt, StatusPending)
+		}
+	}
+	if port.SpawnCount > 0 {
+		port.SpawnCount--
+	}
+	if t.active > 0 {
+		t.active--
+	}
+}
+
 // Active は現在の active カウントを返す（TUI 表示用）。
 func (t *AttackDataTree) Active() int {
 	t.mu.RLock()

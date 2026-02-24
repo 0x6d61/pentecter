@@ -861,7 +861,7 @@ func newTestLoopWithTaskManager(target *agent.Target, mb *mockBrain) (*agent.Loo
 			{Thought: "done", Action: schema.ActionComplete},
 		},
 	}
-	taskMgr := agent.NewTaskManager(runner, nil, events, subBrain)
+	taskMgr := agent.NewTaskManager(runner, nil, events, subBrain, nil)
 
 	loop := agent.NewLoop(target, mb, runner, events, approve, userMsg).
 		WithTaskManager(taskMgr)

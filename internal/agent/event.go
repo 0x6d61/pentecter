@@ -43,6 +43,17 @@ const (
 	EventReconComplete EventType = "recon_complete"
 )
 
+// AgentKind はエージェントの種別を識別する。
+type AgentKind = string
+
+const (
+	AgentKindMain      AgentKind = "main"
+	AgentKindRecon     AgentKind = "recon"
+	AgentKindWebRecon  AgentKind = "web_recon"
+	AgentKindWebAttack AgentKind = "web_attack"
+	AgentKindAttack    AgentKind = "attack"
+)
+
 // Event は Agent ループから TUI へ送るメッセージ。
 type Event struct {
 	TargetID   int       // どのターゲットのイベントか（TUI のルーティング用）
@@ -54,6 +65,7 @@ type Event struct {
 	TurnNumber int       // EventTurnStart 時のターン番号
 	ExitCode   int       // EventCmdDone 時の exit code
 	TaskID     string    // SubTask 関連イベント時の taskID
+	AgentKind  AgentKind // イベント発生元のエージェント種別
 
 	// Block-based rendering fields
 	Duration   time.Duration // EventThinkDone, EventCmdDone のかかった時間
