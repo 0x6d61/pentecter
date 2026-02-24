@@ -89,6 +89,8 @@ type AttackDataNode struct {
 	Service string // "http", "ssh", "smb"
 	Banner  string // "Apache 2.4.49", "OpenSSH 8.2"
 	Path    string // "/", "/api", "/api/v1" (endpoint nodes only)
+	// HTTPStatus is the observed status code for endpoint nodes (0 = unknown/not recorded).
+	HTTPStatus int
 
 	// タスクステータス（ノードタイプによって使うフィールドが異なる）
 	EndpointEnum AttackDataStatus
@@ -358,6 +360,7 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 		Host:         host,
 		Port:         port,
 		Path:         newPath,
+		HTTPStatus:   httpStatus,
 		EndpointEnum: endpointEnum,
 		ParamFuzz:    paramFuzz,
 		ValueFuzz:    valueFuzz,
@@ -740,7 +743,7 @@ func (t *AttackDataTree) SnapshotWebSurface(port int) ([]EndpointInfo, []ParamIn
 					Host:   node.Host,
 					Port:   node.Port,
 					Path:   node.Path,
-					Status: 0,
+					Status: node.HTTPStatus,
 				})
 			}
 
@@ -1535,6 +1538,7 @@ type AttackDataNodeDTO struct {
 	Service      string              `json:"service"`
 	Banner       string              `json:"banner"`
 	Path         string              `json:"path"`
+	HTTPStatus   int                 `json:"http_status,omitempty"`
 	EndpointEnum AttackDataStatus    `json:"endpoint_enum"`
 	ParamFuzz    AttackDataStatus    `json:"param_fuzz"`
 	ValueFuzz    AttackDataStatus    `json:"value_fuzz"`
@@ -1600,6 +1604,7 @@ func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
 		Service:      node.Service,
 		Banner:       node.Banner,
 		Path:         node.Path,
+		HTTPStatus:   node.HTTPStatus,
 		EndpointEnum: node.EndpointEnum,
 		ParamFuzz:    node.ParamFuzz,
 		ValueFuzz:    node.ValueFuzz,
@@ -1625,6 +1630,7 @@ func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
 		Service:      dto.Service,
 		Banner:       dto.Banner,
 		Path:         dto.Path,
+		HTTPStatus:   dto.HTTPStatus,
 		EndpointEnum: resetInProgress(dto.EndpointEnum),
 		ParamFuzz:    resetInProgress(dto.ParamFuzz),
 		ValueFuzz:    resetInProgress(dto.ValueFuzz),

@@ -344,6 +344,65 @@ func TestMainCoordinator_WebReconComplete_Duplicate_DoesNotDoubleSpawnWebAttack(
 	}
 }
 
+func TestMainCoordinator_WebAttackComplete_AllowsRespawn(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 16)
+	tm := newCoordinatorTaskManager(uiEvents)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    tm,
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	first := WebReconComplete{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindWebRecon),
+		Port:            80,
+	}
+	domainEvents <- first
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.webAttackByPort[80]
+		return ok
+	}, "expected first web attack spawn")
+	firstTaskID := coordinator.webAttackByPort[80]
+
+	domainEvents <- AgentComplete{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindWebAttack),
+		AgentID:         firstTaskID,
+		AgentType:       string(AgentKindWebAttack),
+		Summary:         "done",
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.webAttackByPort[80]
+		return !ok
+	}, "expected web attack slot cleared")
+
+	domainEvents <- first
+	waitUntil(t, 3*time.Second, func() bool {
+		id, ok := coordinator.webAttackByPort[80]
+		return ok && id != "" && id != firstTaskID
+	}, "expected web attack respawn after completion")
+}
+
 func TestBuildWebAttackPrompt(t *testing.T) {
 	prompt := buildWebAttackPrompt(
 		"10.0.0.1",

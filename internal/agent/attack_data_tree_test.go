@@ -2786,6 +2786,9 @@ func TestSnapshotWebSurface(t *testing.T) {
 	for _, ep := range endpoints {
 		if ep.Path == "/login" {
 			foundEndpoint = true
+			if ep.Status != 200 {
+				t.Fatalf("endpoint status = %d, want 200", ep.Status)
+			}
 			break
 		}
 	}

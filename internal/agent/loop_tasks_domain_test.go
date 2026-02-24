@@ -164,6 +164,35 @@ func TestDrainCompletedTasks_ReconTask_DoesNotEmitReconCompleteDomainEvent(t *te
 	}
 }
 
+func TestDrainCompletedTasks_WebAttackTask_EmitsAgentComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	loop, tm, domainEvents := newDomainDrainTestLoop(tree)
+	task := NewSubTask("task-web-attack-1", TaskKindSmart, "web attack 80")
+	task.Metadata = TaskMetadata{Phase: "web_attack", Port: 80, Service: "http"}
+	task.Status = TaskStatusCompleted
+	task.Complete()
+	tm.InjectTask(task.ID, task)
+	tm.InjectDone(task.ID)
+
+	_ = loop.drainCompletedTasks(context.Background())
+	events := drainDomainEvents(domainEvents)
+
+	for _, evt := range events {
+		if ac, ok := evt.(AgentComplete); ok {
+			if ac.AgentType != string(AgentKindWebAttack) {
+				t.Fatalf("AgentType = %q, want %q", ac.AgentType, AgentKindWebAttack)
+			}
+			if ac.AgentID != "task-web-attack-1" {
+				t.Fatalf("AgentID = %q, want task-web-attack-1", ac.AgentID)
+			}
+			return
+		}
+	}
+	t.Fatal("expected AgentComplete event for web_attack task")
+}
+
 func newDomainDrainTestLoop(tree *AttackDataTree) (*Loop, *TaskManager, chan DomainEvent) {
 	uiEvents := make(chan Event, 32)
 	tm := NewTaskManager(nil, nil, uiEvents, nil, nil)

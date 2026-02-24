@@ -360,7 +360,7 @@ func (l *Loop) Run(ctx context.Context) {
 			l.target.SetStatusSafe(StatusPwned)
 			l.emit(Event{Type: EventComplete, Message: "Assessment complete — waiting for further instructions (report, cleanup, etc.)"})
 			// PWNED 後もユーザー指示を待ち続ける
-			userMsg = l.waitForUserMsg(ctx)
+			userMsg = l.waitForUserMsgAfterComplete(ctx)
 			if userMsg == "" {
 				return // context cancelled
 			}
@@ -589,6 +589,36 @@ func (l *Loop) waitForUserMsg(ctx context.Context) string {
 		return msg
 	case <-ctx.Done():
 		return ""
+	}
+}
+
+// waitForUserMsgAfterComplete は ActionComplete 後の待機中も完了 SubTask を継続的に処理する。
+func (l *Loop) waitForUserMsgAfterComplete(ctx context.Context) string {
+	if l.taskMgr == nil {
+		return l.waitForUserMsg(ctx)
+	}
+
+	if completedOutput := l.drainCompletedTasks(ctx); completedOutput != "" {
+		l.lastToolOutput = completedOutput
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case msg := <-l.userMsg:
+			if l.skillsReg != nil {
+				return l.skillsReg.Expand(msg)
+			}
+			return msg
+		case <-ticker.C:
+			if completedOutput := l.drainCompletedTasks(ctx); completedOutput != "" {
+				l.lastToolOutput = completedOutput
+			}
+		case <-ctx.Done():
+			return ""
+		}
 	}
 }
 

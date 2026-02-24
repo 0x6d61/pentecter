@@ -65,6 +65,14 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 				})
 			}
 		}
+		if task.Metadata.Phase == "web_attack" && task.Metadata.Port > 0 {
+			l.emitDomainEvent(ctx, AgentComplete{
+				DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindWebAttack),
+				AgentID:         task.ID,
+				AgentType:       string(AgentKindWebAttack),
+				Summary:         task.Summary(),
+			})
+		}
 
 		// ReconAgent 完了時: 非 HTTP ポートのチェックリスト生成
 		if task.Metadata.Phase == "recon" && l.attackData != nil && task.Status == TaskStatusCompleted {

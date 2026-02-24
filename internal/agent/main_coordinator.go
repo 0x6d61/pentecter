@@ -76,6 +76,10 @@ func (mc *MainCoordinator) handle(ctx context.Context, evt DomainEvent) {
 	case AgentComplete:
 		if e.AgentType == string(AgentKindWebRecon) {
 			mc.retryDeferredHTTP(ctx)
+		} else if e.AgentType == string(AgentKindWebAttack) {
+			if port, cleared := mc.clearWebAttackByTaskID(e.AgentID); cleared {
+				mc.emitLog(fmt.Sprintf("MainCoordinator cleared WebAttackAgent slot for %s:%d (%s)", mc.targetHost, port, e.AgentID))
+			}
 		}
 	case ReconComplete:
 		mc.emitLog(fmt.Sprintf("MainCoordinator received ReconComplete %s (ports=%d)", e.Host, len(e.Ports)))
@@ -211,6 +215,16 @@ func (mc *MainCoordinator) emitSubTaskStart(taskID, message string, kind AgentKi
 	}:
 	default:
 	}
+}
+
+func (mc *MainCoordinator) clearWebAttackByTaskID(taskID string) (port int, cleared bool) {
+	for p, id := range mc.webAttackByPort {
+		if id == taskID {
+			delete(mc.webAttackByPort, p)
+			return p, true
+		}
+	}
+	return 0, false
 }
 
 func buildWebAttackPrompt(host string, port int, endpoints []EndpointInfo, params []ParamInfo, vhosts []string) string {
