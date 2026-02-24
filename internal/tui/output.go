@@ -24,6 +24,7 @@ func (a *App) runSpinner(ctx context.Context) {
 				continue
 			}
 			a.spinnerIdx.Add(1)
+			a.refreshPrompt()
 		}
 	}
 }

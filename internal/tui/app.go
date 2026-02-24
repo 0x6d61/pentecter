@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ergochat/readline"
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 
@@ -45,6 +45,7 @@ type App struct {
 	writeMu       sync.Mutex
 	spinnerActive atomic.Bool
 	spinnerIdx    atomic.Int32
+	rl            *readline.Instance
 
 	// Input state
 	inputMode   InputMode
@@ -134,7 +135,47 @@ func (a *App) Run(ctx context.Context) error {
 		return nil
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+	cfg := &readline.Config{
+		Prompt:          a.buildPrompt(),
+		HistoryLimit:    500,
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+		Listener: func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
+			switch key {
+			case 15: // Ctrl+O
+				a.toggleFold()
+				return line, pos, true
+			case 20: // Ctrl+T
+				a.toggleThinkingFold()
+				return line, pos, true
+			case readline.CharCtrlJ:
+				// Multiline fallback: Ctrl+J inserts newline.
+				next := make([]rune, 0, len(line)+1)
+				next = append(next, line[:pos]...)
+				next = append(next, '\n')
+				next = append(next, line[pos:]...)
+				return next, pos + 1, true
+			default:
+				return nil, 0, false
+			}
+		},
+	}
+
+	rl, err := readline.NewEx(cfg)
+	if err != nil {
+		return fmt.Errorf("readline init: %w", err)
+	}
+	defer rl.Close()
+
+	a.mu.Lock()
+	a.rl = rl
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.rl = nil
+		a.mu.Unlock()
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -142,41 +183,46 @@ func (a *App) Run(ctx context.Context) error {
 		default:
 		}
 
-		a.writePrompt(a.buildPrompt())
-
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("read input: %w", err)
-		}
-		line = strings.TrimRight(line, "\r\n")
-
-		if line == string(rune(0x0f)) { // Ctrl+O
-			a.toggleFold()
-			if err == io.EOF {
-				return nil
+		line, err := rl.Readline()
+		switch err {
+		case nil:
+			// continue
+		case readline.ErrInterrupt:
+			if strings.TrimSpace(line) == "" {
+				a.mu.Lock()
+				if a.inputMode == ModeConfirmQuit {
+					a.mu.Unlock()
+					return nil
+				}
+				a.inputMode = ModeConfirmQuit
+				a.mu.Unlock()
+				a.refreshPrompt()
 			}
 			continue
-		}
-		if line == string(rune(0x14)) { // Ctrl+T
-			a.toggleThinkingFold()
-			if err == io.EOF {
-				return nil
-			}
-			continue
+		case io.EOF:
+			return nil
+		default:
+			return fmt.Errorf("readline read: %w", err)
 		}
 
-		if quit := a.handleInputLine(line); quit {
+		if quit := a.handleInputLine(strings.TrimRight(line, "\r\n")); quit {
 			return nil
 		}
-		if err == io.EOF {
-			return nil
-		}
+		a.refreshPrompt()
 	}
 }
 
 func (a *App) writePrompt(prompt string) {
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+	a.mu.Lock()
+	rl := a.rl
+	a.mu.Unlock()
+	if rl != nil {
+		rl.SetPrompt(prompt)
+		rl.Refresh()
+		return
+	}
 	_, _ = fmt.Fprint(a.writer(), prompt)
 }
 
@@ -259,9 +305,11 @@ func (a *App) clearAndReprint() {
 	// This avoids duplicated logs when transient lines (e.g. spinner frames)
 	// change text in the middle of already printed output.
 	if len(lines) <= len(prev) {
+		a.refreshPrompt()
 		return
 	}
 	a.writeLines(lines[len(prev):])
+	a.refreshPrompt()
 }
 
 func (a *App) proposalLinesLocked(p *agent.Proposal) []string {
@@ -339,7 +387,18 @@ func (a *App) invalidateOutputCacheLocked() {
 func (a *App) buildPrompt() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.buildPromptLocked()
+}
+
+func (a *App) buildPromptLocked() string {
 	hint := a.modeHintLocked()
+	if hint == "" && a.spinnerActive.Load() {
+		frame := a.currentSpinnerFrameLocked()
+		if frame == "" {
+			frame = "⠋"
+		}
+		return frame + " Thinking... > "
+	}
 	if hint == "" {
 		return "> "
 	}
@@ -369,8 +428,22 @@ func (a *App) buildStatusTextLocked() string {
 	return "  " + strings.Join(parts, "  ")
 }
 
-// refreshPrompt is a compatibility no-op for line-mode input.
-func (a *App) refreshPrompt() {}
+// refreshPrompt refreshes readline prompt when interactive mode is active.
+func (a *App) refreshPrompt() {
+	a.mu.Lock()
+	rl := a.rl
+	prompt := a.buildPromptLocked()
+	a.mu.Unlock()
+
+	if rl == nil || a.testWriter != nil {
+		return
+	}
+
+	a.writeMu.Lock()
+	rl.SetPrompt(prompt)
+	rl.Refresh()
+	a.writeMu.Unlock()
+}
 
 // clearPromptEcho is a compatibility no-op for line-mode input.
 func (a *App) clearPromptEcho(string) {}
@@ -411,6 +484,12 @@ func (a *App) getTerminalSize() (int, int) {
 func (a *App) writer() io.Writer {
 	if a.testWriter != nil {
 		return a.testWriter
+	}
+	a.mu.Lock()
+	rl := a.rl
+	a.mu.Unlock()
+	if rl != nil {
+		return rl.Stdout()
 	}
 	return os.Stdout
 }
