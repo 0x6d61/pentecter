@@ -228,3 +228,56 @@ func TestSpawnReconAgent_NilTaskMgr(t *testing.T) {
 		t.Errorf("Error should mention TaskManager, got: %q", err.Error())
 	}
 }
+
+func TestSpawnReconAgent_EmitsPortDiscoveredDomainEvent(t *testing.T) {
+	reconBrain := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "scan", Action: schema.ActionRun, Command: "nmap -sV -sC -p- 10.0.0.5"},
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 64)
+	tm := agent.NewTaskManager(runner, nil, events, nil, reconBrain)
+	tree := agent.NewAttackDataTree("10.0.0.5", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	domainEvents := make(chan agent.DomainEvent, 8)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	taskID, err := agent.SpawnReconAgent(ctx, agent.SpawnReconAgentConfig{
+		TaskMgr:      tm,
+		AttackData:   tree,
+		DomainEvents: domainEvents,
+		TargetHost:   "10.0.0.5",
+		TargetID:     1,
+	})
+	if err != nil {
+		t.Fatalf("SpawnReconAgent should succeed: %v", err)
+	}
+
+	task, ok := tm.GetTask(taskID)
+	if !ok {
+		t.Fatal("task should exist")
+	}
+	select {
+	case <-task.Done():
+	case <-time.After(8 * time.Second):
+		t.Fatal("timeout waiting for task completion")
+	}
+
+	select {
+	case evt := <-domainEvents:
+		pd, ok := evt.(agent.PortDiscovered)
+		if !ok {
+			t.Fatalf("expected PortDiscovered event, got %T", evt)
+		}
+		if pd.Port != 80 || pd.Service != "http" {
+			t.Fatalf("unexpected PortDiscovered payload: %+v", pd)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected PortDiscovered domain event")
+	}
+}

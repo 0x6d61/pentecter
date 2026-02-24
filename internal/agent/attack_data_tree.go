@@ -183,11 +183,18 @@ type AttackDataTree struct {
 	mu          sync.RWMutex
 	Host        string
 	MaxParallel int
-	MaxDepth    int          // 0 = unlimited (constructor defaults to 3)
+	MaxDepth    int // 0 = unlimited (constructor defaults to 3)
 	active      int
-	locked      bool         // RECON フェーズがロック中か（true = pending タスク完了まで遷移不可）
+	locked      bool              // RECON フェーズがロック中か（true = pending タスク完了まで遷移不可）
 	Ports       []*AttackDataNode // ポートレベルノード
 	Vhosts      []*AttackDataNode // vhost ルートノード
+}
+
+// PortSnapshot はドメインイベント向けのポート情報スナップショット。
+type PortSnapshot struct {
+	Port    int
+	Service string
+	Banner  string
 }
 
 // NewAttackDataTree は新しい AttackDataTree を作成する。maxParallel が 0 ならデフォルト 2、maxDepth が 0 ならデフォルト 3。
@@ -556,20 +563,28 @@ func (t *AttackDataTree) FinishTask(task *ReconTask) {
 func (t *AttackDataTree) CompleteAllPortTasks(port int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	found := false
+	portFound := false
 	for _, node := range t.Ports {
 		if node.Port == port {
-			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
-				if node.getAttackDataStatus(tt) == StatusInProgress {
-					node.setAttackDataStatus(tt, StatusComplete)
-					found = true
-				}
-			}
+			portFound = true
+			completeInProgressRecursive(node)
+			break
 		}
 	}
 	// SubAgent 単位で -1（タスクタイプ数ではない）
-	if found && t.active > 0 {
+	if portFound && t.active > 0 {
 		t.active--
+	}
+}
+
+func completeInProgressRecursive(node *AttackDataNode) {
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
+		if node.getAttackDataStatus(tt) == StatusInProgress {
+			node.setAttackDataStatus(tt, StatusComplete)
+		}
+	}
+	for _, child := range node.Children {
+		completeInProgressRecursive(child)
 	}
 }
 
@@ -595,6 +610,20 @@ func nodeHasPendingChildren(node *AttackDataNode) bool {
 			}
 		}
 		if nodeHasPendingChildren(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeHasPending(node *AttackDataNode) bool {
+	for _, st := range []AttackDataStatus{node.EndpointEnum, node.ParamFuzz, node.ValueFuzz, node.Profiling, node.VhostDiscov} {
+		if st == StatusPending {
+			return true
+		}
+	}
+	for _, child := range node.Children {
+		if nodeHasPending(child) {
 			return true
 		}
 	}
@@ -636,6 +665,37 @@ func (t *AttackDataTree) FindPortNode(port int) *AttackDataNode {
 		}
 	}
 	return nil
+}
+
+// PortHasPending は指定ポート配下に Pending タスクがあるかを返す。
+func (t *AttackDataTree) PortHasPending(port int) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			return nodeHasPending(node)
+		}
+	}
+	return false
+}
+
+// SnapshotPorts は現在のポート一覧を値コピーで返す。
+func (t *AttackDataTree) SnapshotPorts() []PortSnapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if len(t.Ports) == 0 {
+		return nil
+	}
+	out := make([]PortSnapshot, 0, len(t.Ports))
+	for _, node := range t.Ports {
+		out = append(out, PortSnapshot{
+			Port:    node.Port,
+			Service: node.Service,
+			Banner:  node.Banner,
+		})
+	}
+	return out
 }
 
 // findNode はホスト/ポート/パスでノードを検索する。
@@ -943,7 +1003,6 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 	}
 }
 
-
 // SetChecklist sets the recon checklist for a non-HTTP port.
 // No-op if the port already has a checklist or if the port is HTTP.
 func (t *AttackDataTree) SetChecklist(port int, checklist *ServiceChecklist) {
@@ -988,7 +1047,6 @@ func (t *AttackDataTree) allChecklistsDoneLocked() bool {
 	}
 	return true
 }
-
 
 const maxPendingPaths = 10
 
@@ -1126,8 +1184,6 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		}
 	}
 
-
-
 	// [RECON PROGRESS]: HTTP タスクタイプ別進捗
 	prog := t.computeReconProgressLocked()
 	httpTotal := prog.EndpointEnum.Total + prog.ParamFuzz.Total + prog.ValueFuzz.Total + prog.Profiling.Total + prog.VhostDiscov.Total
@@ -1181,7 +1237,6 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 	if hasChecklist {
 		sb.WriteString("\n")
 	}
-
 
 	// [FINDINGS]: 全ノードの findings を表示
 	hasFindings := false
@@ -1324,6 +1379,14 @@ func (t *AttackDataTree) NonHTTPPortsWithoutChecklist() []*AttackDataNode {
 func (t *AttackDataTree) StartPortRecon(port *AttackDataNode) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if port == nil {
+		return false
+	}
+	// ポート配下に Pending が無い場合は spawn しない。
+	// 子ノードのみ Pending のケース（再spawn）も許可する。
+	if !nodeHasPending(port) {
+		return false
+	}
 	if t.active >= t.MaxParallel {
 		return false
 	}

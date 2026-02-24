@@ -43,18 +43,20 @@ type commandEntry struct {
 //	action == think   → 思考をTUIログに表示してループ継続
 //	action == complete → ループ終了
 type Loop struct {
-	target       *Target
-	br           brain.Brain
-	brMu         sync.Mutex // Brain の差し替え保護（/model コマンド対応）
-	runner       *tools.CommandRunner
-	skillsReg    *skills.Registry  // スキルテンプレート（nil = 無効）
-	memoryStore  *memory.Store     // 発見物の永続化（nil = 無効）
-	mcpMgr       *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
-	taskMgr      *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
+	target         *Target
+	br             brain.Brain
+	brMu           sync.Mutex // Brain の差し替え保護（/model コマンド対応）
+	runner         *tools.CommandRunner
+	skillsReg      *skills.Registry // スキルテンプレート（nil = 無効）
+	memoryStore    *memory.Store    // 発見物の永続化（nil = 無効）
+	mcpMgr         *mcp.MCPManager  // MCP サーバーマネージャー（nil = MCP 無効）
+	taskMgr        *TaskManager     // SubTask マネージャー（nil = SubTask 無効）
 	knowledgeStore *knowledge.Store // ナレッジベース検索（nil = 無効）
-	attackData   *AttackDataTree    // 構造的偵察制御（nil = 無効）
-	reconRunner  *ReconRunner // リアクティブ偵察オーケストレーター（nil = 無効）
-	backupMgr    *BackupManager   // AttackDataTree バックアップ（nil = 無効）
+	attackData     *AttackDataTree  // 構造的偵察制御（nil = 無効）
+	reconRunner    *ReconRunner     // リアクティブ偵察オーケストレーター（nil = 無効）
+	backupMgr      *BackupManager   // AttackDataTree バックアップ（nil = 無効）
+	domainEvents   chan DomainEvent // MainCoordinator 用ドメインイベント（blocking send）
+	coordinator    *MainCoordinator // MainCoordinator（nil = 無効）
 
 	// TUI との通信チャネル
 	events  chan<- Event  // Agent → TUI
@@ -119,6 +121,7 @@ func (l *Loop) WithMCP(mgr *mcp.MCPManager) *Loop {
 	l.mcpMgr = mgr
 	return l
 }
+
 // WithTaskManager は TaskManager をセットする（メソッドチェーン用）。
 func (l *Loop) WithTaskManager(tm *TaskManager) *Loop {
 	l.taskMgr = tm
@@ -181,6 +184,9 @@ func (l *Loop) Run(ctx context.Context) {
 		l.target.SetAttackData(l.attackData)
 	}
 
+	// ドメインイベントバス + MainCoordinator 初期化（段階的移行: 既存 Loop と並行稼働）
+	l.ensureDomainCoordinator(ctx)
+
 	// ReconAgent 自動 spawn: nmap + HackTricks 調査を自律実行
 	if l.taskMgr != nil && l.taskMgr.CanSpawnRecon() && l.attackData != nil && !l.reconSpawned {
 		memDir := ""
@@ -192,6 +198,7 @@ func (l *Loop) Run(ctx context.Context) {
 			KnowledgeStore: l.knowledgeStore,
 			AttackData:     l.attackData,
 			ReconRunner:    l.reconRunner,
+			DomainEvents:   l.domainEvents,
 			TargetHost:     l.target.Host,
 			TargetID:       l.target.ID,
 			MemDir:         memDir,
@@ -623,6 +630,7 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 
 	// AttackDataTree: ツール出力をパースして偵察状態を更新
 	if l.attackData != nil && l.lastCommand != "" {
+		beforePorts := l.snapshotPorts()
 		parseOutput := l.lastToolOutput
 
 		// nmap -oX <file> / -oN <file> / -oA <base> の場合、ファイルから読み取る
@@ -636,6 +644,7 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 			l.emit(Event{Type: EventLog, Source: SourceSystem,
 				Message: fmt.Sprintf("AttackDataTree parse warning: %v", err)})
 		}
+		l.emitPortDiscoveredDelta(ctx, beforePorts, AgentKindMain)
 
 		// 新規非 HTTP ポートにチェックリストを自動生成
 		hasKnowledge := l.knowledgeStore != nil
@@ -644,9 +653,10 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 			l.attackData.SetChecklist(port.Port, cl)
 		}
 
-		// リアクティブ spawn: Pending な HTTP ポートがあれば SubAgent を自動起動
-		// 新規追加ポートと非HTTP→HTTP 更新ポートの両方を検出する
-		if l.reconRunner != nil {
+		// リアクティブ spawn (フォールバック): DomainEvent バス未使用時のみ
+		// Pending な HTTP ポートがあれば SubAgent を自動起動する。
+		// DomainEvent バス有効時は MainCoordinator が PortDiscovered を処理する。
+		if l.reconRunner != nil && l.domainEvents == nil {
 			for _, port := range l.attackData.PendingHTTPPorts() {
 				l.reconRunner.SpawnWebReconForPort(ctx, port)
 			}
@@ -668,6 +678,11 @@ func (l *Loop) evaluateResult(ctx context.Context) {
 			l.reconCompleteEmitted = true
 			l.emit(Event{Type: EventReconComplete,
 				Message: "Recon phase complete — all tasks finished"})
+			l.emitDomainEvent(ctx, ReconComplete{
+				DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindMain),
+				Ports:           l.buildReconPortInfos(),
+				Summary:         "Recon phase complete — all tasks finished",
+			})
 		}
 	}
 }

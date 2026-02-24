@@ -47,6 +47,21 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 			}
 		}
 
+		if task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
+			l.emitDomainEvent(ctx, AgentComplete{
+				DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindWebRecon),
+				AgentID:         task.ID,
+				AgentType:       string(AgentKindWebRecon),
+				Summary:         task.Summary(),
+			})
+			if task.Status == TaskStatusCompleted && l.attackData != nil && !l.attackData.PortHasPending(task.Metadata.Port) {
+				l.emitDomainEvent(ctx, WebReconComplete{
+					DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindWebRecon),
+					Port:            task.Metadata.Port,
+				})
+			}
+		}
+
 		// ReconAgent 完了時: 非 HTTP ポートのチェックリスト生成
 		if task.Metadata.Phase == "recon" && l.attackData != nil && task.Status == TaskStatusCompleted {
 			hasKnowledge := l.knowledgeStore != nil
@@ -71,13 +86,13 @@ func (l *Loop) handleSpawnTask(ctx context.Context, action *schema.Action) {
 	}
 
 	req := SpawnTaskRequest{
-		Kind:       TaskKindSmart,
-		Goal:       action.TaskGoal,
-		Command:    action.Command,
-		TargetHost: l.target.Host,
-		TargetID:   l.target.ID,
-		MaxTurns:   action.TaskMaxTurns,
-		AttackDataTree:  l.attackData,
+		Kind:           TaskKindSmart,
+		Goal:           action.TaskGoal,
+		Command:        action.Command,
+		TargetHost:     l.target.Host,
+		TargetID:       l.target.ID,
+		MaxTurns:       action.TaskMaxTurns,
+		AttackDataTree: l.attackData,
 		Metadata: TaskMetadata{
 			Port:    action.TaskPort,
 			Service: action.TaskService,

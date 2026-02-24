@@ -1,0 +1,258 @@
+package agent
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/tools"
+	"github.com/0x6d61/pentecter/pkg/schema"
+)
+
+type coordinatorBrain struct{}
+
+func (coordinatorBrain) Think(context.Context, brain.Input) (*schema.Action, error) {
+	// Subtask を継続させるだけでよい（spawn 成功確認が目的）。
+	return &schema.Action{Action: schema.ActionThink}, nil
+}
+
+func (coordinatorBrain) ExtractTarget(_ context.Context, userText string) (string, string, error) {
+	return "", userText, nil
+}
+
+func (coordinatorBrain) Provider() string { return "coordinator-test" }
+
+func newCoordinatorTaskManager(events chan<- Event) *TaskManager {
+	falseVal := false
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ToolDef{
+		Name:             "echo",
+		ProposalRequired: &falseVal,
+		Output: tools.OutputConfig{
+			Strategy:  tools.StrategyHeadTail,
+			HeadLines: 3,
+			TailLines: 3,
+		},
+	})
+	runner := tools.NewCommandRunner(reg, tools.NewBlacklist(nil), tools.NewLogStore())
+	return NewTaskManager(runner, nil, events, coordinatorBrain{}, nil)
+}
+
+func TestMainCoordinator_PortDiscoveredHTTP_RoutesToWebRecon(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 64)
+	domainEvents := make(chan DomainEvent, 8)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    newCoordinatorTaskManager(uiEvents),
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	domainEvents <- PortDiscovered{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            80,
+		Service:         "http",
+		Banner:          "Apache",
+	}
+
+	foundRouteLog := false
+	deadline := time.After(3 * time.Second)
+	for !foundRouteLog {
+		select {
+		case e := <-uiEvents:
+			if strings.Contains(e.Message, "routed HTTP port") {
+				foundRouteLog = true
+			}
+		case <-deadline:
+			t.Fatal("expected coordinator routing log")
+		}
+	}
+	if tree.Active() != 1 {
+		t.Fatalf("Active = %d, want 1 after routing", tree.Active())
+	}
+}
+
+func TestMainCoordinator_PortDiscoveredNonHTTP_NoRouting(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH")
+
+	uiEvents := make(chan Event, 32)
+	domainEvents := make(chan DomainEvent, 4)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    newCoordinatorTaskManager(uiEvents),
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	domainEvents <- PortDiscovered{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            22,
+		Service:         "ssh",
+		Banner:          "OpenSSH",
+	}
+
+	select {
+	case e := <-uiEvents:
+		t.Fatalf("unexpected coordinator event for non-HTTP service: %s", e.Message)
+	case <-time.After(300 * time.Millisecond):
+		// expected
+	}
+	if tree.Active() != 0 {
+		t.Fatalf("Active = %d, want 0 for non-HTTP", tree.Active())
+	}
+}
+
+func TestMainCoordinator_DuplicatePortDiscovered_DoesNotDoubleSpawn(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 64)
+	domainEvents := make(chan DomainEvent, 8)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    newCoordinatorTaskManager(uiEvents),
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	evt := PortDiscovered{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            80,
+		Service:         "http",
+		Banner:          "Apache",
+	}
+	domainEvents <- evt
+	domainEvents <- evt
+
+	waitUntil(t, 3*time.Second, func() bool { return tree.Active() == 1 }, "expected first spawn to start")
+	// 重複イベントでも active は 1 のまま（重複 spawn しない）
+	time.Sleep(100 * time.Millisecond)
+	if tree.Active() != 1 {
+		t.Fatalf("Active = %d, want 1 (duplicate event should not double-spawn)", tree.Active())
+	}
+}
+
+func TestMainCoordinator_DeferredPort_RetriedOnWebReconAgentComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 1, 0) // max_parallel=1
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(8080, "http", "Jetty")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 16)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    newCoordinatorTaskManager(uiEvents),
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	// 1つ目は開始される（active=1）
+	domainEvents <- PortDiscovered{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            80,
+		Service:         "http",
+		Banner:          "Apache",
+	}
+	waitUntil(t, 3*time.Second, func() bool { return tree.Active() == 1 }, "first HTTP recon should start")
+
+	// 2つ目は max_parallel で defer される
+	domainEvents <- PortDiscovered{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            8080,
+		Service:         "http",
+		Banner:          "Jetty",
+	}
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.deferredHTTP[8080]
+		return ok
+	}, "port 8080 should be deferred")
+
+	// スロットを開ける
+	tree.CompleteAllPortTasks(80)
+	if tree.Active() != 0 {
+		t.Fatalf("Active = %d, want 0 after completion", tree.Active())
+	}
+
+	// WebReconAgent 完了イベントで deferred retry
+	domainEvents <- AgentComplete{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindWebRecon),
+		AgentID:         "task-80",
+		AgentType:       string(AgentKindWebRecon),
+		Summary:         "done",
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, stillDeferred := coordinator.deferredHTTP[8080]
+		return tree.Active() == 1 && !stillDeferred
+	}, "deferred port should be retried when slot is free")
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}

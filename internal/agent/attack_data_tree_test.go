@@ -308,11 +308,11 @@ func TestRenderTree(t *testing.T) {
 		"80/http Apache 2.4.49",
 		"/api",
 		"/login",
-		"endpoint_enum: complete",  // /login の endpoint_enum
-		"param_fuzz: complete",     // /login の param_fuzz
-		"profiling: complete",      // /login の profiling
-		"endpoint_enum: pending",   // /api の endpoint_enum
-		"param_fuzz: pending",      // /api の param_fuzz
+		"endpoint_enum: complete", // /login の endpoint_enum
+		"param_fuzz: complete",    // /login の param_fuzz
+		"profiling: complete",     // /login の profiling
+		"endpoint_enum: pending",  // /api の endpoint_enum
+		"param_fuzz: pending",     // /api の param_fuzz
 		"Progress:",
 	}
 	for _, check := range checks {
@@ -2384,7 +2384,7 @@ func TestPortHasPendingChildren_DeepNested(t *testing.T) {
 	// 深くネストされた子ノードに Pending タスクがある場合 true を返す
 	tree := NewAttackDataTree("10.0.0.1", 2, 3)
 	tree.AddPort(80, "http", "Apache")
-	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 301)   // redirect: EndpointEnum only
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 301)        // redirect: EndpointEnum only
 	tree.AddEndpointWithStatus("10.0.0.1", 80, "/api", "/api/v1", 200) // full recon
 
 	// ポートレベル + 第1階層を Complete にする
@@ -2703,5 +2703,72 @@ func TestRollbackPortRecon_OnlyInProgressReverted(t *testing.T) {
 	// VhostDiscov was InProgress, should be back to Pending
 	if port.getAttackDataStatus(TaskVhostDiscov) != StatusPending {
 		t.Errorf("VhostDiscov should be Pending after rollback, got %d", port.getAttackDataStatus(TaskVhostDiscov))
+	}
+}
+
+func TestStartPortRecon_NoPending_Fails(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// Pending を全て消す
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+
+	if tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should fail when no pending tasks exist")
+	}
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0", tree.Active())
+	}
+	if port.SpawnCount != 0 {
+		t.Errorf("SpawnCount = %d, want 0", port.SpawnCount)
+	}
+}
+
+func TestStartPortRecon_PendingChildren_Succeeds(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/api", 200)
+	port := tree.Ports[0]
+
+	// ポート自身の Pending は消すが、子ノードは Pending を残す
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+
+	if !tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should succeed when pending children exist")
+	}
+	if tree.Active() != 1 {
+		t.Errorf("Active = %d, want 1", tree.Active())
+	}
+	if port.SpawnCount != 1 {
+		t.Errorf("SpawnCount = %d, want 1", port.SpawnCount)
+	}
+}
+
+func TestCompleteAllPortTasks_DecrementsActive_WithPendingChildrenOnly(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/api", 200)
+	port := tree.Ports[0]
+
+	// 子ノードのみ Pending の状態にして spawn する
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+	if !tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should succeed")
+	}
+	if tree.Active() != 1 {
+		t.Fatalf("Active = %d, want 1", tree.Active())
+	}
+
+	tree.CompleteAllPortTasks(80)
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0 after completion", tree.Active())
+	}
+	// 子ノードの Pending は残る（次回リスポーン対象）
+	if !tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren should remain true")
 	}
 }

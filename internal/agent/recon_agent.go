@@ -16,6 +16,7 @@ type SpawnReconAgentConfig struct {
 	KnowledgeStore *knowledge.Store
 	AttackData     *AttackDataTree
 	ReconRunner    *ReconRunner
+	DomainEvents   chan<- DomainEvent
 	TargetHost     string
 	TargetID       int
 	MemDir         string
@@ -33,12 +34,28 @@ func SpawnReconAgent(ctx context.Context, cfg SpawnReconAgentConfig) (string, er
 
 	prompt := buildReconPrompt(cfg.TargetHost)
 
-	// reconSpawnCb: HTTP ポート検出時に WebRecon を自動 spawn
+	// reconSpawnCb: HTTP ポート検出時にドメインイベントを emit（または直接 WebRecon spawn）
 	var reconSpawnCb func(context.Context)
-	if cfg.ReconRunner != nil && cfg.AttackData != nil {
+	if cfg.AttackData != nil {
 		reconSpawnCb = func(spawnCtx context.Context) {
 			for _, port := range cfg.AttackData.PendingHTTPPorts() {
-				cfg.ReconRunner.SpawnWebReconForPort(spawnCtx, port)
+				if cfg.DomainEvents != nil {
+					evt := PortDiscovered{
+						DomainEventBase: NewDomainEventBase(cfg.TargetID, cfg.TargetHost, AgentKindRecon),
+						Port:            port.Port,
+						Service:         port.Service,
+						Banner:          port.Banner,
+					}
+					select {
+					case cfg.DomainEvents <- evt:
+					case <-spawnCtx.Done():
+						return
+					}
+					continue
+				}
+				if cfg.ReconRunner != nil {
+					cfg.ReconRunner.SpawnWebReconForPort(spawnCtx, port)
+				}
 			}
 		}
 	}
