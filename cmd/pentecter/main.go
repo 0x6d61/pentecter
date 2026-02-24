@@ -103,6 +103,7 @@ Chat commands:
 		os.Exit(1)
 	}
 	brainCfg.ToolNames = toolNames
+	brainCfg.IsEventDrivenMain = true
 
 	// MCP ツールスキーマを Brain に注入
 	if mcpMgr != nil {
@@ -132,6 +133,7 @@ Chat commands:
 	// （spawn_task 等の無限ループを防ぐ）。
 	subBrainCfg := brainCfg // copy main config
 	subBrainCfg.IsSubAgent = true
+	subBrainCfg.IsEventDrivenMain = false
 	if model := os.Getenv("SUBAGENT_MODEL"); model != "" {
 		subBrainCfg.Model = model
 	}
@@ -146,6 +148,7 @@ Chat commands:
 			subBrainCfg = reloaded
 			subBrainCfg.ToolNames = toolNames
 			subBrainCfg.IsSubAgent = true
+			subBrainCfg.IsEventDrivenMain = false
 		}
 	}
 	subBrain, err := brain.New(subBrainCfg)
@@ -153,6 +156,22 @@ Chat commands:
 		// SubBrain creation failed — continue without SmartSubAgent
 		log.Printf("SubBrain creation failed (SmartSubAgent disabled): %v", err)
 		subBrain = nil
+	}
+
+	// --- ReconBrain for ReconAgent ---
+	// SubBrain と同じプロバイダー/モデルを使用し、IsReconAgent = true で構築。
+	// ReconAgent は nmap + HackTricks 知識ベース調査を自律的に行う。
+	var reconBrain brain.Brain
+	if subBrain != nil {
+		reconBrainCfg := subBrainCfg // copy sub config
+		reconBrainCfg.IsSubAgent = false
+		reconBrainCfg.IsReconAgent = true
+		reconBrainCfg.IsEventDrivenMain = false
+		reconBrain, err = brain.New(reconBrainCfg)
+		if err != nil {
+			log.Printf("ReconBrain creation failed (ReconAgent disabled): %v", err)
+			reconBrain = nil
+		}
 	}
 
 	// --- App Config (knowledge + blacklist) ---
@@ -212,12 +231,14 @@ Chat commands:
 		Events:           events,
 		Brain:            br,
 		SubBrain:         subBrain,
+		ReconBrain:       reconBrain,
 		Runner:           runner,
 		SkillsReg:        skillsReg,
 		MemoryStore:      memoryStore,
 		MCPManager:       mcpMgr,
 		KnowledgeStore:   knowledgeStore,
 		MaxParallelRecon: appCfg.Recon.MaxParallel,
+		EventDrivenMain:  true,
 	})
 
 	// CLI ターゲットを事前追加
@@ -247,6 +268,7 @@ Chat commands:
 			return nil, err
 		}
 		cfg.ToolNames = toolNames
+		cfg.IsEventDrivenMain = true
 		return brain.New(cfg)
 	}
 

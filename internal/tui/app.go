@@ -1505,13 +1505,16 @@ func (a *App) printWelcome() {
 	if len(a.targets) == 0 {
 		lines = append(lines,
 			"Enter an IP address or domain to begin (e.g. 10.0.0.5, example.com)",
-			"Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status",
 		)
 	} else {
 		for _, t := range a.targets {
 			lines = append(lines, fmt.Sprintf("Target: %s [%s]", t.Host, t.GetStatus()))
 		}
 	}
+	lines = append(lines,
+		"Input: ip/domain or /target HOST",
+		"Commands: /targets, /model, /approve, /attackdata, /skip-recon, /fold, /status",
+	)
 	if a.CurrentModel != "" {
 		lines = append(lines, fmt.Sprintf("Model: %s/%s", a.CurrentProvider, a.CurrentModel))
 	}

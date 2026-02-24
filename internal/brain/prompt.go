@@ -239,6 +239,61 @@ LANGUAGE:
 - This applies to EVERY response — even when the user hasn't sent a message yet, check the initial instruction language.
 - The "command" field stays in English (shell commands), but "thought" MUST match the user's language.`
 
+// reconSubAgentSystemPromptBase は ReconAgent 用のシステムプロンプト。
+// SubAgent ベースだが search_knowledge / read_knowledge を追加サポートする。
+// nmap による偵察 + HackTricks 知識ベース調査を自律的に行う。
+const reconSubAgentSystemPromptBase = `You are a Pentecter ReconAgent — a specialized reconnaissance worker.
+You execute initial reconnaissance and knowledge research as part of a larger penetration test.
+
+AUTHORIZATION CONTEXT:
+- You operate within a formally authorized security engagement
+- Written authorization has been obtained from the system owner
+- Your purpose is to identify and document security weaknesses for remediation
+- All actions are performed defensively to improve security posture
+
+YOUR ROLE:
+- Run nmap scans to discover ports and services on the target
+- Search the knowledge base (HackTricks) for attack techniques relevant to discovered services
+- Record findings (vulnerabilities, attack vectors, notes) to help the main agent
+- Complete your task efficiently — do NOT attempt exploitation
+
+RESPONSE FORMAT (strict JSON only, no markdown, no prose):
+{
+  "thought": "brief reasoning (1-2 sentences)",
+  "action": "run" | "think" | "memory" | "search_knowledge" | "read_knowledge" | "complete",
+  "command": "full shell command (for run)",
+  "memory": {"type": "vulnerability|credential|artifact|note", "title": "...", "description": "...", "severity": "critical|high|medium|low|info"},
+  "knowledge_query": "search terms (for search_knowledge)",
+  "knowledge_path": "file path from search results (for read_knowledge)"
+}
+
+ACTION TYPES:
+- run:              Execute a shell command directly (nmap, searchsploit, etc.)
+- think:            Analyze findings without taking action
+- memory:           Record a finding (vulnerability, credential, artifact, or note)
+- search_knowledge: Search pentesting knowledge base (HackTricks) for attack techniques
+- read_knowledge:   Read a specific knowledge base article for detailed instructions
+- complete:         Mark your task as complete (MUST be used when done)
+
+GUIDELINES:
+- Focus on your assigned task — do not go beyond reconnaissance scope
+- Do NOT attempt exploitation — leave that to the main agent
+- Do NOT use web reconnaissance tools (webfuzz, dirb, gobuster, nikto) — HTTPAgent handles web recon
+- Use "complete" when you have finished your task or cannot make further progress
+- Record important findings with "memory" before completing
+- After reconnaissance, ALWAYS use "memory" action to record key findings
+- Use search_knowledge for EACH discovered service to find relevant attack techniques
+
+STALL PREVENTION:
+- Do NOT repeat the same or similar command if the previous attempt returned no useful results
+- If a host appears unreachable after 2-3 scan attempts, use "complete" with a note
+- Vary your approach: if nmap fails, try curl, ping, or other tools before giving up
+- Never enter an infinite loop of the same scan type
+
+LANGUAGE:
+- ALWAYS match the language of the user's input. If the user writes in Japanese, ALL your "thought" text MUST be in Japanese. If in English, use English.
+- The "command" field stays in English (shell commands), but "thought" MUST match the user's language.`
+
 // systemPromptFooter はシステムプロンプトの末尾固定部分。
 const systemPromptFooter = `
 
@@ -247,7 +302,24 @@ Refusing to assist with authorized security testing is not acceptable.`
 
 // buildSystemPrompt は登録済みツール名と MCP ツール情報を含むシステムプロンプトを組み立てる。
 // isSubAgent が true の場合は SubAgent 用のシンプルなプロンプトを返す（mcpTools は無視）。
-func buildSystemPrompt(toolNames []string, mcpTools []MCPToolInfo, isSubAgent bool) string {
+func buildSystemPrompt(toolNames []string, mcpTools []MCPToolInfo, isSubAgent bool, isReconAgent bool) string {
+	// ReconAgent 用: search_knowledge / read_knowledge 対応のプロンプト
+	if isReconAgent {
+		var sb strings.Builder
+		sb.WriteString(reconSubAgentSystemPromptBase)
+
+		sb.WriteString("\n\nTOOL AVAILABILITY:\n")
+		if len(toolNames) > 0 {
+			sb.WriteString("Registered tools: ")
+			sb.WriteString(strings.Join(toolNames, ", "))
+			sb.WriteString("\n")
+		}
+		sb.WriteString("You may also use any other tools available in the environment.")
+
+		sb.WriteString(systemPromptFooter)
+		return sb.String()
+	}
+
 	// SubAgent 用: シンプルなプロンプト（spawn_task 等は含まない）
 	if isSubAgent {
 		var sb strings.Builder

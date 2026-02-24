@@ -501,9 +501,59 @@ func TestBuildTaskResult_WebReconUpdatesAttackDataTree(t *testing.T) {
 	}
 }
 
-// TestDrainCompletedTasks_RespawnLimit verifies that after MaxRespawns, no more
-// re-spawns happen and remaining tasks are skipped.
-func TestDrainCompletedTasks_RespawnLimit(t *testing.T) {
+// TestDrainCompletedTasks_ReconFailed_NoChecklist tests that failed recon tasks
+// do NOT trigger checklist generation.
+func TestDrainCompletedTasks_ReconFailed_NoChecklist(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "checking", Action: schema.ActionThink},
+		},
+	}
+	loop, taskMgr, events, _, _ := newTestLoopWithTaskManager(target, mb)
+
+	// Set up AttackDataTree with a non-HTTP port that would get a checklist
+	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH")
+	loop.WithAttackData(tree)
+
+	// Inject a FAILED recon task
+	task := agent.NewSubTask("task-recon-fail", agent.TaskKindSmart, "recon failed")
+	task.Metadata = agent.TaskMetadata{
+		Phase: "recon",
+	}
+	task.Status = agent.TaskStatusFailed
+	task.Complete()
+	taskMgr.InjectTask("task-recon-fail", task)
+	taskMgr.InjectDone("task-recon-fail")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go loop.Run(ctx)
+	deadline := time.After(8 * time.Second)
+
+	gotChecklistLog := false
+	for {
+		select {
+		case e := <-events:
+			if e.Type == agent.EventLog && strings.Contains(e.Message, "checklists generated") {
+				gotChecklistLog = true
+			}
+			if e.Type == agent.EventComplete {
+				if gotChecklistLog {
+					t.Error("checklist generation should NOT happen for failed recon tasks")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventComplete")
+		}
+	}
+}
+
+// TestDrainCompletedTasks_RespawnNoCap verifies that web recon is re-spawned
+// even when SpawnCount is already high (legacy max-respawn cap removed).
+func TestDrainCompletedTasks_RespawnNoCap(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 
 	// mockBrain: first Think() sees drained output, second completes
@@ -521,19 +571,19 @@ func TestDrainCompletedTasks_RespawnLimit(t *testing.T) {
 	tree.AddEndpoint("10.0.0.1", 80, "/", "/api")
 	loop.WithAttackData(tree)
 
-	// Simulate that SpawnCount has already reached MaxRespawns
+	// Simulate high historical SpawnCount (legacy cap scenario).
 	portNode := tree.FindPortNode(80)
-	// Spawn + Complete 3 times to reach MaxRespawns
-	for i := 0; i < agent.MaxRespawns; i++ {
+	// Spawn + complete several times to increment SpawnCount.
+	for i := 0; i < 5; i++ {
 		tree.StartPortRecon(portNode)
 		tree.CompleteAllPortTasks(80)
 		// Re-set pending to simulate new tasks discovered
 		portNode.SetAttackDataStatusForTest(agent.TaskEndpointEnum, agent.StatusPending)
 	}
 
-	// Verify SpawnCount == MaxRespawns
-	if portNode.SpawnCount != agent.MaxRespawns {
-		t.Fatalf("SpawnCount = %d, want %d", portNode.SpawnCount, agent.MaxRespawns)
+	// Sanity check: SpawnCount is high.
+	if portNode.SpawnCount < 5 {
+		t.Fatalf("SpawnCount = %d, want >= 5", portNode.SpawnCount)
 	}
 
 	// Add pending tasks on child node
@@ -557,25 +607,27 @@ func TestDrainCompletedTasks_RespawnLimit(t *testing.T) {
 	go loop.Run(ctx)
 
 	// Wait for completion and check events
-	gotSkipLog := false
+	gotMaxRespawnLog := false
+	gotRespawnLog := false
 	deadline := time.After(8 * time.Second)
 	for {
 		select {
 		case e := <-events:
 			if e.Type == agent.EventLog &&
 				strings.Contains(e.Message, "Max re-spawns reached for port 80") {
-				gotSkipLog = true
+				gotMaxRespawnLog = true
+			}
+			if e.Type == agent.EventLog &&
+				strings.Contains(e.Message, "[RECON] Spawning web recon SubAgent for 10.0.0.1:80") {
+				gotRespawnLog = true
 			}
 			if e.Type == agent.EventComplete {
-				if !gotSkipLog {
-					t.Error("expected '[RECON] Max re-spawns reached for port 80' log event")
+				if gotMaxRespawnLog {
+					t.Error("did not expect legacy max re-spawn log after respawn-cap removal")
 				}
-
-				// All pending tasks should now be skipped
-				if tree.PortHasPendingChildren(80) {
-					t.Error("PortHasPendingChildren should be false after max respawns (all skipped)")
+				if !gotRespawnLog {
+					t.Error("expected respawn log for port 80 even with high SpawnCount")
 				}
-
 				return
 			}
 		case <-deadline:

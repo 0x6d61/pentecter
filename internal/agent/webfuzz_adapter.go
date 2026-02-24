@@ -35,3 +35,22 @@ func (a *webfuzzTreeAdapter) CompleteTask(host string, port int, path string, ta
 	}
 	a.tree.CompleteTask(host, port, path, rt)
 }
+
+func (a *webfuzzTreeAdapter) AddParameter(host string, port int, path string, name string, paramType string) {
+	if a.tree == nil {
+		return
+	}
+	a.tree.AddParameter(host, port, path, name, paramType)
+}
+
+func (a *webfuzzTreeAdapter) AddFinding(host string, port int, path string, param, category, evidence, severity string) {
+	if a.tree == nil {
+		return
+	}
+	a.tree.AddFinding(host, port, path, Finding{
+		Param:    param,
+		Category: category,
+		Evidence: evidence,
+		Severity: severity,
+	})
+}

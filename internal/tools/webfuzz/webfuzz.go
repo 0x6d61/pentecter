@@ -27,23 +27,17 @@ type Hit struct {
 // ワードリストの各エントリについて HTTP リクエストを送り、マッチ条件に合致したらヒットとして通知する。
 // hitFn: ヒットごとに呼ばれるコールバック（AttackDataTree 更新用）
 // lineFn: TUI 表示用のサマリー行コールバック（例: "[HIT] /admin [301] [1234B]"）
+//
+// ワードリストはストリーミングで読み込み、1行ずつワーカーに送信する。
+// これにより大きなワードリストでもメモリを大量消費せず、GC pause を抑制する。
 func Run(ctx context.Context, opts Options, hitFn func(Hit), lineFn func(string)) error {
-	// 1. ワードリスト読み込み
-	words, err := loadWordlist(opts.Wordlist)
+	// 1. ワードリストファイルを開く（fail fast: 存在しなければ即エラー）
+	f, err := os.Open(opts.Wordlist)
 	if err != nil {
 		return fmt.Errorf("failed to load wordlist: %w", err)
 	}
 
-	// 2. extensions 展開（dir モードのみ）
-	words = expandExtensions(words, opts.Mode, opts.Extensions)
-
-	total := len(words)
-	if total == 0 {
-		lineFn("[DONE] 0 requests, 0 hits")
-		return nil
-	}
-
-	// 3. HTTP クライアント生成
+	// 2. HTTP クライアント生成
 	client := &http.Client{
 		Timeout: opts.Timeout,
 		Transport: &http.Transport{
@@ -55,15 +49,13 @@ func Run(ctx context.Context, opts Options, hitFn func(Hit), lineFn func(string)
 		},
 	}
 
-	// 4. Worker pool
+	// 3. Worker pool
 	threads := opts.Threads
 	if threads <= 0 {
 		threads = 1
 	}
-	if threads > total {
-		threads = total
-	}
 
+	var sent atomic.Int64
 	var hitCount atomic.Int64
 	var wg sync.WaitGroup
 	ch := make(chan string, threads)
@@ -94,60 +86,56 @@ func Run(ctx context.Context, opts Options, hitFn func(Hit), lineFn func(string)
 		}()
 	}
 
-	// ワードをチャネルに送信
-	for _, word := range words {
-		if ctx.Err() != nil {
-			break
+	// 4. Producer goroutine: ファイルからストリーミング送信
+	// ワードリスト全体を []string に読み込まず、1行ずつワーカーチャネルへ送信する。
+	// これにより大量のヒープ割り当てと GC pressure を回避する。
+	var scanErr error
+	go func() {
+		defer close(ch)
+		defer func() { _ = f.Close() }()
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			// ワード送信（ctx キャンセルで早期終了）
+			if !sendWord(ctx, ch, line, &sent) {
+				return
+			}
+			// dir モード: 拡張子付きバージョンもインライン送信
+			if opts.Mode == "dir" {
+				for _, ext := range opts.Extensions {
+					if !sendWord(ctx, ch, line+ext, &sent) {
+						return
+					}
+				}
+			}
 		}
-		select {
-		case <-ctx.Done():
-		case ch <- word:
-		}
-	}
-	close(ch)
+		scanErr = scanner.Err()
+	}()
+
 	wg.Wait()
 
-	lineFn(fmt.Sprintf("[DONE] %d requests, %d hits", total, hitCount.Load()))
+	// scanErr の読み取りは安全: close(ch) → workers drain → wg.Wait() 完了後
+	if scanErr != nil {
+		return fmt.Errorf("wordlist read error: %w", scanErr)
+	}
+
+	lineFn(fmt.Sprintf("[DONE] %d requests, %d hits", sent.Load(), hitCount.Load()))
 	return nil
 }
 
-// loadWordlist はワードリストファイルを読み込み、空行とコメント行をスキップして返す。
-func loadWordlist(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+// sendWord はワードをチャネルに送信し、カウンターを増やす。
+// ctx がキャンセルされた場合は false を返す。
+func sendWord(ctx context.Context, ch chan<- string, word string, sent *atomic.Int64) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case ch <- word:
+		sent.Add(1)
+		return true
 	}
-	defer func() { _ = f.Close() }()
-
-	var words []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		words = append(words, line)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return words, nil
-}
-
-// expandExtensions は dir モードの場合、各ワードに拡張子付きバージョンを追加する。
-func expandExtensions(words []string, mode string, extensions []string) []string {
-	if mode != "dir" || len(extensions) == 0 {
-		return words
-	}
-
-	expanded := make([]string, 0, len(words)*(1+len(extensions)))
-	for _, w := range words {
-		expanded = append(expanded, w)
-		for _, ext := range extensions {
-			expanded = append(expanded, w+ext)
-		}
-	}
-	return expanded
 }
 
 // fuzzOne は1つのワードに対してリクエストを送り、マッチ判定を行う。

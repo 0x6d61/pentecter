@@ -127,7 +127,11 @@ func (a *App) handleAgentEvent(e agent.Event) {
 		spinnerStateChanged = true
 
 	case agent.EventSubTaskStart:
-		t.AddBlock(agent.NewSubTaskBlock(e.TaskID, e.Message))
+		msg := e.Message
+		if e.AgentKind != "" {
+			msg = agentKindPrefix(e.AgentKind) + " " + msg
+		}
+		t.AddBlock(agent.NewSubTaskBlock(e.TaskID, msg))
 		a.spinnerActive.Store(true)
 		spinnerStateChanged = true
 		displayChanged = true
@@ -204,4 +208,20 @@ func (a *App) hasActiveBlocksLocked() bool {
 		}
 	}
 	return false
+}
+
+// agentKindPrefix は AgentKind に応じた表示プレフィックスを返す。
+func agentKindPrefix(kind string) string {
+	switch kind {
+	case agent.AgentKindRecon:
+		return "[RECON]"
+	case agent.AgentKindWebRecon:
+		return "[WEB-RECON]"
+	case agent.AgentKindWebAttack:
+		return "[WEB-ATTACK]"
+	case agent.AgentKindAttack:
+		return "[ATTACK]"
+	default:
+		return "[" + kind + "]"
+	}
 }

@@ -12,66 +12,67 @@ import (
 	"github.com/0x6d61/pentecter/internal/tools"
 )
 
-// TeamConfig は Team の構築パラメーター。
+// TeamConfig describes dependencies for Team.
 type TeamConfig struct {
-	Events      chan Event
-	Brain       brain.Brain
-	Runner      *tools.CommandRunner
-	SkillsReg   *skills.Registry   // nil = スキル無効
-	MemoryStore *memory.Store      // nil = メモリ無効
-	MCPManager  *mcp.MCPManager    // nil = MCP 無効
-	SubBrain       brain.Brain        // SmartSubAgent 用の小型 Brain（nil = SmartSubAgent 不可）
-	KnowledgeStore *knowledge.Store   // ナレッジベース検索（nil = 無効）
-	MaxParallelRecon int // AttackDataTree の並列数（0 = デフォルト 2）
+	Events           chan Event
+	Brain            brain.Brain
+	Runner           *tools.CommandRunner
+	SkillsReg        *skills.Registry
+	MemoryStore      *memory.Store
+	MCPManager       *mcp.MCPManager
+	SubBrain         brain.Brain
+	ReconBrain       brain.Brain
+	KnowledgeStore   *knowledge.Store
+	MaxParallelRecon int
+
+	// EventDrivenMain enables think-on-event mode for the main loop.
+	EventDrivenMain bool
 }
 
-// Team は複数の Agent Loop を並列実行するオーケストレーター。
-// 各 Loop は独立した goroutine で動き、events チャネルを通じて TUI に通知する。
-// AddTarget で実行中に新ターゲットを動的に追加できる（横展開対応）。
+// Team orchestrates loops for multiple targets.
 type Team struct {
-	loops       []*Loop
-	events      chan Event
-	br          brain.Brain
-	runner      *tools.CommandRunner
-	skillsReg   *skills.Registry
-	memoryStore *memory.Store
-	mcpMgr      *mcp.MCPManager
-	taskMgr        *TaskManager     // 全 Loop で共有
+	loops            []*Loop
+	events           chan Event
+	br               brain.Brain
+	runner           *tools.CommandRunner
+	skillsReg        *skills.Registry
+	memoryStore      *memory.Store
+	mcpMgr           *mcp.MCPManager
+	taskMgr          *TaskManager
 	subBrain         brain.Brain
+	reconBrain       brain.Brain
 	knowledgeStore   *knowledge.Store
 	maxParallelRecon int
+	eventDrivenMain  bool
 	nextID           int
-	ctx         context.Context // Start() で保存
-	mu          sync.Mutex
+	ctx              context.Context
+	mu               sync.Mutex
 }
 
-// NewTeam は TeamConfig から Team を構築する。
+// NewTeam creates a Team.
 func NewTeam(cfg TeamConfig) *Team {
 	t := &Team{
-		events:      cfg.Events,
-		br:          cfg.Brain,
-		runner:      cfg.Runner,
-		skillsReg:   cfg.SkillsReg,
-		memoryStore: cfg.MemoryStore,
-		mcpMgr:      cfg.MCPManager,
+		events:           cfg.Events,
+		br:               cfg.Brain,
+		runner:           cfg.Runner,
+		skillsReg:        cfg.SkillsReg,
+		memoryStore:      cfg.MemoryStore,
+		mcpMgr:           cfg.MCPManager,
 		subBrain:         cfg.SubBrain,
+		reconBrain:       cfg.ReconBrain,
 		knowledgeStore:   cfg.KnowledgeStore,
 		maxParallelRecon: cfg.MaxParallelRecon,
+		eventDrivenMain:  cfg.EventDrivenMain,
 	}
-	// TaskManager を作成（全 Loop で共有）
-	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain)
+	t.taskMgr = NewTaskManager(cfg.Runner, cfg.MCPManager, cfg.Events, cfg.SubBrain, cfg.ReconBrain)
 	return t
 }
 
-// AddTarget は新ターゲットを追加し、Start() 済みなら即座に Loop を起動する。
-// TUI またはイベントハンドラーから呼び出す。
-// 同じホストが既に存在する場合は既存の Target を返し、チャネルは nil を返す。
-// 呼び出し側は nil チャネルで重複を検知できる。
+// AddTarget registers a target and prepares its loop.
 func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// 重複チェック: 同じホストが既に存在する場合は既存の Target を返す
 	for _, loop := range t.loops {
 		if loop.target.Host == host {
 			return loop.target, nil, nil
@@ -83,7 +84,6 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 
 	approveCh := make(chan bool, 1)
 	userMsgCh := make(chan string, 4)
-
 	attackData := NewAttackDataTree(host, t.maxParallelRecon, 0)
 
 	loop := NewLoop(target, t.br, t.runner, t.events, approveCh, userMsgCh).
@@ -92,11 +92,10 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 		WithMCP(t.mcpMgr).
 		WithTaskManager(t.taskMgr).
 		WithKnowledge(t.knowledgeStore).
-		WithAttackData(attackData)
+		WithAttackData(attackData).
+		WithEventDrivenMain(t.eventDrivenMain)
 
 	t.loops = append(t.loops, loop)
-
-	// Start() 済みなら即座に起動
 	if t.ctx != nil {
 		go loop.Run(t.ctx)
 	}
@@ -104,8 +103,7 @@ func (t *Team) AddTarget(host string) (*Target, chan<- bool, chan<- string) {
 	return target, approveCh, userMsgCh
 }
 
-// Start は ctx を保存し、既存の全 Loop を並列起動する。
-// ctx のキャンセルで全 Loop が停止する。
+// Start starts all loops under ctx.
 func (t *Team) Start(ctx context.Context) {
 	t.mu.Lock()
 	t.ctx = ctx
@@ -118,8 +116,7 @@ func (t *Team) Start(ctx context.Context) {
 	}
 }
 
-// SetBrain は Team の Brain を差し替える。
-// 以降の AddTarget で新しい Brain が使われ、既に実行中の Loop にも即時反映される。
+// SetBrain updates main brain for existing loops and future targets.
 func (t *Team) SetBrain(br brain.Brain) {
 	t.mu.Lock()
 	t.br = br
@@ -132,8 +129,7 @@ func (t *Team) SetBrain(br brain.Brain) {
 	}
 }
 
-// Loops は管理している全 Loop のコピーを返す（TUI のターゲットリスト表示用）。
-// 返されるスライスは呼び出し元で安全にイテレートできる。
+// Loops returns a copy of loop slice.
 func (t *Team) Loops() []*Loop {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -142,7 +138,7 @@ func (t *Team) Loops() []*Loop {
 	return cp
 }
 
-// TaskManager は TaskManager を返す（TUI からアクセス用）。
+// TaskManager returns the shared task manager.
 func (t *Team) TaskManager() *TaskManager {
 	return t.taskMgr
 }

@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
-	prompt := buildSystemPrompt([]string{"nmap", "nikto", "curl"}, nil, false)
+	prompt := buildSystemPrompt([]string{"nmap", "nikto", "curl"}, nil, false, false)
 
 	if !strings.Contains(prompt, "Registered tools: nmap, nikto, curl") {
 		t.Error("expected registered tool names in prompt")
@@ -19,7 +19,7 @@ func TestBuildSystemPrompt_WithToolNames(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_Empty(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if strings.Contains(prompt, "Registered tools:") {
 		t.Error("expected no 'Registered tools:' line when tool list is empty")
@@ -57,7 +57,7 @@ func TestBuildPrompt_NoUserMessage_DefaultInstruction(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsUserInteraction(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "USER INTERACTION") {
 		t.Error("system prompt should contain USER INTERACTION section")
@@ -153,7 +153,6 @@ func TestBuildPrompt_NoHistory(t *testing.T) {
 		t.Error("expected Last Assessment Output section")
 	}
 }
-
 
 func TestBuildPrompt_ContainsReconQueue(t *testing.T) {
 	input := Input{
@@ -401,7 +400,7 @@ func TestBuildPrompt_MemoryBeforeLastCommand(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "ALWAYS use \"memory\" action to record key findings") {
 		t.Error("system prompt should contain memory recording enforcement")
@@ -415,7 +414,7 @@ func TestSystemPrompt_ContainsMemoryEnforcement(t *testing.T) {
 }
 
 func TestSystemPrompt_ContainsLanguageAdaptation(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "LANGUAGE:") {
 		t.Error("system prompt should contain LANGUAGE section")
@@ -491,7 +490,7 @@ func TestBuildSystemPrompt_WithMCPTools(t *testing.T) {
 			Description: "Click an element",
 		},
 	}
-	prompt := buildSystemPrompt(nil, mcpTools, false)
+	prompt := buildSystemPrompt(nil, mcpTools, false, false)
 
 	if !strings.Contains(prompt, "MCP TOOLS:") {
 		t.Error("expected MCP TOOLS section in prompt")
@@ -511,7 +510,7 @@ func TestBuildSystemPrompt_WithMCPTools(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_NoMCPTools(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 	if strings.Contains(prompt, "MCP TOOLS:") {
 		t.Error("should not contain MCP TOOLS section when no MCP tools")
 	}
@@ -539,7 +538,7 @@ func TestParseActionJSON_CallMCP(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsAssessmentWorkflow(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "ASSESSMENT WORKFLOW") {
 		t.Error("expected ASSESSMENT WORKFLOW section in main agent prompt")
@@ -553,7 +552,7 @@ func TestBuildSystemPrompt_ContainsAssessmentWorkflow(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_WorkflowRequiresSearchKnowledge(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	// ANALYZE ステップで search_knowledge の使用が必須であること
 	if !strings.Contains(prompt, "search_knowledge") {
@@ -562,7 +561,7 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchKnowledge(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	// ANALYZE ステップで searchsploit の使用が必須であること
 	if !strings.Contains(prompt, "searchsploit") {
@@ -571,7 +570,7 @@ func TestBuildSystemPrompt_WorkflowRequiresSearchsploit(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	// HTTPAgent に web recon を委譲する指示
 	if !strings.Contains(prompt, "HTTPAgent") {
@@ -592,7 +591,7 @@ func TestBuildSystemPrompt_ContainsReconStep(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsPreconditionCheck(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "PRECONDITION CHECK") {
 		t.Error("EXECUTE step should contain PRECONDITION CHECK")
@@ -603,7 +602,7 @@ func TestBuildSystemPrompt_ContainsPreconditionCheck(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsServicePriority(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "SERVICE PRIORITY") {
 		t.Error("expected SERVICE PRIORITY section in main agent prompt")
@@ -617,7 +616,7 @@ func TestBuildSystemPrompt_ContainsServicePriority(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_PlanRequiresConcreteTools(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	// PLAN ステップで具体的なツール名を含む攻撃計画が必要であること
 	if !strings.Contains(prompt, "numbered attack plan") {
@@ -626,7 +625,7 @@ func TestBuildSystemPrompt_PlanRequiresConcreteTools(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_SubAgent_ExcludesServicePriority(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, true)
+	prompt := buildSystemPrompt(nil, nil, true, false)
 
 	if strings.Contains(prompt, "SERVICE PRIORITY") {
 		t.Error("SubAgent prompt should NOT contain SERVICE PRIORITY")
@@ -634,7 +633,7 @@ func TestBuildSystemPrompt_SubAgent_ExcludesServicePriority(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsRestrictedActions(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "RESTRICTED ACTIONS") {
 		t.Error("expected RESTRICTED ACTIONS section in main agent prompt")
@@ -645,7 +644,7 @@ func TestBuildSystemPrompt_ContainsRestrictedActions(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsStdinProhibition(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	if !strings.Contains(prompt, "STDIN PROHIBITION") {
 		t.Error("expected STDIN PROHIBITION section in main agent prompt")
@@ -653,7 +652,7 @@ func TestBuildSystemPrompt_ContainsStdinProhibition(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_SubAgent_ExcludesWorkflowAndRestricted(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, true)
+	prompt := buildSystemPrompt(nil, nil, true, false)
 
 	if strings.Contains(prompt, "ASSESSMENT WORKFLOW") {
 		t.Error("SubAgent prompt should NOT contain ASSESSMENT WORKFLOW")
@@ -667,7 +666,7 @@ func TestBuildSystemPrompt_SubAgent_ExcludesWorkflowAndRestricted(t *testing.T) 
 }
 
 func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, false)
+	prompt := buildSystemPrompt(nil, nil, false, false)
 
 	// 新しいアクションタイプがプロンプトに含まれることを確認
 	for _, keyword := range []string{"spawn_task", "wait", "kill_task"} {
@@ -685,7 +684,7 @@ func TestBuildSystemPrompt_ContainsSubTaskActions(t *testing.T) {
 // --- SubAgent プロンプト テスト ---
 
 func TestBuildSystemPrompt_SubAgent_ExcludesSpawnTask(t *testing.T) {
-	prompt := buildSystemPrompt([]string{"nmap", "nikto"}, nil, true)
+	prompt := buildSystemPrompt([]string{"nmap", "nikto"}, nil, true, false)
 
 	// SubAgent プロンプトに spawn_task / wait / kill_task が含まれないこと
 	for _, keyword := range []string{"spawn_task", "wait", "kill_task"} {
@@ -718,7 +717,7 @@ func TestBuildSystemPrompt_SubAgent_ExcludesSpawnTask(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_SubAgent_IncludesRunMemoryCompleteThink(t *testing.T) {
-	prompt := buildSystemPrompt(nil, nil, true)
+	prompt := buildSystemPrompt(nil, nil, true, false)
 
 	// SubAgent プロンプトに run, memory, complete, think が含まれること
 	for _, keyword := range []string{"run", "memory", "complete", "think"} {
@@ -744,7 +743,7 @@ func TestBuildSystemPrompt_SubAgent_IncludesRunMemoryCompleteThink(t *testing.T)
 }
 
 func TestBuildSystemPrompt_MainAgent_IncludesAll(t *testing.T) {
-	prompt := buildSystemPrompt([]string{"nmap"}, nil, false)
+	prompt := buildSystemPrompt([]string{"nmap"}, nil, false, false)
 
 	// MainAgent プロンプトには spawn_task が含まれる
 	if !strings.Contains(prompt, "spawn_task") {
@@ -777,7 +776,7 @@ func TestBuildSystemPrompt_SubAgent_IgnoresMCPTools(t *testing.T) {
 			Description: "Navigate to URL",
 		},
 	}
-	prompt := buildSystemPrompt(nil, mcpTools, true)
+	prompt := buildSystemPrompt(nil, mcpTools, true, false)
 
 	// SubAgent は mcpTools を無視する
 	if strings.Contains(prompt, "MCP TOOLS") {
@@ -838,5 +837,69 @@ func TestBuildPrompt_TaskInstruction_Empty(t *testing.T) {
 	prompt := buildPrompt(input)
 	if strings.Contains(prompt, "Task Instructions") {
 		t.Error("prompt should NOT contain Task Instructions when empty")
+	}
+}
+
+func TestBuildSystemPrompt_ReconAgent(t *testing.T) {
+	prompt := buildSystemPrompt([]string{"nmap"}, nil, false, true)
+
+	// ReconAgent であることを示す識別子
+	if !strings.Contains(prompt, "ReconAgent") {
+		t.Error("ReconAgent prompt should identify itself as ReconAgent")
+	}
+
+	// search_knowledge / read_knowledge が含まれること
+	if !strings.Contains(prompt, "search_knowledge") {
+		t.Error("ReconAgent prompt should contain search_knowledge action")
+	}
+	if !strings.Contains(prompt, "read_knowledge") {
+		t.Error("ReconAgent prompt should contain read_knowledge action")
+	}
+
+	// spawn_task / propose / add_target / call_mcp が含まれないこと
+	for _, keyword := range []string{"spawn_task", "propose", "add_target", "call_mcp"} {
+		if strings.Contains(prompt, keyword) {
+			t.Errorf("ReconAgent prompt should NOT contain %q", keyword)
+		}
+	}
+
+	// web recon ツールを使わない指示
+	if !strings.Contains(prompt, "Do NOT use web reconnaissance tools") {
+		t.Error("ReconAgent prompt should prohibit web recon tools")
+	}
+
+	// exploitation を行わない指示
+	if !strings.Contains(prompt, "Do NOT attempt exploitation") {
+		t.Error("ReconAgent prompt should prohibit exploitation")
+	}
+}
+
+func TestBuildSystemPromptForConfig_EventDrivenMain(t *testing.T) {
+	cfg := Config{
+		ToolNames:         []string{"nmap", "curl"},
+		IsEventDrivenMain: true,
+	}
+	prompt := buildSystemPromptForConfig(cfg)
+
+	if !strings.Contains(prompt, "EVENT-DRIVEN MODE") {
+		t.Error("event-driven main prompt should identify event-driven mode")
+	}
+	if !strings.Contains(prompt, "\"action\": \"run\" | \"spawn_task\"") {
+		t.Error("event-driven main prompt should allow run and spawn_task actions")
+	}
+	if !strings.Contains(prompt, "Do NOT use \"propose\" or \"call_mcp\"") {
+		t.Error("event-driven main prompt should prohibit propose/call_mcp")
+	}
+	if !strings.Contains(prompt, "Act as a conductor first") {
+		t.Error("event-driven main prompt should enforce conductor-first behavior")
+	}
+	if !strings.Contains(prompt, "Use \"run\" for direct local work") {
+		t.Error("event-driven main prompt should allow run for local file/report tasks")
+	}
+	if !strings.Contains(prompt, "delegate through spawn_task by default") {
+		t.Error("event-driven main prompt should require spawn_task-first orchestration")
+	}
+	if strings.Contains(prompt, "do NOT use spawn_task during reconnaissance") {
+		t.Error("event-driven main prompt should not contain legacy no-spawn-task recon rule")
 	}
 }

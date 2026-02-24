@@ -134,6 +134,51 @@ func TestReconRunner_SpawnWebReconForPort_MaxParallel(t *testing.T) {
 	}
 }
 
+func TestReconRunner_TrySpawnWebReconForPort_NoPending(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+	port.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+	port.SetAttackDataStatusForTest(TaskVhostDiscov, StatusComplete)
+
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    &TaskManager{}, // non-nil (SpawnTask まで進まない)
+		Events:     make(chan Event, 10),
+		TargetHost: "10.10.11.100",
+	})
+
+	got := rr.TrySpawnWebReconForPort(context.Background(), port)
+	if got != ReconSpawnNoPending {
+		t.Fatalf("TrySpawnWebReconForPort = %v, want ReconSpawnNoPending", got)
+	}
+	if tree.Active() != 0 {
+		t.Fatalf("active = %d, want 0", tree.Active())
+	}
+}
+
+func TestReconRunner_TrySpawnWebReconForPort_DeferredMaxParallel(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 1, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+	tree.SetActiveForTest(1) // max_parallel 到達
+
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    &TaskManager{}, // non-nil (StartPortRecon で弾かれる)
+		Events:     make(chan Event, 10),
+		TargetHost: "10.10.11.100",
+	})
+
+	got := rr.TrySpawnWebReconForPort(context.Background(), port)
+	if got != ReconSpawnDeferredMaxParallel {
+		t.Fatalf("TrySpawnWebReconForPort = %v, want ReconSpawnDeferredMaxParallel", got)
+	}
+	if tree.Active() != 1 {
+		t.Fatalf("active = %d, want 1", tree.Active())
+	}
+}
+
 func TestBuildWebReconPrompt_HTTPS(t *testing.T) {
 	prompt := buildWebReconPrompt("10.10.11.100", 443)
 	if !strings.Contains(prompt, "https://10.10.11.100") {

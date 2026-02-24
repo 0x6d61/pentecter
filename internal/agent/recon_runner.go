@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// MaxRespawns はポートあたりの SubAgent 最大リスポーン回数。
-const MaxRespawns = 3
-
 // ReconRunnerConfig は ReconRunner の構築パラメーター。
 type ReconRunnerConfig struct {
 	Tree       *AttackDataTree
@@ -30,6 +27,16 @@ type ReconRunner struct {
 	memDir     string
 }
 
+// ReconSpawnResult は WebRecon spawn 試行結果。
+type ReconSpawnResult int
+
+const (
+	ReconSpawnStarted ReconSpawnResult = iota
+	ReconSpawnDeferredMaxParallel
+	ReconSpawnNoPending
+	ReconSpawnFailed
+)
+
 // NewReconRunner は ReconRunner を構築する。
 func NewReconRunner(cfg ReconRunnerConfig) *ReconRunner {
 	return &ReconRunner{
@@ -46,36 +53,54 @@ func NewReconRunner(cfg ReconRunnerConfig) *ReconRunner {
 // max_parallel チェック: active >= MaxParallel なら spawn しない（次の evaluateResult で再試行）。
 // Pending タスクだけ InProgress にマークし、SubAgent を起動する。
 func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *AttackDataNode) {
+	_ = rr.TrySpawnWebReconForPort(ctx, port)
+}
+
+// TrySpawnWebReconForPort は WebRecon spawn を試行し、結果を返す。
+func (rr *ReconRunner) TrySpawnWebReconForPort(ctx context.Context, port *AttackDataNode) ReconSpawnResult {
 	if rr.taskMgr == nil {
 		rr.emitLog("[RECON] TaskManager not configured — skipping web recon SubAgent")
-		return
+		return ReconSpawnFailed
+	}
+	if rr.tree == nil || port == nil {
+		return ReconSpawnFailed
 	}
 
 	// コンテキストキャンセルチェック（StartPortRecon で active を消費する前に確認）
 	select {
 	case <-ctx.Done():
-		return
+		return ReconSpawnFailed
 	default:
+	}
+
+	// 既に Pending が無い場合は spawn 不要（重複イベントガード）。
+	if !rr.tree.PortHasPending(port.Port) {
+		return ReconSpawnNoPending
 	}
 
 	// max_parallel チェック + Pending → InProgress を原子的に実行
 	if !rr.tree.StartPortRecon(port) {
-		rr.emitLog(fmt.Sprintf("[RECON] Max parallel reached — deferring port %d", port.Port))
-		return
+		// false の理由は「max_parallel」または「Pending なし」。
+		if rr.tree.PortHasPending(port.Port) {
+			rr.emitLog(fmt.Sprintf("[RECON] Max parallel reached — deferring port %d", port.Port))
+			return ReconSpawnDeferredMaxParallel
+		}
+		return ReconSpawnNoPending
 	}
 
 	prompt := buildWebReconPrompt(rr.targetHost, port.Port)
 	rr.emitLog(fmt.Sprintf("[RECON] Spawning web recon SubAgent for %s:%d", rr.targetHost, port.Port))
 
 	_, err := rr.taskMgr.SpawnTask(ctx, SpawnTaskRequest{
-		Kind:       TaskKindSmart,
-		Goal:       fmt.Sprintf("Web reconnaissance on %s:%d", rr.targetHost, port.Port),
-		Command:    prompt,
-		TargetHost: rr.targetHost,
-		TargetID:   rr.targetID,
-		MaxTurns:   50,
-		AttackDataTree:  rr.tree,
-		MemDir:     rr.memDir,
+		Kind:           TaskKindSmart,
+		Goal:           fmt.Sprintf("Web reconnaissance on %s:%d", rr.targetHost, port.Port),
+		Command:        prompt,
+		TargetHost:     rr.targetHost,
+		TargetID:       rr.targetID,
+		MaxTurns:       50,
+		AttackDataTree: rr.tree,
+		MemDir:         rr.memDir,
+		AgentKind:      AgentKindWebRecon,
 		Metadata: TaskMetadata{
 			Port:    port.Port,
 			Service: port.Service,
@@ -83,8 +108,11 @@ func (rr *ReconRunner) SpawnWebReconForPort(ctx context.Context, port *AttackDat
 		},
 	})
 	if err != nil {
+		rr.tree.RollbackPortRecon(port)
 		rr.emitLog(fmt.Sprintf("[RECON] SubAgent spawn error for :%d: %v", port.Port, err))
+		return ReconSpawnFailed
 	}
+	return ReconSpawnStarted
 }
 
 // findHTTPPorts は AttackDataTree から HTTP ポートを返す。

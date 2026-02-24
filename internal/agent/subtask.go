@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/0x6d61/pentecter/pkg/schema"
+
 	"github.com/0x6d61/pentecter/internal/tools"
 )
 
@@ -54,6 +56,7 @@ type SubTask struct {
 	MaxTurns    int
 	TurnCount   int
 	Findings    []string
+	Memories    []*schema.Memory
 	Entities    []tools.Entity
 
 	// 非公開フィールド

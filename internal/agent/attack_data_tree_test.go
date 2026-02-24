@@ -308,11 +308,11 @@ func TestRenderTree(t *testing.T) {
 		"80/http Apache 2.4.49",
 		"/api",
 		"/login",
-		"endpoint_enum: complete",  // /login の endpoint_enum
-		"param_fuzz: complete",     // /login の param_fuzz
-		"profiling: complete",      // /login の profiling
-		"endpoint_enum: pending",   // /api の endpoint_enum
-		"param_fuzz: pending",      // /api の param_fuzz
+		"endpoint_enum: complete", // /login の endpoint_enum
+		"param_fuzz: complete",    // /login の param_fuzz
+		"profiling: complete",     // /login の profiling
+		"endpoint_enum: pending",  // /api の endpoint_enum
+		"param_fuzz: pending",     // /api の param_fuzz
 		"Progress:",
 	}
 	for _, check := range checks {
@@ -536,6 +536,142 @@ func TestRenderTree_WithFindings(t *testing.T) {
 		`finding: param "name"`,
 		"xss",
 		"reflected script tag",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderTree_WithParameters(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/login", 200)
+
+	tree.AddParameter("10.10.11.100", 80, "/login", "username", "query")
+	tree.AddParameter("10.10.11.100", 80, "/login", "password", "query")
+
+	output := tree.RenderTree()
+
+	checks := []string{
+		"/login",
+		"param: username (query)",
+		"param: password (query)",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderTree_WithParametersAndFindings(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+
+	tree.AddParameter("10.10.11.100", 80, "/api", "id", "query")
+	tree.AddFinding("10.10.11.100", 80, "/api", Finding{
+		Param:    "id",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error",
+		Severity: "high",
+	})
+
+	output := tree.RenderTree()
+
+	checks := []string{
+		"param: id (query)",
+		`finding: param "id"`,
+		"sqli",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+
+	// param が finding より前に表示されること
+	paramIdx := strings.Index(output, "param: id")
+	findingIdx := strings.Index(output, "finding:")
+	if paramIdx >= findingIdx {
+		t.Errorf("param should appear before finding\noutput:\n%s", output)
+	}
+}
+
+func TestRenderTree_RootParamsAndFindings(t *testing.T) {
+	// ポートノードの "/" にパラメータと Finding があるとき
+	// renderNode の virtual "/" ノードに正しく渡されること
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// "/" にパラメータを追加（ポートノード = path ""）
+	tree.AddParameter("10.10.11.100", 80, "", "q", "query")
+	tree.AddFinding("10.10.11.100", 80, "", Finding{
+		Param:    "q",
+		Category: "sqli",
+		Evidence: "syntax error",
+		Severity: "high",
+	})
+
+	output := tree.RenderTree()
+	t.Logf("RenderTree output:\n%s", output)
+
+	checks := []string{
+		"/",
+		"param: q (query)",
+		`finding: param "q"`,
+		"sqli",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("RenderTree missing %q\noutput:\n%s", check, output)
+		}
+	}
+}
+
+func TestRenderTree_FullPipeline(t *testing.T) {
+	// webfuzz の全モードで検出されたデータが /attackdata で見えること
+	tree := NewAttackDataTree("10.10.11.100", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	// dir モード: endpoint 検出
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/login", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 301)
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+
+	// param モード: パラメータ検出
+	tree.AddParameter("10.10.11.100", 80, "/login", "user", "query")
+	tree.AddParameter("10.10.11.100", 80, "/login", "pass", "query")
+	tree.CompleteTask("10.10.11.100", 80, "/login", TaskParamFuzz)
+
+	// value モード: finding 検出
+	tree.AddFinding("10.10.11.100", 80, "/login", Finding{
+		Param:    "user",
+		Category: "sqli",
+		Evidence: "500 + MySQL syntax error",
+		Severity: "high",
+	})
+
+	// vhost モード
+	tree.AddVhost("10.10.11.100", 80, "dev.example.com")
+	tree.CompleteTask("10.10.11.100", 80, "", TaskVhostDiscov)
+
+	output := tree.RenderTree()
+	t.Logf("RenderTree output:\n%s", output)
+
+	checks := []string{
+		"80/http Apache",
+		"vhost_discovery: complete",
+		"/login",
+		"/api",
+		"param: user (query)",
+		"param: pass (query)",
+		`finding: param "user"`,
+		"sqli",
+		"[vhost] dev.example.com",
+		"endpoint_enum: complete", // port root "/"
 	}
 	for _, check := range checks {
 		if !strings.Contains(output, check) {
@@ -2248,7 +2384,7 @@ func TestPortHasPendingChildren_DeepNested(t *testing.T) {
 	// 深くネストされた子ノードに Pending タスクがある場合 true を返す
 	tree := NewAttackDataTree("10.0.0.1", 2, 3)
 	tree.AddPort(80, "http", "Apache")
-	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 301)   // redirect: EndpointEnum only
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "", "/api", 301)        // redirect: EndpointEnum only
 	tree.AddEndpointWithStatus("10.0.0.1", 80, "/api", "/api/v1", 200) // full recon
 
 	// ポートレベル + 第1階層を Complete にする
@@ -2496,5 +2632,273 @@ func TestStatusSkipped_NotCountedAsPending_InPortHasPendingChildren(t *testing.T
 	// PortHasPendingChildren should return false (skipped != pending)
 	if tree.PortHasPendingChildren(80) {
 		t.Error("PortHasPendingChildren should return false when all pending are skipped")
+	}
+}
+
+func TestRollbackPortRecon(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// StartPortRecon increments active and SpawnCount
+	if !tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should succeed")
+	}
+	if tree.Active() != 1 {
+		t.Fatalf("Active = %d, want 1", tree.Active())
+	}
+	if port.SpawnCount != 1 {
+		t.Fatalf("SpawnCount = %d, want 1", port.SpawnCount)
+	}
+
+	// RollbackPortRecon reverses the effects
+	tree.RollbackPortRecon(port)
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0 after rollback", tree.Active())
+	}
+	if port.SpawnCount != 0 {
+		t.Errorf("SpawnCount = %d, want 0 after rollback", port.SpawnCount)
+	}
+
+	// Tasks should be back to Pending
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskVhostDiscov} {
+		if port.getAttackDataStatus(tt) != StatusPending {
+			t.Errorf("task %s should be Pending after rollback, got %d", tt, port.getAttackDataStatus(tt))
+		}
+	}
+}
+
+func TestRollbackPortRecon_ActiveFloor(t *testing.T) {
+	// RollbackPortRecon should not decrement active below 0
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// Manually set active to 0 and call rollback — active should stay 0
+	tree.RollbackPortRecon(port)
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0 (should not go negative)", tree.Active())
+	}
+}
+
+func TestRollbackPortRecon_OnlyInProgressReverted(t *testing.T) {
+	// Only InProgress tasks should be reverted; Complete tasks should stay Complete
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// Start recon (marks Pending tasks as InProgress)
+	tree.StartPortRecon(port)
+
+	// Mark EndpointEnum as Complete (simulating partial completion)
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+
+	tree.RollbackPortRecon(port)
+
+	// Complete task should stay Complete
+	if port.getAttackDataStatus(TaskEndpointEnum) != StatusComplete {
+		t.Errorf("EndpointEnum should remain Complete after rollback, got %d", port.getAttackDataStatus(TaskEndpointEnum))
+	}
+
+	// VhostDiscov was InProgress, should be back to Pending
+	if port.getAttackDataStatus(TaskVhostDiscov) != StatusPending {
+		t.Errorf("VhostDiscov should be Pending after rollback, got %d", port.getAttackDataStatus(TaskVhostDiscov))
+	}
+}
+
+func TestStartPortRecon_NoPending_Fails(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+	port := tree.Ports[0]
+
+	// Pending を全て消す
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+
+	if tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should fail when no pending tasks exist")
+	}
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0", tree.Active())
+	}
+	if port.SpawnCount != 0 {
+		t.Errorf("SpawnCount = %d, want 0", port.SpawnCount)
+	}
+}
+
+func TestStartPortRecon_PendingChildren_Succeeds(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/api", 200)
+	port := tree.Ports[0]
+
+	// ポート自身の Pending は消すが、子ノードは Pending を残す
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+
+	if !tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should succeed when pending children exist")
+	}
+	if tree.Active() != 1 {
+		t.Errorf("Active = %d, want 1", tree.Active())
+	}
+	if port.SpawnCount != 1 {
+		t.Errorf("SpawnCount = %d, want 1", port.SpawnCount)
+	}
+}
+
+func TestCompleteAllPortTasks_DecrementsActive_WithPendingChildrenOnly(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/api", 200)
+	port := tree.Ports[0]
+
+	// 子ノードのみ Pending の状態にして spawn する
+	port.setAttackDataStatus(TaskEndpointEnum, StatusComplete)
+	port.setAttackDataStatus(TaskVhostDiscov, StatusComplete)
+	if !tree.StartPortRecon(port) {
+		t.Fatal("StartPortRecon should succeed")
+	}
+	if tree.Active() != 1 {
+		t.Fatalf("Active = %d, want 1", tree.Active())
+	}
+
+	tree.CompleteAllPortTasks(80)
+	if tree.Active() != 0 {
+		t.Errorf("Active = %d, want 0 after completion", tree.Active())
+	}
+	// 子ノードの Pending は残る（次回リスポーン対象）
+	if !tree.PortHasPendingChildren(80) {
+		t.Error("PortHasPendingChildren should remain true")
+	}
+}
+
+func TestSnapshotWebSurface(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/login", 200)
+	tree.AddParameter("10.0.0.1", 80, "/login", "username", "query")
+	tree.AddVhost("10.0.0.1", 80, "admin.10.0.0.1")
+
+	endpoints, params, vhosts := tree.SnapshotWebSurface(80)
+
+	foundEndpoint := false
+	for _, ep := range endpoints {
+		if ep.Path == "/login" {
+			foundEndpoint = true
+			if ep.Status != 200 {
+				t.Fatalf("endpoint status = %d, want 200", ep.Status)
+			}
+			break
+		}
+	}
+	if !foundEndpoint {
+		t.Fatal("expected /login endpoint in snapshot")
+	}
+
+	foundParam := false
+	for _, p := range params {
+		if p.Path == "/login" && p.Name == "username" && p.ParamType == "query" {
+			foundParam = true
+			break
+		}
+	}
+	if !foundParam {
+		t.Fatal("expected username parameter in snapshot")
+	}
+
+	foundVhost := false
+	for _, v := range vhosts {
+		if v == "admin.10.0.0.1" {
+			foundVhost = true
+			break
+		}
+	}
+	if !foundVhost {
+		t.Fatal("expected discovered vhost in snapshot")
+	}
+}
+
+func TestAddCredentialAndInsight_DedupAndRender(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH")
+
+	cred := Credential{
+		Service:  "ssh",
+		Username: "root",
+		Password: "toor",
+		Source:   "attack",
+	}
+	insight := Insight{
+		Source: "hacktricks",
+		Topic:  "CVE-2016-0777",
+		Detail: "Potential client-side leak",
+	}
+
+	tree.AddCredential("10.0.0.1", 22, cred)
+	tree.AddCredential("10.0.0.1", 22, cred) // duplicate
+	tree.AddInsight("10.0.0.1", 22, insight)
+	tree.AddInsight("10.0.0.1", 22, insight) // duplicate
+
+	node := tree.FindPortNode(22)
+	if node == nil {
+		t.Fatal("port node 22 not found")
+	}
+	if len(node.Credentials) != 1 {
+		t.Fatalf("Credentials len = %d, want 1 (dedup)", len(node.Credentials))
+	}
+	if len(node.Insights) != 1 {
+		t.Fatalf("Insights len = %d, want 1 (dedup)", len(node.Insights))
+	}
+
+	renderedTree := tree.RenderTree()
+	if !strings.Contains(renderedTree, "credential: ssh root:toor [attack]") {
+		t.Fatalf("RenderTree should include credential line, got:\n%s", renderedTree)
+	}
+	if !strings.Contains(renderedTree, "insight: CVE-2016-0777 [hacktricks] Potential client-side leak") {
+		t.Fatalf("RenderTree should include insight line, got:\n%s", renderedTree)
+	}
+
+	renderedIntel := tree.RenderIntel()
+	if !strings.Contains(renderedIntel, "[CREDENTIALS]") {
+		t.Fatalf("RenderIntel should include [CREDENTIALS], got:\n%s", renderedIntel)
+	}
+	if !strings.Contains(renderedIntel, "[INSIGHTS]") {
+		t.Fatalf("RenderIntel should include [INSIGHTS], got:\n%s", renderedIntel)
+	}
+}
+
+func TestSnapshotRestore_PreservesCredentialAndInsight(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(21, "ftp", "vsftpd")
+	tree.AddCredential("10.0.0.1", 21, Credential{
+		Service:  "ftp",
+		Username: "anonymous",
+		Password: "anonymous",
+		Source:   "default",
+	})
+	tree.AddInsight("10.0.0.1", 21, Insight{
+		Source: "hacktricks",
+		Topic:  "default_credentials",
+		Detail: "Anonymous login may be enabled",
+	})
+
+	snapshot := tree.Snapshot()
+	restored := RestoreAttackDataTree(snapshot)
+	node := restored.FindPortNode(21)
+	if node == nil {
+		t.Fatal("restored port node 21 not found")
+	}
+	if len(node.Credentials) != 1 {
+		t.Fatalf("restored credentials len = %d, want 1", len(node.Credentials))
+	}
+	if len(node.Insights) != 1 {
+		t.Fatalf("restored insights len = %d, want 1", len(node.Insights))
+	}
+	if node.Credentials[0].Username != "anonymous" {
+		t.Fatalf("restored credential username = %q, want anonymous", node.Credentials[0].Username)
+	}
+	if node.Insights[0].Topic != "default_credentials" {
+		t.Fatalf("restored insight topic = %q, want default_credentials", node.Insights[0].Topic)
 	}
 }

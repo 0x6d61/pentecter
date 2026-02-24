@@ -234,6 +234,37 @@ func TestCommandRunner_AutoApprove_Default_Off(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// CheckBlacklist テスト
+// =============================================================================
+
+func TestCheckBlacklist_Blocked(t *testing.T) {
+	registry := tools.NewRegistry()
+	blacklist := tools.NewBlacklist([]string{`rm\s+-rf\s+/`})
+	store := tools.NewLogStore()
+	runner := tools.NewCommandRunner(registry, blacklist, store)
+
+	err := runner.CheckBlacklist("rm -rf /")
+	if err == nil {
+		t.Fatal("expected blacklist error, got nil")
+	}
+	if !strings.Contains(err.Error(), "blacklist") {
+		t.Errorf("error should mention blacklist, got: %v", err)
+	}
+}
+
+func TestCheckBlacklist_Allowed(t *testing.T) {
+	registry := tools.NewRegistry()
+	blacklist := tools.NewBlacklist([]string{`rm\s+-rf\s+/`})
+	store := tools.NewLogStore()
+	runner := tools.NewCommandRunner(registry, blacklist, store)
+
+	err := runner.CheckBlacklist("echo hello")
+	if err != nil {
+		t.Errorf("expected nil, got: %v", err)
+	}
+}
+
 // --- AutoApprove getter テスト ---
 
 func TestCommandRunner_AutoApprove_Getter(t *testing.T) {

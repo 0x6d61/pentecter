@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -59,6 +60,27 @@ type Finding struct {
 	Severity string `json:"severity"` // 深刻度: "high", "medium", "low", "info"
 }
 
+// Parameter はファジングで発見されたパラメーター
+type Parameter struct {
+	Name string `json:"name"` // パラメーター名 (e.g. "id", "username")
+	Type string `json:"type"` // query, form, header, cookie, path
+}
+
+// Credential is an authentication artifact discovered during attack execution.
+type Credential struct {
+	Service  string `json:"service"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Source   string `json:"source"` // "brute_force", "sqli_dump", "default", "config_leak", etc.
+}
+
+// Insight is a structured attack/research note tied to a service/port.
+type Insight struct {
+	Source string `json:"source"` // "hacktricks", "nmap_script", "manual", etc.
+	Topic  string `json:"topic"`  // "CVE-2011-2523", "default_credentials", etc.
+	Detail string `json:"detail"`
+}
+
 // TaskProgress は特定タスクタイプの進捗
 type TaskProgress struct {
 	Done         int
@@ -82,6 +104,8 @@ type AttackDataNode struct {
 	Service string // "http", "ssh", "smb"
 	Banner  string // "Apache 2.4.49", "OpenSSH 8.2"
 	Path    string // "/", "/api", "/api/v1" (endpoint nodes only)
+	// HTTPStatus is the observed status code for endpoint nodes (0 = unknown/not recorded).
+	HTTPStatus int
 
 	// タスクステータス（ノードタイプによって使うフィールドが異なる）
 	EndpointEnum AttackDataStatus
@@ -90,9 +114,12 @@ type AttackDataNode struct {
 	Profiling    AttackDataStatus
 	VhostDiscov  AttackDataStatus
 
-	Findings []Finding
-	Checklist *ServiceChecklist
-	SpawnCount int // SubAgent がこのポートに対して spawn された回数
+	Findings    []Finding
+	Parameters  []Parameter
+	Credentials []Credential
+	Insights    []Insight
+	Checklist   *ServiceChecklist
+	SpawnCount  int // SubAgent がこのポートに対して spawn された回数
 
 	Children []*AttackDataNode
 }
@@ -176,11 +203,18 @@ type AttackDataTree struct {
 	mu          sync.RWMutex
 	Host        string
 	MaxParallel int
-	MaxDepth    int          // 0 = unlimited (constructor defaults to 3)
+	MaxDepth    int // 0 = unlimited (constructor defaults to 3)
 	active      int
-	locked      bool         // RECON フェーズがロック中か（true = pending タスク完了まで遷移不可）
+	locked      bool              // RECON フェーズがロック中か（true = pending タスク完了まで遷移不可）
 	Ports       []*AttackDataNode // ポートレベルノード
 	Vhosts      []*AttackDataNode // vhost ルートノード
+}
+
+// PortSnapshot はドメインイベント向けのポート情報スナップショット。
+type PortSnapshot struct {
+	Port    int
+	Service string
+	Banner  string
 }
 
 // NewAttackDataTree は新しい AttackDataTree を作成する。maxParallel が 0 ならデフォルト 2、maxDepth が 0 ならデフォルト 3。
@@ -343,6 +377,7 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 		Host:         host,
 		Port:         port,
 		Path:         newPath,
+		HTTPStatus:   httpStatus,
 		EndpointEnum: endpointEnum,
 		ParamFuzz:    paramFuzz,
 		ValueFuzz:    valueFuzz,
@@ -549,20 +584,28 @@ func (t *AttackDataTree) FinishTask(task *ReconTask) {
 func (t *AttackDataTree) CompleteAllPortTasks(port int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	found := false
+	portFound := false
 	for _, node := range t.Ports {
 		if node.Port == port {
-			for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
-				if node.getAttackDataStatus(tt) == StatusInProgress {
-					node.setAttackDataStatus(tt, StatusComplete)
-					found = true
-				}
-			}
+			portFound = true
+			completeInProgressRecursive(node)
+			break
 		}
 	}
 	// SubAgent 単位で -1（タスクタイプ数ではない）
-	if found && t.active > 0 {
+	if portFound && t.active > 0 {
 		t.active--
+	}
+}
+
+func completeInProgressRecursive(node *AttackDataNode) {
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
+		if node.getAttackDataStatus(tt) == StatusInProgress {
+			node.setAttackDataStatus(tt, StatusComplete)
+		}
+	}
+	for _, child := range node.Children {
+		completeInProgressRecursive(child)
 	}
 }
 
@@ -594,9 +637,23 @@ func nodeHasPendingChildren(node *AttackDataNode) bool {
 	return false
 }
 
+func nodeHasPending(node *AttackDataNode) bool {
+	for _, st := range []AttackDataStatus{node.EndpointEnum, node.ParamFuzz, node.ValueFuzz, node.Profiling, node.VhostDiscov} {
+		if st == StatusPending {
+			return true
+		}
+	}
+	for _, child := range node.Children {
+		if nodeHasPending(child) {
+			return true
+		}
+	}
+	return false
+}
+
 // FindPortNode は指定ポート番号のノードを返す。見つからなければ nil。
 // SkipAllPendingChildren は指定ポートのノードとその子孫で Pending なタスクを StatusSkipped に変更する。
-// MaxRespawns に達した場合に呼ばれ、残りのタスクを意図的にスキップする。
+// オペレーター判断で残タスクを明示的に打ち切る用途で使用する。
 func (t *AttackDataTree) SkipAllPendingChildren(port int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -629,6 +686,135 @@ func (t *AttackDataTree) FindPortNode(port int) *AttackDataNode {
 		}
 	}
 	return nil
+}
+
+// PortHasPending は指定ポート配下に Pending タスクがあるかを返す。
+func (t *AttackDataTree) PortHasPending(port int) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			return nodeHasPending(node)
+		}
+	}
+	return false
+}
+
+// CountPendingForPort returns the number of pending recon tasks under the given port.
+func (t *AttackDataTree) CountPendingForPort(port int) int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			pending, _, _ := node.countTasks()
+			return pending
+		}
+	}
+	return 0
+}
+
+// SnapshotPorts は現在のポート一覧を値コピーで返す。
+func (t *AttackDataTree) SnapshotPorts() []PortSnapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if len(t.Ports) == 0 {
+		return nil
+	}
+	out := make([]PortSnapshot, 0, len(t.Ports))
+	for _, node := range t.Ports {
+		out = append(out, PortSnapshot{
+			Port:    node.Port,
+			Service: node.Service,
+			Banner:  node.Banner,
+		})
+	}
+	return out
+}
+
+// SnapshotWebSurface returns discovered web recon artifacts for a specific port.
+// Endpoint status is not persisted in AttackDataTree, so EndpointInfo.Status is 0.
+func (t *AttackDataTree) SnapshotWebSurface(port int) ([]EndpointInfo, []ParamInfo, []string) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	var portNode *AttackDataNode
+	for _, node := range t.Ports {
+		if node.Port == port {
+			portNode = node
+			break
+		}
+	}
+	if portNode == nil {
+		return nil, nil, nil
+	}
+
+	var endpoints []EndpointInfo
+	var params []ParamInfo
+	endpointSeen := make(map[string]struct{})
+	paramSeen := make(map[string]struct{})
+	vhostSet := make(map[string]struct{})
+
+	var walk func(*AttackDataNode)
+	walk = func(node *AttackDataNode) {
+		if node == nil {
+			return
+		}
+
+		if node.Host != "" && node.Host != t.Host {
+			vhostSet[node.Host] = struct{}{}
+		}
+
+		if node.Path != "" {
+			epKey := node.Host + "|" + node.Path
+			if _, exists := endpointSeen[epKey]; !exists {
+				endpointSeen[epKey] = struct{}{}
+				endpoints = append(endpoints, EndpointInfo{
+					Host:   node.Host,
+					Port:   node.Port,
+					Path:   node.Path,
+					Status: node.HTTPStatus,
+				})
+			}
+
+			for _, p := range node.Parameters {
+				paramKey := node.Host + "|" + node.Path + "|" + p.Name + "|" + p.Type
+				if _, exists := paramSeen[paramKey]; exists {
+					continue
+				}
+				paramSeen[paramKey] = struct{}{}
+				params = append(params, ParamInfo{
+					Host:      node.Host,
+					Port:      node.Port,
+					Path:      node.Path,
+					Name:      p.Name,
+					ParamType: p.Type,
+				})
+			}
+		}
+
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+
+	walk(portNode)
+
+	// Also include dedicated vhost roots for this port.
+	for _, vhostNode := range t.Vhosts {
+		if vhostNode.Port != port {
+			continue
+		}
+		walk(vhostNode)
+	}
+
+	vhosts := make([]string, 0, len(vhostSet))
+	for host := range vhostSet {
+		vhosts = append(vhosts, host)
+	}
+	sort.Strings(vhosts)
+
+	return endpoints, params, vhosts
 }
 
 // findNode はホスト/ポート/パスでノードを検索する。
@@ -720,6 +906,25 @@ func taskStatusLine(name string, s AttackDataStatus) string {
 	return fmt.Sprintf("%s: %s", name, label)
 }
 
+// AddParameter はエンドポイントノードにパラメーターを追加する。
+// 同名パラメーターが既に存在する場合はスキップする。
+// ノードが見つからない場合は何もしない。
+func (t *AttackDataTree) AddParameter(host string, port int, path string, name string, paramType string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	node := t.findNode(host, port, path)
+	if node == nil {
+		return
+	}
+	// 重複チェック
+	for _, p := range node.Parameters {
+		if p.Name == name {
+			return
+		}
+	}
+	node.Parameters = append(node.Parameters, Parameter{Name: name, Type: paramType})
+}
+
 // AddFinding はエンドポイントノードに finding を追加する。
 // ノードが見つからない場合は何もしない。
 func (t *AttackDataTree) AddFinding(host string, port int, path string, finding Finding) {
@@ -730,6 +935,66 @@ func (t *AttackDataTree) AddFinding(host string, port int, path string, finding 
 		return
 	}
 	node.Findings = append(node.Findings, finding)
+}
+
+// AddCredential records a discovered credential on a port node.
+// Duplicate entries (same service/username/password/source) are ignored.
+func (t *AttackDataTree) AddCredential(host string, port int, cred Credential) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	node := t.findNode(host, port, "")
+	if node == nil {
+		// fallback: resolve by port when host/path does not match exactly.
+		for _, p := range t.Ports {
+			if p.Port == port {
+				node = p
+				break
+			}
+		}
+	}
+	if node == nil {
+		return
+	}
+
+	for _, existing := range node.Credentials {
+		if existing.Service == cred.Service &&
+			existing.Username == cred.Username &&
+			existing.Password == cred.Password &&
+			existing.Source == cred.Source {
+			return
+		}
+	}
+	node.Credentials = append(node.Credentials, cred)
+}
+
+// AddInsight records a service/attack insight on a port node.
+// Duplicate entries (same source/topic/detail) are ignored.
+func (t *AttackDataTree) AddInsight(host string, port int, insight Insight) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	node := t.findNode(host, port, "")
+	if node == nil {
+		for _, p := range t.Ports {
+			if p.Port == port {
+				node = p
+				break
+			}
+		}
+	}
+	if node == nil {
+		return
+	}
+
+	for _, existing := range node.Insights {
+		if existing.Source == insight.Source &&
+			existing.Topic == insight.Topic &&
+			existing.Detail == insight.Detail {
+			return
+		}
+	}
+	node.Insights = append(node.Insights, insight)
 }
 
 // CountFindings は全ノードの finding 数を返す
@@ -795,31 +1060,44 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 		}
 
 		if node.isHTTP() {
-			// vhost + endpoint ステータス表示
 			sb.WriteString("\n")
-			hasChildren := len(node.Children) > 0
-			vhostPrefix := childPrefix + "|-- "
-			if !hasChildren {
-				vhostPrefix = childPrefix + "+-- "
-			}
-			fmt.Fprintf(sb, "%svhost %s\n", vhostPrefix, statusIcon(node.VhostDiscov))
-
-			// endpoint ノードのステータス（ルートレベル）— 新形式で表示
 			hasRootTasks := node.EndpointEnum != StatusNone
-			if hasRootTasks {
+			hasChildren := len(node.Children) > 0
+			hasVhost := node.VhostDiscov != StatusNone
+
+			// vhost_discovery タスクステータス（他タスクと同形式）
+			if hasVhost {
+				vhostIsLast := !hasRootTasks && !hasChildren
+				vhostPrefix := childPrefix + "|-- "
+				if vhostIsLast {
+					vhostPrefix = childPrefix + "+-- "
+				}
+				fmt.Fprintf(sb, "%s%s\n", vhostPrefix, taskStatusLine("vhost_discovery", node.VhostDiscov))
+			}
+
+			// ルート "/" ノード（ポートノードのタスク・パラメータ・ファインディングを表示）
+			hasRootData := hasRootTasks ||
+				len(node.Parameters) > 0 ||
+				len(node.Findings) > 0 ||
+				len(node.Credentials) > 0 ||
+				len(node.Insights) > 0
+			if hasRootData {
 				rootPrefix := childPrefix + "|-- "
 				rootChildPrefix := childPrefix + "|   "
 				if !hasChildren {
 					rootPrefix = childPrefix + "+-- "
 					rootChildPrefix = childPrefix + "    "
 				}
-				// ルートを仮の endpoint ノードとしてレンダリング
 				rootNode := &AttackDataNode{
 					Path:         "/",
 					EndpointEnum: node.EndpointEnum,
 					ParamFuzz:    node.ParamFuzz,
 					ValueFuzz:    node.ValueFuzz,
 					Profiling:    node.Profiling,
+					Parameters:   node.Parameters,
+					Findings:     node.Findings,
+					Credentials:  node.Credentials,
+					Insights:     node.Insights,
 				}
 				renderEndpointNode(sb, rootNode, rootPrefix, rootChildPrefix)
 			}
@@ -837,6 +1115,20 @@ func renderNode(sb *strings.Builder, node *AttackDataNode, prefix, childPrefix s
 			}
 		} else {
 			sb.WriteString("\n")
+			hasRootData := len(node.Parameters) > 0 ||
+				len(node.Findings) > 0 ||
+				len(node.Credentials) > 0 ||
+				len(node.Insights) > 0
+			if hasRootData {
+				rootNode := &AttackDataNode{
+					Path:        "/",
+					Parameters:  node.Parameters,
+					Findings:    node.Findings,
+					Credentials: node.Credentials,
+					Insights:    node.Insights,
+				}
+				renderEndpointNode(sb, rootNode, childPrefix+"+-- ", childPrefix+"    ")
+			}
 		}
 	} else {
 		// endpoint ノード
@@ -863,8 +1155,13 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 		}
 	}
 
-	// findings + children + taskLines の合計で最終要素を判定
-	totalItems := len(taskLines) + len(node.Findings) + len(node.Children)
+	// parameters + findings + children + taskLines の合計で最終要素を判定
+	totalItems := len(taskLines) +
+		len(node.Parameters) +
+		len(node.Findings) +
+		len(node.Credentials) +
+		len(node.Insights) +
+		len(node.Children)
 	itemIdx := 0
 
 	for _, line := range taskLines {
@@ -877,6 +1174,16 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 		fmt.Fprintf(sb, "%s%s\n", tp, line)
 	}
 
+	for _, p := range node.Parameters {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		pp := childPrefix + "|-- "
+		if isLast {
+			pp = childPrefix + "+-- "
+		}
+		fmt.Fprintf(sb, "%sparam: %s (%s)\n", pp, p.Name, p.Type)
+	}
+
 	for _, f := range node.Findings {
 		itemIdx++
 		isLast := itemIdx == totalItems
@@ -885,6 +1192,54 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 			fp = childPrefix + "+-- "
 		}
 		fmt.Fprintf(sb, "%sfinding: param \"%s\" \u2014 %s (%s)\n", fp, f.Param, f.Category, f.Evidence)
+	}
+
+	for _, c := range node.Credentials {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		cp := childPrefix + "|-- "
+		if isLast {
+			cp = childPrefix + "+-- "
+		}
+		service := c.Service
+		if service == "" {
+			service = "unknown"
+		}
+		user := c.Username
+		if user == "" {
+			user = "?"
+		}
+		pass := c.Password
+		if pass == "" {
+			pass = "?"
+		}
+		source := c.Source
+		if source == "" {
+			source = "unknown"
+		}
+		fmt.Fprintf(sb, "%scredential: %s %s:%s [%s]\n", cp, service, user, pass, source)
+	}
+
+	for _, in := range node.Insights {
+		itemIdx++
+		isLast := itemIdx == totalItems
+		ip := childPrefix + "|-- "
+		if isLast {
+			ip = childPrefix + "+-- "
+		}
+		topic := in.Topic
+		if topic == "" {
+			topic = "note"
+		}
+		source := in.Source
+		if source == "" {
+			source = "unknown"
+		}
+		detail := strings.TrimSpace(in.Detail)
+		if detail == "" {
+			detail = "(no detail)"
+		}
+		fmt.Fprintf(sb, "%sinsight: %s [%s] %s\n", ip, topic, source, detail)
 	}
 
 	for _, child := range node.Children {
@@ -899,7 +1254,6 @@ func renderEndpointNode(sb *strings.Builder, node *AttackDataNode, prefix, child
 		renderEndpointNode(sb, child, cp, ccp)
 	}
 }
-
 
 // SetChecklist sets the recon checklist for a non-HTTP port.
 // No-op if the port already has a checklist or if the port is HTTP.
@@ -945,7 +1299,6 @@ func (t *AttackDataTree) allChecklistsDoneLocked() bool {
 	}
 	return true
 }
-
 
 const maxPendingPaths = 10
 
@@ -1083,8 +1436,6 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		}
 	}
 
-
-
 	// [RECON PROGRESS]: HTTP タスクタイプ別進捗
 	prog := t.computeReconProgressLocked()
 	httpTotal := prog.EndpointEnum.Total + prog.ParamFuzz.Total + prog.ValueFuzz.Total + prog.Profiling.Total + prog.VhostDiscov.Total
@@ -1139,7 +1490,6 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		sb.WriteString("\n")
 	}
 
-
 	// [FINDINGS]: 全ノードの findings を表示
 	hasFindings := false
 	for _, node := range t.Ports {
@@ -1149,6 +1499,30 @@ func (t *AttackDataTree) renderIntelInternal(forSubAgent bool) string {
 		t.renderNodeFindings(&sb, node, &hasFindings)
 	}
 	if hasFindings {
+		sb.WriteString("\n")
+	}
+
+	// [CREDENTIALS]: 収集済み認証情報
+	hasCreds := false
+	for _, node := range t.Ports {
+		t.renderNodeCredentials(&sb, node, &hasCreds)
+	}
+	for _, node := range t.Vhosts {
+		t.renderNodeCredentials(&sb, node, &hasCreds)
+	}
+	if hasCreds {
+		sb.WriteString("\n")
+	}
+
+	// [INSIGHTS]: 攻撃・調査メモ
+	hasInsights := false
+	for _, node := range t.Ports {
+		t.renderNodeInsights(&sb, node, &hasInsights)
+	}
+	for _, node := range t.Vhosts {
+		t.renderNodeInsights(&sb, node, &hasInsights)
+	}
+	if hasInsights {
 		sb.WriteString("\n")
 	}
 
@@ -1213,6 +1587,64 @@ func (t *AttackDataTree) renderNodeFindings(sb *strings.Builder, node *AttackDat
 	}
 	for _, child := range node.Children {
 		t.renderNodeFindings(sb, child, hasFindings)
+	}
+}
+
+func (t *AttackDataTree) renderNodeCredentials(sb *strings.Builder, node *AttackDataNode, hasCreds *bool) {
+	if len(node.Credentials) > 0 {
+		if !*hasCreds {
+			sb.WriteString("[CREDENTIALS]\n")
+			*hasCreds = true
+		}
+		for _, c := range node.Credentials {
+			user := c.Username
+			if user == "" {
+				user = "?"
+			}
+			pass := c.Password
+			if pass == "" {
+				pass = "?"
+			}
+			service := c.Service
+			if service == "" {
+				service = node.Service
+			}
+			source := c.Source
+			if source == "" {
+				source = "unknown"
+			}
+			fmt.Fprintf(sb, "  Port %d/%s: %s:%s [%s]\n", node.Port, service, user, pass, source)
+		}
+	}
+	for _, child := range node.Children {
+		t.renderNodeCredentials(sb, child, hasCreds)
+	}
+}
+
+func (t *AttackDataTree) renderNodeInsights(sb *strings.Builder, node *AttackDataNode, hasInsights *bool) {
+	if len(node.Insights) > 0 {
+		if !*hasInsights {
+			sb.WriteString("[INSIGHTS]\n")
+			*hasInsights = true
+		}
+		for _, in := range node.Insights {
+			topic := in.Topic
+			if topic == "" {
+				topic = "note"
+			}
+			source := in.Source
+			if source == "" {
+				source = "unknown"
+			}
+			detail := strings.TrimSpace(in.Detail)
+			if detail == "" {
+				detail = "(no detail)"
+			}
+			fmt.Fprintf(sb, "  Port %d: %s [%s] %s\n", node.Port, topic, source, detail)
+		}
+	}
+	for _, child := range node.Children {
+		t.renderNodeInsights(sb, child, hasInsights)
 	}
 }
 
@@ -1281,6 +1713,14 @@ func (t *AttackDataTree) NonHTTPPortsWithoutChecklist() []*AttackDataNode {
 func (t *AttackDataTree) StartPortRecon(port *AttackDataNode) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if port == nil {
+		return false
+	}
+	// ポート配下に Pending が無い場合は spawn しない。
+	// 子ノードのみ Pending のケース（再spawn）も許可する。
+	if !nodeHasPending(port) {
+		return false
+	}
 	if t.active >= t.MaxParallel {
 		return false
 	}
@@ -1292,6 +1732,24 @@ func (t *AttackDataTree) StartPortRecon(port *AttackDataNode) bool {
 	port.SpawnCount++
 	t.active++
 	return true
+}
+
+// RollbackPortRecon は StartPortRecon の逆操作を行う。
+// SpawnTask が失敗した場合に active カウントを戻し、タスクを Pending に戻す。
+func (t *AttackDataTree) RollbackPortRecon(port *AttackDataNode) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, tt := range []ReconTaskType{TaskEndpointEnum, TaskParamFuzz, TaskValueFuzz, TaskProfiling, TaskVhostDiscov} {
+		if port.getAttackDataStatus(tt) == StatusInProgress {
+			port.setAttackDataStatus(tt, StatusPending)
+		}
+	}
+	if port.SpawnCount > 0 {
+		port.SpawnCount--
+	}
+	if t.active > 0 {
+		t.active--
+	}
 }
 
 // Active は現在の active カウントを返す（TUI 表示用）。
@@ -1325,12 +1783,16 @@ type AttackDataNodeDTO struct {
 	Service      string              `json:"service"`
 	Banner       string              `json:"banner"`
 	Path         string              `json:"path"`
+	HTTPStatus   int                 `json:"http_status,omitempty"`
 	EndpointEnum AttackDataStatus    `json:"endpoint_enum"`
 	ParamFuzz    AttackDataStatus    `json:"param_fuzz"`
 	ValueFuzz    AttackDataStatus    `json:"value_fuzz"`
 	Profiling    AttackDataStatus    `json:"profiling"`
 	VhostDiscov  AttackDataStatus    `json:"vhost_discovery"`
 	Findings     []Finding           `json:"findings,omitempty"`
+	Parameters   []Parameter         `json:"parameters,omitempty"`
+	Credentials  []Credential        `json:"credentials,omitempty"`
+	Insights     []Insight           `json:"insights,omitempty"`
 	Checklist    *ServiceChecklist   `json:"checklist,omitempty"`
 	SpawnCount   int                 `json:"spawn_count"`
 	Children     []AttackDataNodeDTO `json:"children,omitempty"`
@@ -1389,12 +1851,16 @@ func nodeToDTO(node *AttackDataNode) AttackDataNodeDTO {
 		Service:      node.Service,
 		Banner:       node.Banner,
 		Path:         node.Path,
+		HTTPStatus:   node.HTTPStatus,
 		EndpointEnum: node.EndpointEnum,
 		ParamFuzz:    node.ParamFuzz,
 		ValueFuzz:    node.ValueFuzz,
 		Profiling:    node.Profiling,
 		VhostDiscov:  node.VhostDiscov,
 		Findings:     node.Findings,
+		Parameters:   node.Parameters,
+		Credentials:  node.Credentials,
+		Insights:     node.Insights,
 		Checklist:    node.Checklist,
 		SpawnCount:   node.SpawnCount,
 	}
@@ -1413,12 +1879,16 @@ func dtoToNode(dto AttackDataNodeDTO) *AttackDataNode {
 		Service:      dto.Service,
 		Banner:       dto.Banner,
 		Path:         dto.Path,
+		HTTPStatus:   dto.HTTPStatus,
 		EndpointEnum: resetInProgress(dto.EndpointEnum),
 		ParamFuzz:    resetInProgress(dto.ParamFuzz),
 		ValueFuzz:    resetInProgress(dto.ValueFuzz),
 		Profiling:    resetInProgress(dto.Profiling),
 		VhostDiscov:  resetInProgress(dto.VhostDiscov),
 		Findings:     dto.Findings,
+		Parameters:   dto.Parameters,
+		Credentials:  dto.Credentials,
+		Insights:     dto.Insights,
 		Checklist:    dto.Checklist,
 		SpawnCount:   dto.SpawnCount,
 	}

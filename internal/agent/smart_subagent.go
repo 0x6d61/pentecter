@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/knowledge"
 	"github.com/0x6d61/pentecter/internal/mcp"
 	"github.com/0x6d61/pentecter/internal/tools"
 	"github.com/0x6d61/pentecter/internal/tools/webfuzz"
@@ -16,13 +17,16 @@ import (
 
 // SmartSubAgent は小型 LLM を使って多段タスクを自律実行するサブエージェント。
 type SmartSubAgent struct {
-	br         brain.Brain
-	runner     *tools.CommandRunner
-	mcpMgr     *mcp.MCPManager
-	events     chan<- Event
-	attackData *AttackDataTree
-	targetHost string
-	memDir     string // webfuzz raw output 用
+	br             brain.Brain
+	runner         *tools.CommandRunner
+	mcpMgr         *mcp.MCPManager
+	events         chan<- Event
+	attackData     *AttackDataTree
+	targetHost     string
+	memDir         string                // webfuzz raw output 用
+	knowledgeStore *knowledge.Store      // ナレッジベース検索（nil = 無効）
+	reconSpawnCb   func(context.Context) // HTTP ポート検出時に WebRecon を spawn するコールバック
+	agentKind      string                // エージェント種別（AgentKind 定数）
 }
 
 // NewSmartSubAgent は SmartSubAgent を構築する。
@@ -43,6 +47,24 @@ func NewSmartSubAgent(br brain.Brain, runner *tools.CommandRunner, mcpMgr *mcp.M
 		targetHost: targetHost,
 		memDir:     memDir,
 	}
+}
+
+// WithKnowledge は KnowledgeStore をセットする（メソッドチェーン用）。
+func (sa *SmartSubAgent) WithKnowledge(ks *knowledge.Store) *SmartSubAgent {
+	sa.knowledgeStore = ks
+	return sa
+}
+
+// WithReconSpawnCallback は HTTP ポート検出時のコールバックをセットする（メソッドチェーン用）。
+func (sa *SmartSubAgent) WithReconSpawnCallback(cb func(context.Context)) *SmartSubAgent {
+	sa.reconSpawnCb = cb
+	return sa
+}
+
+// WithAgentKind はエージェント種別をセットする（メソッドチェーン用）。
+func (sa *SmartSubAgent) WithAgentKind(kind string) *SmartSubAgent {
+	sa.agentKind = kind
+	return sa
 }
 
 // Run はサブタスクを自律ループで実行する。完了まで blocking する。
@@ -132,6 +154,17 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 		switch action.Action {
 		case schema.ActionRun:
 			lastCommand = action.Command
+
+			// SubAgent もブラックリストは適用する（ForceRun は承認済みユーザー向け）
+			if err := sa.runner.CheckBlacklist(action.Command); err != nil {
+				msg := fmt.Sprintf("Error: %v", err)
+				task.AppendOutput(msg)
+				lastOutput = msg
+				lastExitCode = 1 // Brain に失敗を伝える
+				sa.emitLog(task, SourceSystem, fmt.Sprintf("SmartSubAgent %s: blacklisted command blocked: %s", task.ID, action.Command))
+				continue
+			}
+
 			linesCh, resultCh := sa.runner.ForceRun(ctx, action.Command)
 
 			// ストリーム出力を収集
@@ -157,6 +190,12 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 				_ = DetectAndParse(action.Command, result.Truncated, sa.attackData, sa.targetHost)
 			}
 
+			// ReconAgent: nmap コマンド実行後のみ WebRecon spawn チェック
+			// （nmap 以外のコマンドではポート追加が起きないため不要）
+			if sa.reconSpawnCb != nil && strings.Contains(strings.ToLower(action.Command), "nmap") {
+				sa.reconSpawnCb(ctx)
+			}
+
 			// Entity 抽出結果をタスクに追加
 			if result.Entities != nil {
 				task.Entities = append(task.Entities, result.Entities...)
@@ -167,18 +206,28 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 				finding := fmt.Sprintf("[%s] %s: %s",
 					action.Memory.Type, action.Memory.Title, action.Memory.Description)
 				task.Findings = append(task.Findings, finding)
+				memCopy := *action.Memory
+				task.Memories = append(task.Memories, &memCopy)
 				task.AppendOutput("[memory] " + action.Memory.Title)
 				sa.emitLog(task, SourceAI, fmt.Sprintf("Memory: %s", action.Memory.Title))
 			}
 
 		case schema.ActionComplete:
 			// Pending タスクが残っている場合は complete を拒否してループ継続
-			if sa.attackData != nil && sa.attackData.HasPending() {
-				sa.emitLog(task, SourceSystem,
-					fmt.Sprintf("SmartSubAgent %s: complete rejected — %d pending tasks remain",
-						task.ID, sa.attackData.CountPending()))
-				lastOutput = fmt.Sprintf("Cannot complete: %d pending tasks remain. Check RECON INTEL and continue working.", sa.attackData.CountPending())
-				continue
+			if sa.attackData != nil &&
+				task.Metadata.Phase == "web_recon" &&
+				task.Metadata.Port > 0 {
+				portPending := sa.attackData.CountPendingForPort(task.Metadata.Port)
+				if portPending > 0 {
+					sa.emitLog(task, SourceSystem,
+						fmt.Sprintf("SmartSubAgent %s: complete rejected on port %d -- %d pending web recon tasks remain",
+							task.ID, task.Metadata.Port, portPending))
+					lastOutput = fmt.Sprintf(
+						"Cannot complete web_recon on port %d: %d pending tasks remain for this port. Continue recon and retry complete.",
+						task.Metadata.Port, portPending,
+					)
+					continue
+				}
 			}
 			task.Status = TaskStatusCompleted
 			task.CompletedAt = time.Now()
@@ -190,14 +239,80 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 		case schema.ActionThink:
 			// Thought は既にログ済み。ループ継続。
 
+		case schema.ActionSearchKnowledge:
+			if sa.knowledgeStore == nil {
+				msg := "Error: Knowledge base not configured"
+				task.AppendOutput(msg)
+				lastOutput = msg
+				lastExitCode = 1
+			} else {
+				query := action.KnowledgeQuery
+				if query == "" {
+					lastOutput = "Error: knowledge_query is empty"
+					task.AppendOutput(lastOutput)
+					lastExitCode = 1
+				} else {
+					sa.emitLog(task, SourceSystem, fmt.Sprintf("Searching knowledge base: %q", query))
+					results := sa.knowledgeStore.Search(query, 10)
+					if len(results) == 0 {
+						lastOutput = fmt.Sprintf("No results found for: %q", query)
+					} else {
+						var sb strings.Builder
+						fmt.Fprintf(&sb, "Found %d results for %q:\n\n", len(results), query)
+						for i, r := range results {
+							fmt.Fprintf(&sb, "[%d] %s\n", i+1, r.File)
+							if r.Title != "" {
+								fmt.Fprintf(&sb, "    Title: %s\n", r.Title)
+							}
+							if r.Section != "" {
+								fmt.Fprintf(&sb, "    Section: %s\n", r.Section)
+							}
+							if r.Snippet != "" {
+								fmt.Fprintf(&sb, "    Snippet: %s\n", r.Snippet)
+							}
+							fmt.Fprintf(&sb, "    Matches: %d\n\n", r.MatchCount)
+						}
+						sb.WriteString("Use read_knowledge with the file path to read full article.")
+						lastOutput = sb.String()
+					}
+					task.AppendOutput("[search_knowledge] " + query)
+				}
+			}
+
+		case schema.ActionReadKnowledge:
+			if sa.knowledgeStore == nil {
+				msg := "Error: Knowledge base not configured"
+				task.AppendOutput(msg)
+				lastOutput = msg
+				lastExitCode = 1
+			} else {
+				path := action.KnowledgePath
+				if path == "" {
+					lastOutput = "Error: knowledge_path is empty"
+					task.AppendOutput(lastOutput)
+					lastExitCode = 1
+				} else {
+					sa.emitLog(task, SourceSystem, fmt.Sprintf("Reading knowledge article: %s", path))
+					content, err := sa.knowledgeStore.ReadFile(path, 30000)
+					if err != nil {
+						lastOutput = fmt.Sprintf("Error reading knowledge file: %v", err)
+						lastExitCode = 1
+					} else {
+						lastOutput = content
+					}
+					task.AppendOutput("[read_knowledge] " + path)
+				}
+			}
+
 		default:
 			// SubAgent は run/think/memory/complete のみサポート。
 			// wait 等の unsupported action は Brain にフィードバックしてリトライさせる。
-			msg := fmt.Sprintf("Action %q is not available in SubAgent. Use run/think/memory/complete only.", action.Action)
+			msg := fmt.Sprintf("Action %q is not available in SubAgent. Use run/think/memory/complete/search_knowledge/read_knowledge only.", action.Action)
 			task.AppendOutput(msg)
 			sa.emitLog(task, SourceSystem,
 				fmt.Sprintf("SmartSubAgent %s: unsupported action %q", task.ID, action.Action))
 			lastOutput = msg
+			lastExitCode = 1
 		}
 	}
 
@@ -214,10 +329,11 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 func (sa *SmartSubAgent) emitLog(task *SubTask, source LogSource, msg string) {
 	select {
 	case sa.events <- Event{
-		Type:    EventSubTaskLog,
-		TaskID:  task.ID,
-		Source:  source,
-		Message: msg,
+		Type:      EventSubTaskLog,
+		TaskID:    task.ID,
+		Source:    source,
+		Message:   msg,
+		AgentKind: sa.agentKind,
 	}:
 	default:
 	}
@@ -227,9 +343,10 @@ func (sa *SmartSubAgent) emitLog(task *SubTask, source LogSource, msg string) {
 func (sa *SmartSubAgent) emitTaskComplete(task *SubTask) {
 	select {
 	case sa.events <- Event{
-		Type:    EventSubTaskComplete,
-		TaskID:  task.ID,
-		Message: task.Summary(),
+		Type:      EventSubTaskComplete,
+		TaskID:    task.ID,
+		Message:   task.Summary(),
+		AgentKind: sa.agentKind,
 	}:
 	default:
 	}
