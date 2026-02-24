@@ -84,6 +84,9 @@ type Loop struct {
 	// ReconAgent 自動 spawn 済みフラグ
 	reconSpawned bool
 
+	// webReconRespawn tracks per-port no-progress backoff state for web recon retries.
+	webReconRespawn map[int]*webReconRespawnState
+
 	// eventDrivenMain が true の場合、MainAgent はイベント駆動モードで動作する。
 	// ユーザー入力またはサブタスク完了をトリガーにのみ Brain を呼び出し、
 	// propose/call_mcp は実行せず、run は必要時のみ直接実行する。

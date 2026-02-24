@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
@@ -317,16 +319,6 @@ func TestDrainCompletedTasks_WebAttackTask_EmitsSecurityDomainEvents(t *testing.
 		t.Fatal("expected AccessGained event from shell/root signal")
 	}
 
-	portNode := tree.FindPortNode(80)
-	if portNode == nil {
-		t.Fatal("expected port node 80")
-	}
-	if len(portNode.Findings) == 0 {
-		t.Fatal("expected finding persisted into AttackDataTree")
-	}
-	if len(portNode.Credentials) == 0 {
-		t.Fatal("expected credential persisted into AttackDataTree")
-	}
 }
 
 func TestDrainCompletedTasks_AttackFailed_NoSecurityDomainEvents(t *testing.T) {
@@ -365,6 +357,138 @@ func TestDrainCompletedTasks_AttackFailed_NoSecurityDomainEvents(t *testing.T) {
 	}
 }
 
+func TestDrainCompletedTasks_WebReconNoProgress_UsesBackoff(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/api", 200) // child pending remains
+	if !tree.StartPortRecon(tree.Ports[0]) {
+		t.Fatal("StartPortRecon should succeed")
+	}
+
+	uiEvents := make(chan Event, 128)
+	tm := NewTaskManager(nil, nil, uiEvents, nil, nil)
+	target := NewTarget(1, tree.Host)
+	loop := &Loop{
+		target:       target,
+		taskMgr:      tm,
+		attackData:   tree,
+		domainEvents: make(chan DomainEvent, 16),
+		events:       uiEvents,
+		reconRunner: NewReconRunner(ReconRunnerConfig{
+			Tree:       tree,
+			Events:     uiEvents,
+			TargetHost: tree.Host,
+			TargetID:   target.ID,
+		}), // TaskMgr intentionally nil to observe spawn attempts via log.
+	}
+
+	task1 := NewSubTask("task-web-backoff-1", TaskKindSmart, "web recon pass1")
+	task1.Metadata = TaskMetadata{Phase: "web_recon", Port: 80, Service: "http"}
+	task1.Status = TaskStatusCompleted
+	task1.Complete()
+	tm.InjectTask(task1.ID, task1)
+	tm.InjectDone(task1.ID)
+	_ = loop.drainCompletedTasks(context.Background())
+	firstLogs := drainUIEvents(uiEvents)
+	if !containsLog(firstLogs, "TaskManager not configured") {
+		t.Fatal("expected initial immediate respawn attempt log")
+	}
+
+	task2 := NewSubTask("task-web-backoff-2", TaskKindSmart, "web recon pass2")
+	task2.Metadata = TaskMetadata{Phase: "web_recon", Port: 80, Service: "http"}
+	task2.Status = TaskStatusCompleted
+	task2.Complete()
+	tm.InjectTask(task2.ID, task2)
+	tm.InjectDone(task2.ID)
+	_ = loop.drainCompletedTasks(context.Background())
+	secondLogs := drainUIEvents(uiEvents)
+	if containsLog(secondLogs, "TaskManager not configured") {
+		t.Fatal("did not expect immediate respawn on no-progress completion (should backoff)")
+	}
+
+	state, ok := loop.webReconRespawn[80]
+	if !ok {
+		t.Fatal("expected backoff state for port 80")
+	}
+	if state.NoProgressCount < 1 {
+		t.Fatalf("NoProgressCount = %d, want >= 1", state.NoProgressCount)
+	}
+	if state.NextRetryAt.IsZero() || !state.NextRetryAt.After(time.Now()) {
+		t.Fatalf("NextRetryAt = %v, want future time", state.NextRetryAt)
+	}
+
+	// Force backoff elapsed and verify deferred retry is attempted.
+	state.NextRetryAt = time.Now().Add(-time.Second)
+	_ = loop.drainCompletedTasks(context.Background())
+	thirdLogs := drainUIEvents(uiEvents)
+	if !containsLog(thirdLogs, "TaskManager not configured") {
+		t.Fatal("expected deferred retry attempt after backoff elapsed")
+	}
+}
+
+func TestDrainCompletedTasks_WebAttackWithCoordinator_NoDuplicateFindings(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 32)
+	tm := NewTaskManager(nil, nil, uiEvents, nil, nil)
+	target := NewTarget(1, tree.Host)
+	loop := &Loop{
+		target:       target,
+		taskMgr:      tm,
+		attackData:   tree,
+		domainEvents: domainEvents,
+		events:       uiEvents,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     target.ID,
+		TargetHost:   target.Host,
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+	go coordinator.Run(ctx)
+
+	task := NewSubTask("task-web-attack-single-writer", TaskKindSmart, "web attack 80")
+	task.Metadata = TaskMetadata{Phase: "web_attack", Port: 80, Service: "http"}
+	task.Memories = []*schema.Memory{
+		{
+			Type:        schema.MemoryVulnerability,
+			Title:       "SQLi observed",
+			Description: "authentication bypass via SQL injection",
+			Severity:    "high",
+		},
+	}
+	task.Status = TaskStatusCompleted
+	task.Complete()
+	tm.InjectTask(task.ID, task)
+	tm.InjectDone(task.ID)
+
+	_ = loop.drainCompletedTasks(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		node := tree.FindPortNode(80)
+		if node != nil && len(node.Findings) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	node := tree.FindPortNode(80)
+	if node == nil {
+		t.Fatal("expected port node 80")
+	}
+	if len(node.Findings) != 1 {
+		t.Fatalf("findings count = %d, want 1 (single writer)", len(node.Findings))
+	}
+}
+
 func newDomainDrainTestLoop(tree *AttackDataTree) (*Loop, *TaskManager, chan DomainEvent) {
 	uiEvents := make(chan Event, 32)
 	tm := NewTaskManager(nil, nil, uiEvents, nil, nil)
@@ -390,4 +514,25 @@ func drainDomainEvents(ch chan DomainEvent) []DomainEvent {
 			return out
 		}
 	}
+}
+
+func drainUIEvents(ch chan Event) []Event {
+	var out []Event
+	for {
+		select {
+		case evt := <-ch:
+			out = append(out, evt)
+		default:
+			return out
+		}
+	}
+}
+
+func containsLog(events []Event, needle string) bool {
+	for _, e := range events {
+		if e.Type == EventLog && strings.Contains(e.Message, needle) {
+			return true
+		}
+	}
+	return false
 }

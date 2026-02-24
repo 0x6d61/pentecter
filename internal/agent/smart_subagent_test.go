@@ -605,3 +605,85 @@ func TestSmartSubAgent_ReconSpawnCallback(t *testing.T) {
 		t.Error("reconSpawnCb should have been called after ActionRun")
 	}
 }
+
+func TestSmartSubAgent_CompleteAttack_NotBlockedByGlobalPending(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 32)
+	tree := agent.NewAttackDataTree("10.0.0.5", 2, 3)
+	tree.AddPort(80, "http", "Apache") // pending web recon remains on unrelated port
+	tree.AddPort(22, "ssh", "OpenSSH")
+
+	task := agent.NewSubTask("smart-complete-attack", agent.TaskKindSmart, "attack ssh")
+	task.MaxTurns = 3
+	task.Metadata = agent.TaskMetadata{Phase: "attack", Port: 22, Service: "ssh"}
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, tree, "10.0.0.5", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	if task.Status != agent.TaskStatusCompleted {
+		t.Fatalf("Status: got %q, want %q", task.Status, agent.TaskStatusCompleted)
+	}
+	if strings.Contains(task.FullOutput(), "Cannot complete") {
+		t.Fatalf("attack task should not be blocked by unrelated pending tasks, output=%q", task.FullOutput())
+	}
+}
+
+func TestSmartSubAgent_CompleteWebRecon_ScopedToOwnPortPending(t *testing.T) {
+	mb := &mockBrain{
+		actions: []*schema.Action{
+			{Thought: "done", Action: schema.ActionComplete},
+		},
+	}
+
+	runner := newSmartTestRunner()
+	events := make(chan agent.Event, 32)
+	tree := agent.NewAttackDataTree("10.0.0.5", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddPort(443, "http", "nginx")
+
+	// Mark only port 80 recon complete; port 443 remains pending.
+	port80 := tree.FindPortNode(80)
+	if port80 == nil {
+		t.Fatal("expected port 80 node")
+	}
+	port80.SetAttackDataStatusForTest(agent.TaskEndpointEnum, agent.StatusComplete)
+	port80.SetAttackDataStatusForTest(agent.TaskVhostDiscov, agent.StatusComplete)
+
+	task := agent.NewSubTask("smart-complete-web-recon", agent.TaskKindSmart, "web recon complete")
+	task.MaxTurns = 3
+	task.Metadata = agent.TaskMetadata{Phase: "web_recon", Port: 80, Service: "http"}
+
+	sa := agent.NewSmartSubAgent(mb, runner, nil, events, tree, "10.0.0.5", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go sa.Run(ctx, task, "10.0.0.5")
+
+	select {
+	case <-task.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for SmartSubAgent to complete")
+	}
+
+	if task.Status != agent.TaskStatusCompleted {
+		t.Fatalf("Status: got %q, want %q", task.Status, agent.TaskStatusCompleted)
+	}
+	if strings.Contains(task.FullOutput(), "Cannot complete web_recon on port 80") {
+		t.Fatalf("web_recon completion should not be blocked by other ports' pending tasks, output=%q", task.FullOutput())
+	}
+}

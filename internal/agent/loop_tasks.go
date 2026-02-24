@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
@@ -19,6 +20,19 @@ var userPattern = regexp.MustCompile(`(?i)\b(?:user(?:name)?|login)\s*[:=]\s*([^
 var passPattern = regexp.MustCompile(`(?i)\b(?:pass(?:word)?|pwd)\s*[:=]\s*([^\s,;]+)`)
 var pairPattern = regexp.MustCompile(`\b([A-Za-z0-9_.-]{1,64}):([^\s,;]{1,128})\b`)
 
+const (
+	webReconBaseBackoffDelay   = 15 * time.Second
+	webReconMaxBackoffDelay    = 5 * time.Minute
+	webReconParallelRetryDelay = 2 * time.Second
+	webReconStallThreshold     = 3
+)
+
+type webReconRespawnState struct {
+	LastPending     int
+	NoProgressCount int
+	NextRetryAt     time.Time
+}
+
 // drainCompletedTasks は完了済みサブタスクの結果を取り出し、テキストとして返す。
 // Brain.Think() の直前に呼ばれ、結果が lastToolOutput に注入される。
 // SubAgent が MaxTurns で力尽きた場合、残タスクがあれば SubAgent を再 spawn する。
@@ -26,6 +40,8 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 	if l.taskMgr == nil {
 		return ""
 	}
+	// Retry web recon ports whose backoff timers have elapsed.
+	l.retryDeferredWebRecon(ctx)
 	completed := l.taskMgr.DrainCompleted()
 	if len(completed) == 0 {
 		return ""
@@ -37,14 +53,8 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 		sb.WriteString("\n")
 
 		// Re-spawn: SubAgent が MaxTurns で力尽きた場合、残タスクがあれば再 spawn
-		if l.reconRunner != nil && l.attackData != nil &&
-			task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
-			if l.attackData.PortHasPendingChildren(task.Metadata.Port) {
-				if portNode := l.attackData.FindPortNode(task.Metadata.Port); portNode != nil {
-					// No respawn cap: as long as pending tasks remain, retry web recon.
-					l.reconRunner.SpawnWebReconForPort(ctx, portNode)
-				}
-			}
+		if task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
+			l.handleWebReconCompletionRespawn(ctx, task.Metadata.Port)
 		}
 
 		if task.Metadata.Phase == "web_recon" && task.Metadata.Port > 0 {
@@ -97,6 +107,129 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 		}
 	}
 	return sb.String()
+}
+
+func (l *Loop) ensureWebReconRespawnState(port int) *webReconRespawnState {
+	if l.webReconRespawn == nil {
+		l.webReconRespawn = make(map[int]*webReconRespawnState)
+	}
+	state, ok := l.webReconRespawn[port]
+	if !ok {
+		state = &webReconRespawnState{}
+		l.webReconRespawn[port] = state
+	}
+	return state
+}
+
+func (l *Loop) clearWebReconRespawnState(port int) {
+	if l.webReconRespawn == nil {
+		return
+	}
+	delete(l.webReconRespawn, port)
+}
+
+func webReconBackoffDelay(noProgressCount int) time.Duration {
+	if noProgressCount <= 0 {
+		noProgressCount = 1
+	}
+	delay := webReconBaseBackoffDelay
+	for i := 1; i < noProgressCount; i++ {
+		delay *= 2
+		if delay >= webReconMaxBackoffDelay {
+			return webReconMaxBackoffDelay
+		}
+	}
+	if delay > webReconMaxBackoffDelay {
+		return webReconMaxBackoffDelay
+	}
+	return delay
+}
+
+func (l *Loop) trySpawnWebReconPort(ctx context.Context, port int) {
+	if l == nil || l.attackData == nil || l.reconRunner == nil {
+		return
+	}
+	if !l.attackData.PortHasPending(port) {
+		l.clearWebReconRespawnState(port)
+		return
+	}
+	portNode := l.attackData.FindPortNode(port)
+	if portNode == nil {
+		l.clearWebReconRespawnState(port)
+		return
+	}
+	state := l.ensureWebReconRespawnState(port)
+	switch l.reconRunner.TrySpawnWebReconForPort(ctx, portNode) {
+	case ReconSpawnStarted:
+		state.NextRetryAt = time.Time{}
+	case ReconSpawnDeferredMaxParallel:
+		state.NextRetryAt = time.Now().Add(webReconParallelRetryDelay)
+	case ReconSpawnNoPending:
+		l.clearWebReconRespawnState(port)
+	case ReconSpawnFailed:
+		delay := webReconBackoffDelay(max(1, state.NoProgressCount))
+		state.NextRetryAt = time.Now().Add(delay)
+	}
+}
+
+func (l *Loop) retryDeferredWebRecon(ctx context.Context) {
+	if l == nil || l.reconRunner == nil || l.attackData == nil || len(l.webReconRespawn) == 0 {
+		return
+	}
+	now := time.Now()
+	for port, state := range l.webReconRespawn {
+		if state == nil {
+			delete(l.webReconRespawn, port)
+			continue
+		}
+		if state.NextRetryAt.IsZero() || now.Before(state.NextRetryAt) {
+			continue
+		}
+		l.trySpawnWebReconPort(ctx, port)
+	}
+}
+
+func (l *Loop) handleWebReconCompletionRespawn(ctx context.Context, port int) {
+	if l == nil || l.reconRunner == nil || l.attackData == nil || port <= 0 {
+		return
+	}
+	pending := l.attackData.CountPendingForPort(port)
+	if pending <= 0 {
+		l.clearWebReconRespawnState(port)
+		return
+	}
+
+	state := l.ensureWebReconRespawnState(port)
+	if state.LastPending > 0 && pending >= state.LastPending {
+		state.NoProgressCount++
+		delay := webReconBackoffDelay(state.NoProgressCount)
+		state.NextRetryAt = time.Now().Add(delay)
+		state.LastPending = pending
+		l.emit(Event{
+			Type:   EventLog,
+			Source: SourceSystem,
+			Message: fmt.Sprintf(
+				"[RECON] No progress on port %d (pending=%d, no_progress=%d). Backoff retry in %s.",
+				port, pending, state.NoProgressCount, delay,
+			),
+		})
+		if state.NoProgressCount >= webReconStallThreshold {
+			l.emit(Event{
+				Type: EventStalled,
+				Message: fmt.Sprintf(
+					"Web recon on port %d appears stalled (no progress %d times). Will keep retrying with backoff.",
+					port, state.NoProgressCount,
+				),
+			})
+		}
+		return
+	}
+
+	// First completion or progress observed: retry immediately.
+	state.LastPending = pending
+	state.NoProgressCount = 0
+	state.NextRetryAt = time.Time{}
+	l.trySpawnWebReconPort(ctx, port)
 }
 
 func (l *Loop) emitServiceIdentifiedFromRecon(ctx context.Context, task *SubTask) int {
@@ -281,6 +414,7 @@ func (l *Loop) emitAttackDomainEvents(ctx context.Context, task *SubTask, kind A
 		service = "unknown"
 	}
 	source := string(kind)
+	domainBusEnabled := l.domainEvents != nil
 
 	seenVuln := make(map[string]struct{})
 	seenCred := make(map[string]struct{})
@@ -307,7 +441,7 @@ func (l *Loop) emitAttackDomainEvents(ctx context.Context, task *SubTask, kind A
 			Impact:          impact,
 			Detail:          strings.TrimSpace(detail),
 		})
-		if l.attackData != nil {
+		if l.attackData != nil && !domainBusEnabled {
 			l.attackData.AddInsight(host, port, Insight{
 				Source: source,
 				Topic:  "exploit:" + vt,
@@ -332,7 +466,7 @@ func (l *Loop) emitAttackDomainEvents(ctx context.Context, task *SubTask, kind A
 			Service:         service,
 			Level:           lvl,
 		})
-		if l.attackData != nil {
+		if l.attackData != nil && !domainBusEnabled {
 			l.attackData.AddInsight(host, port, Insight{
 				Source: source,
 				Topic:  "access_gained",
@@ -376,7 +510,7 @@ func (l *Loop) emitAttackDomainEvents(ctx context.Context, task *SubTask, kind A
 					Evidence:        evidence,
 					Severity:        severity,
 				})
-				if l.attackData != nil {
+				if l.attackData != nil && !domainBusEnabled {
 					treePath := path
 					if treePath == "" {
 						if isHTTPService(service) {
@@ -432,7 +566,7 @@ func (l *Loop) emitAttackDomainEvents(ctx context.Context, task *SubTask, kind A
 				Username:        user,
 				Password:        pass,
 			})
-			if l.attackData != nil {
+			if l.attackData != nil && !domainBusEnabled {
 				l.attackData.AddCredential(host, port, Credential{
 					Service:  credService,
 					Username: user,

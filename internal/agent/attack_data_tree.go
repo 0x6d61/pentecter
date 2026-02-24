@@ -700,6 +700,19 @@ func (t *AttackDataTree) PortHasPending(port int) bool {
 	return false
 }
 
+// CountPendingForPort returns the number of pending recon tasks under the given port.
+func (t *AttackDataTree) CountPendingForPort(port int) int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, node := range t.Ports {
+		if node.Port == port {
+			pending, _, _ := node.countTasks()
+			return pending
+		}
+	}
+	return 0
+}
+
 // SnapshotPorts は現在のポート一覧を値コピーで返す。
 func (t *AttackDataTree) SnapshotPorts() []PortSnapshot {
 	t.mu.RLock()

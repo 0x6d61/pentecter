@@ -214,12 +214,20 @@ func (sa *SmartSubAgent) Run(ctx context.Context, task *SubTask, targetHost stri
 
 		case schema.ActionComplete:
 			// Pending タスクが残っている場合は complete を拒否してループ継続
-			if sa.attackData != nil && sa.attackData.HasPending() {
-				sa.emitLog(task, SourceSystem,
-					fmt.Sprintf("SmartSubAgent %s: complete rejected — %d pending tasks remain",
-						task.ID, sa.attackData.CountPending()))
-				lastOutput = fmt.Sprintf("Cannot complete: %d pending tasks remain. Check RECON INTEL and continue working.", sa.attackData.CountPending())
-				continue
+			if sa.attackData != nil &&
+				task.Metadata.Phase == "web_recon" &&
+				task.Metadata.Port > 0 {
+				portPending := sa.attackData.CountPendingForPort(task.Metadata.Port)
+				if portPending > 0 {
+					sa.emitLog(task, SourceSystem,
+						fmt.Sprintf("SmartSubAgent %s: complete rejected on port %d -- %d pending web recon tasks remain",
+							task.ID, task.Metadata.Port, portPending))
+					lastOutput = fmt.Sprintf(
+						"Cannot complete web_recon on port %d: %d pending tasks remain for this port. Continue recon and retry complete.",
+						task.Metadata.Port, portPending,
+					)
+					continue
+				}
 			}
 			task.Status = TaskStatusCompleted
 			task.CompletedAt = time.Now()
