@@ -199,7 +199,7 @@ func TestPrintWelcome_NoTargets(t *testing.T) {
 	if output == "" {
 		t.Error("expected non-empty welcome output")
 	}
-	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /copy, /skip-recon, /fold, /status") {
+	if !strings.Contains(output, "Commands: /targets, /model, /attackdata, /skip-recon, /fold, /status") {
 		t.Error("welcome output should include command list")
 	}
 	if !strings.Contains(output, "Input: ip/domain or /target HOST") {
@@ -219,7 +219,7 @@ func TestPrintWelcome_WithTargets(t *testing.T) {
 	if output == "" {
 		t.Error("expected non-empty welcome output")
 	}
-	if !strings.Contains(output, "Commands: /targets, /model, /approve, /attackdata, /copy, /skip-recon, /fold, /status") {
+	if !strings.Contains(output, "Commands: /targets, /model, /attackdata, /skip-recon, /fold, /status") {
 		t.Error("welcome output should include command list")
 	}
 	if !strings.Contains(output, "Input: ip/domain or /target HOST") {
@@ -586,73 +586,47 @@ func TestPrintAttackData_SanitizesAndTruncatesRows(t *testing.T) {
 	}
 }
 
-func TestHandleKeyEvent_CtrlY_EntersCopyMode(t *testing.T) {
+func TestHandleKeyEvent_CtrlT_TogglesThinkingExpanded(t *testing.T) {
 	a := NewApp(nil)
-	a.width = 80
-	a.height = 24
-	a.globalLogs = []string{"alpha", "beta", "gamma"}
-
-	quit := a.handleKeyEvent(tcell.NewEventKey(tcell.KeyCtrlY, 0, tcell.ModNone))
-	if quit {
-		t.Fatal("Ctrl+Y should not request quit")
+	if !a.thinkingExpanded {
+		t.Fatal("thinkingExpanded should start as true")
 	}
-	if a.inputMode != ModeCopy {
-		t.Fatalf("expected ModeCopy after Ctrl+Y, got %d", a.inputMode)
+
+	quit := a.handleKeyEvent(tcell.NewEventKey(tcell.KeyCtrlT, 0, tcell.ModNone))
+	if quit {
+		t.Fatal("Ctrl+T should not request quit")
+	}
+	if a.thinkingExpanded {
+		t.Fatal("expected thinkingExpanded=false after first Ctrl+T")
+	}
+
+	quit = a.handleKeyEvent(tcell.NewEventKey(tcell.KeyCtrlT, 0, tcell.ModNone))
+	if quit {
+		t.Fatal("Ctrl+T should not request quit")
+	}
+	if !a.thinkingExpanded {
+		t.Fatal("expected thinkingExpanded=true after second Ctrl+T")
 	}
 }
 
-func TestCopyMode_ExitRestoresPreviousMode(t *testing.T) {
+func TestHandleKeyEvent_ShiftEnter_InsertsNewline(t *testing.T) {
 	a := NewApp(nil)
-	a.width = 80
-	a.height = 24
-	a.inputMode = ModeProposal
-	a.globalLogs = []string{"alpha", "beta"}
+	a.inputLines = []string{"hello"}
+	a.cursorLine = 0
+	a.cursorCol = 5
 
-	quit := a.handleKeyEvent(tcell.NewEventKey(tcell.KeyCtrlY, 0, tcell.ModNone))
+	quit := a.handleKeyEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift))
 	if quit {
-		t.Fatal("Ctrl+Y should not request quit")
+		t.Fatal("Shift+Enter should not request quit")
 	}
-	if a.inputMode != ModeCopy {
-		t.Fatalf("expected ModeCopy after Ctrl+Y, got %d", a.inputMode)
+	if len(a.inputLines) != 2 {
+		t.Fatalf("expected 2 input lines, got %d", len(a.inputLines))
 	}
-
-	quit = a.handleKeyEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone))
-	if quit {
-		t.Fatal("Esc in copy mode should not request quit")
+	if a.inputLines[0] != "hello" || a.inputLines[1] != "" {
+		t.Fatalf("unexpected multiline buffer: %#v", a.inputLines)
 	}
-	if a.inputMode != ModeProposal {
-		t.Fatalf("expected mode to restore to ModeProposal, got %d", a.inputMode)
-	}
-}
-
-func TestCopyMode_YankSelectionToClipboard(t *testing.T) {
-	sim := tcell.NewSimulationScreen("")
-	if err := sim.Init(); err != nil {
-		t.Fatalf("simulation screen init failed: %v", err)
-	}
-	defer sim.Fini()
-
-	a := NewApp(nil)
-	a.SetScreen(sim)
-	a.width = 80
-	a.height = 24
-	a.globalLogs = []string{"line-a", "line-b", "line-c"}
-
-	a.mu.Lock()
-	a.enterCopyModeLocked()
-	if a.copyCursor != 2 {
-		a.mu.Unlock()
-		t.Fatalf("expected copy cursor at latest line index 2, got %d", a.copyCursor)
-	}
-	a.copyAnchor = a.copyCursor
-	a.moveCopyCursorLocked(-1)
-	a.yankCopySelectionLocked()
-	a.exitCopyModeLocked()
-	a.mu.Unlock()
-
-	got := string(sim.GetClipboardData())
-	if got != "line-b\nline-c" {
-		t.Fatalf("unexpected yanked clipboard content: %q", got)
+	if a.cursorLine != 1 || a.cursorCol != 0 {
+		t.Fatalf("expected cursor at new line head, got line=%d col=%d", a.cursorLine, a.cursorCol)
 	}
 }
 

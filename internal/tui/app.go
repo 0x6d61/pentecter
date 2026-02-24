@@ -87,30 +87,26 @@ type App struct {
 	selectIdx   int
 	selectCb    func(a *App, value string)
 
-	// Copy mode state (line-based selection over wrapped output lines).
-	copyCursor   int
-	copyAnchor   int
-	copyLastYank string
-	copyPrevMode InputMode
-
 	// Display state
-	logsExpanded bool
-	outputScroll int  // number of lines scrolled up from bottom in output pane
-	outputFollow bool // true = keep following the newest output line
+	logsExpanded     bool
+	thinkingExpanded bool
+	outputScroll     int  // number of lines scrolled up from bottom in output pane
+	outputFollow     bool // true = keep following the newest output line
 
 	// When follow is disabled, keep the current viewport stable as new logs arrive.
 	outputPrevWrapped   int
 	outputPrevWrapWidth int
 
 	// Output render cache to avoid full re-wrap on every keypress.
-	outputVersion           uint64
-	outputCacheVersion      uint64
-	outputCacheWidth        int
-	outputCacheSelected     int
-	outputCacheInputMode    InputMode
-	outputCacheLogsExpanded bool
-	outputCacheSpinnerSig   int64
-	outputCacheLines        []outputLine
+	outputVersion               uint64
+	outputCacheVersion          uint64
+	outputCacheWidth            int
+	outputCacheSelected         int
+	outputCacheInputMode        InputMode
+	outputCacheLogsExpanded     bool
+	outputCacheThinkingExpanded bool
+	outputCacheSpinnerSig       int64
+	outputCacheLines            []outputLine
 
 	// Live input buffer for tcell-based editing
 	inputLines []string
@@ -153,16 +149,15 @@ func NewApp(targets []*agent.Target) *App {
 	}
 
 	a := &App{
-		targets:         targets,
-		selected:        selected,
-		agentApproveMap: make(map[int]chan<- bool),
-		agentUserMsgMap: make(map[int]chan<- string),
-		spinnerFrames:   []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
-		inputLines:      []string{""},
-		uiEvents:        make(chan uiEventMsg, 1024),
-		outputFollow:    true,
-		copyAnchor:      -1,
-		copyPrevMode:    ModeNormal,
+		targets:          targets,
+		selected:         selected,
+		agentApproveMap:  make(map[int]chan<- bool),
+		agentUserMsgMap:  make(map[int]chan<- string),
+		spinnerFrames:    []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+		inputLines:       []string{""},
+		uiEvents:         make(chan uiEventMsg, 1024),
+		outputFollow:     true,
+		thinkingExpanded: true,
 	}
 	a.typedInput.Store("")
 	return a
@@ -390,11 +385,12 @@ func (a *App) scheduleDeferredDraw(delay time.Duration) {
 	})
 }
 
-func isCtrlEnter(e *tcell.EventKey) bool {
-	if e.Key() == tcell.KeyCtrlJ {
-		return true
+func isMultilineEnter(e *tcell.EventKey) bool {
+	if e.Key() != tcell.KeyEnter {
+		return false
 	}
-	return e.Key() == tcell.KeyEnter && (e.Modifiers()&tcell.ModCtrl) != 0
+	m := e.Modifiers()
+	return (m&tcell.ModCtrl) != 0 || (m&tcell.ModShift) != 0
 }
 
 func (a *App) handleKeyEvent(e *tcell.EventKey) bool {
@@ -410,13 +406,8 @@ func (a *App) handleKeyEvent(e *tcell.EventKey) bool {
 		a.mu.Unlock()
 		return false
 
-	case tcell.KeyCtrlY:
-		if a.inputMode == ModeCopy {
-			a.yankCopySelectionLocked()
-			a.exitCopyModeLocked()
-		} else {
-			a.enterCopyModeLocked()
-		}
+	case tcell.KeyCtrlT:
+		a.thinkingExpanded = !a.thinkingExpanded
 		a.syncLegacyInputStateLocked()
 		a.mu.Unlock()
 		return false
@@ -439,16 +430,9 @@ func (a *App) handleKeyEvent(e *tcell.EventKey) bool {
 		}
 	}
 
-	if a.inputMode == ModeCopy {
-		a.handleCopyModeKeyLocked(e)
-		a.syncLegacyInputStateLocked()
-		a.mu.Unlock()
-		return false
-	}
-
 	switch e.Key() {
 	case tcell.KeyEnter:
-		if a.inputMode == ModeNormal && isCtrlEnter(e) {
+		if a.inputMode == ModeNormal && isMultilineEnter(e) {
 			a.insertNewlineLocked()
 		} else {
 			text := strings.Join(a.inputLines, "\n")
@@ -541,260 +525,6 @@ func (a *App) handleMouseEvent(e *tcell.EventMouse) bool {
 	changed = a.outputScroll != beforeScroll || a.outputFollow != beforeFollow
 	a.mu.Unlock()
 	return changed
-}
-
-func (a *App) enterCopyModeLocked() {
-	if a.inputMode == ModeCopy {
-		return
-	}
-	a.copyPrevMode = a.inputMode
-	a.inputMode = ModeCopy
-	a.copyAnchor = -1
-
-	width := a.width
-	if width <= 0 {
-		width = defaultWidth
-	}
-	lines := a.wrappedOutputLinesLocked(width)
-	if len(lines) == 0 {
-		a.copyCursor = 0
-		a.outputScroll = 0
-		a.outputFollow = true
-		return
-	}
-
-	cursor := len(lines) - 1 - a.outputScroll
-	if cursor < 0 {
-		cursor = 0
-	}
-	if cursor >= len(lines) {
-		cursor = len(lines) - 1
-	}
-	a.copyCursor = cursor
-	a.ensureCopyCursorVisibleLocked(len(lines))
-}
-
-func (a *App) exitCopyModeLocked() {
-	if a.inputMode != ModeCopy {
-		return
-	}
-	restoreMode := a.copyPrevMode
-	if restoreMode == ModeCopy {
-		restoreMode = ModeNormal
-	}
-	a.inputMode = restoreMode
-	a.copyPrevMode = ModeNormal
-	a.copyAnchor = -1
-}
-
-func (a *App) handleCopyModeKeyLocked(e *tcell.EventKey) {
-	switch e.Key() {
-	case tcell.KeyEscape:
-		a.exitCopyModeLocked()
-		return
-	case tcell.KeyUp:
-		a.moveCopyCursorLocked(-1)
-		return
-	case tcell.KeyDown:
-		a.moveCopyCursorLocked(1)
-		return
-	case tcell.KeyPgUp:
-		a.moveCopyCursorLocked(-a.outputPageStepLocked())
-		return
-	case tcell.KeyPgDn:
-		a.moveCopyCursorLocked(a.outputPageStepLocked())
-		return
-	case tcell.KeyHome:
-		a.copyCursor = 0
-	case tcell.KeyEnd:
-		width := a.width
-		if width <= 0 {
-			width = defaultWidth
-		}
-		lines := a.wrappedOutputLinesLocked(width)
-		if len(lines) > 0 {
-			a.copyCursor = len(lines) - 1
-		}
-	case tcell.KeyRune:
-		switch strings.ToLower(string(e.Rune())) {
-		case "q":
-			a.exitCopyModeLocked()
-			return
-		case " ":
-			if a.copyAnchor >= 0 {
-				a.copyAnchor = -1
-			} else {
-				a.copyAnchor = a.copyCursor
-			}
-			return
-		case "y":
-			a.yankCopySelectionLocked()
-			a.exitCopyModeLocked()
-			return
-		}
-	default:
-		return
-	}
-
-	width := a.width
-	if width <= 0 {
-		width = defaultWidth
-	}
-	lines := a.wrappedOutputLinesLocked(width)
-	if len(lines) <= 0 {
-		a.copyCursor = 0
-		return
-	}
-	if a.copyCursor < 0 {
-		a.copyCursor = 0
-	}
-	if a.copyCursor >= len(lines) {
-		a.copyCursor = len(lines) - 1
-	}
-	a.ensureCopyCursorVisibleLocked(len(lines))
-}
-
-func (a *App) moveCopyCursorLocked(delta int) {
-	width := a.width
-	if width <= 0 {
-		width = defaultWidth
-	}
-	lines := a.wrappedOutputLinesLocked(width)
-	if len(lines) == 0 {
-		a.copyCursor = 0
-		return
-	}
-
-	a.copyCursor += delta
-	if a.copyCursor < 0 {
-		a.copyCursor = 0
-	}
-	if a.copyCursor >= len(lines) {
-		a.copyCursor = len(lines) - 1
-	}
-	a.ensureCopyCursorVisibleLocked(len(lines))
-}
-
-func (a *App) yankCopySelectionLocked() {
-	width := a.width
-	if width <= 0 {
-		width = defaultWidth
-	}
-	lines := a.wrappedOutputLinesLocked(width)
-	start, end, ok := a.copySelectionBoundsLocked(len(lines))
-	if !ok {
-		msg := "Nothing to yank."
-		if t := a.activeTargetLocked(); t != nil {
-			t.AddBlock(agent.NewSystemBlock(msg))
-		} else {
-			a.globalLogs = append(a.globalLogs, msg)
-		}
-		a.invalidateOutputCacheLocked()
-		return
-	}
-
-	buf := make([]string, 0, end-start+1)
-	for i := start; i <= end; i++ {
-		buf = append(buf, lines[i].text)
-	}
-	yanked := strings.Join(buf, "\n")
-	a.copyLastYank = yanked
-	if a.screen != nil {
-		a.screen.SetClipboard([]byte(yanked))
-	}
-
-	msg := fmt.Sprintf("Yanked %d line(s) to clipboard (terminal support dependent).", end-start+1)
-	if t := a.activeTargetLocked(); t != nil {
-		t.AddBlock(agent.NewSystemBlock(msg))
-	} else {
-		a.globalLogs = append(a.globalLogs, msg)
-	}
-	a.invalidateOutputCacheLocked()
-}
-
-func (a *App) copySelectionBoundsLocked(total int) (int, int, bool) {
-	if total <= 0 {
-		return 0, 0, false
-	}
-
-	cursor := a.copyCursor
-	if cursor < 0 {
-		cursor = 0
-	}
-	if cursor >= total {
-		cursor = total - 1
-	}
-
-	anchor := a.copyAnchor
-	if anchor < 0 || anchor >= total {
-		anchor = cursor
-	}
-
-	start := anchor
-	end := cursor
-	if start > end {
-		start, end = end, start
-	}
-	return start, end, true
-}
-
-func (a *App) ensureCopyCursorVisibleLocked(totalLines int) {
-	if totalLines <= 0 {
-		a.outputScroll = 0
-		a.outputFollow = true
-		return
-	}
-
-	w := a.width
-	if w <= 0 {
-		w = defaultWidth
-	}
-	h := a.height
-	if h <= 0 {
-		h = defaultHeight
-	}
-	outputHeight := a.outputPaneHeightLocked(w, h)
-	if outputHeight <= 0 {
-		return
-	}
-
-	maxScroll := totalLines - outputHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if a.outputScroll < 0 {
-		a.outputScroll = 0
-	}
-	if a.outputScroll > maxScroll {
-		a.outputScroll = maxScroll
-	}
-
-	start, end := outputWindowRange(totalLines, outputHeight, a.outputScroll)
-	if a.copyCursor < start {
-		newStart := a.copyCursor
-		if newStart < 0 {
-			newStart = 0
-		}
-		newEnd := newStart + outputHeight
-		if newEnd > totalLines {
-			newEnd = totalLines
-		}
-		a.outputScroll = totalLines - newEnd
-	} else if a.copyCursor >= end {
-		newEnd := a.copyCursor + 1
-		if newEnd > totalLines {
-			newEnd = totalLines
-		}
-		a.outputScroll = totalLines - newEnd
-	}
-
-	if a.outputScroll < 0 {
-		a.outputScroll = 0
-	}
-	if a.outputScroll > maxScroll {
-		a.outputScroll = maxScroll
-	}
-	a.outputFollow = a.outputScroll == 0
 }
 
 func (a *App) outputPaneHeightLocked(width, height int) int {
@@ -1121,6 +851,7 @@ func (a *App) wrappedOutputLinesLocked(width int) []outputLine {
 		a.outputCacheSelected != a.selected ||
 		a.outputCacheInputMode != a.inputMode ||
 		a.outputCacheLogsExpanded != a.logsExpanded ||
+		a.outputCacheThinkingExpanded != a.thinkingExpanded ||
 		a.outputCacheSpinnerSig != spinnerSig
 
 	if needsRebuild {
@@ -1130,6 +861,7 @@ func (a *App) wrappedOutputLinesLocked(width int) []outputLine {
 		a.outputCacheSelected = a.selected
 		a.outputCacheInputMode = a.inputMode
 		a.outputCacheLogsExpanded = a.logsExpanded
+		a.outputCacheThinkingExpanded = a.thinkingExpanded
 		a.outputCacheSpinnerSig = spinnerSig
 	}
 	return a.outputCacheLines
@@ -1238,10 +970,6 @@ func (a *App) draw() {
 	}
 
 	status := ""
-	copyMode := false
-	copyCursor := -1
-	copyStart, copyEnd := 0, 0
-	copyHasRange := false
 	a.mu.Lock()
 	if outputScroll != outputScrollOrig || outputFollow != outputFollowOrig {
 		a.outputScroll = outputScroll
@@ -1250,9 +978,6 @@ func (a *App) draw() {
 	a.outputPrevWrapped = len(outputLines)
 	a.outputPrevWrapWidth = w
 	status = a.buildStatusTextLocked()
-	copyMode = a.inputMode == ModeCopy
-	copyCursor = a.copyCursor
-	copyStart, copyEnd, copyHasRange = a.copySelectionBoundsLocked(len(outputLines))
 	a.mu.Unlock()
 
 	visibleStart, visibleEnd := outputWindowRange(len(outputLines), outputHeight, outputScroll)
@@ -1276,15 +1001,6 @@ func (a *App) draw() {
 			style = spinnerStyle
 		case outputLineUser:
 			style = userLineStyle
-		}
-		if copyMode {
-			absIdx := visibleStart + y
-			if copyHasRange && absIdx >= copyStart && absIdx <= copyEnd {
-				style = style.Reverse(true)
-			}
-			if absIdx == copyCursor {
-				style = style.Reverse(true).Underline(true)
-			}
 		}
 		drawLine(s, y, line.text, style, w)
 	}
@@ -1363,7 +1079,7 @@ func (a *App) buildOutputLinesLocked(width int) []string {
 			frame = a.spinnerFrames[int(a.spinnerIdx.Load())%len(a.spinnerFrames)]
 		}
 
-		rendered := renderBlocks(blocks, width, a.logsExpanded, frame)
+		rendered := renderBlocks(blocks, width, a.logsExpanded, a.thinkingExpanded, frame)
 		rendered = ansiStripRegex.ReplaceAllString(rendered, "")
 		rendered = strings.TrimSuffix(rendered, "\n")
 		if rendered != "" {
@@ -1410,7 +1126,7 @@ func (a *App) buildOutputStyledLinesLocked(width int) []outputLine {
 		}
 
 		for _, b := range blocks {
-			rendered := renderBlockCached(b, width, a.logsExpanded, frame)
+			rendered := renderBlockCached(b, width, a.logsExpanded, a.thinkingExpanded, frame)
 			rendered = ansiStripRegex.ReplaceAllString(rendered, "")
 			rendered = strings.TrimSuffix(rendered, "\n")
 			if rendered == "" {
@@ -1459,8 +1175,8 @@ func outputLineKindForBlock(b *agent.DisplayBlock) outputLineKind {
 	}
 }
 
-func renderBlockCached(b *agent.DisplayBlock, width int, expanded bool, spinnerFrame string) string {
-	if b.RenderedCache != "" && b.CacheWidth == width && b.CacheExpanded == expanded {
+func renderBlockCached(b *agent.DisplayBlock, width int, expanded bool, thinkingExpanded bool, spinnerFrame string) string {
+	if b.RenderedCache != "" && b.CacheWidth == width && b.CacheExpanded == expanded && b.CacheThinkingExpanded == thinkingExpanded {
 		switch b.Type {
 		case agent.BlockCommand:
 			if b.Completed {
@@ -1479,7 +1195,7 @@ func renderBlockCached(b *agent.DisplayBlock, width int, expanded bool, spinnerF
 		}
 	}
 
-	rendered := renderBlock(b, width, expanded, spinnerFrame)
+	rendered := renderBlock(b, width, expanded, thinkingExpanded, spinnerFrame)
 	if rendered == "" {
 		return rendered
 	}
@@ -1500,6 +1216,7 @@ func renderBlockCached(b *agent.DisplayBlock, width int, expanded bool, spinnerF
 		b.RenderedCache = rendered
 		b.CacheWidth = width
 		b.CacheExpanded = expanded
+		b.CacheThinkingExpanded = thinkingExpanded
 	}
 	return rendered
 }
@@ -1533,8 +1250,6 @@ func (a *App) modeHintLocked() string {
 		}
 	case ModeConfirmQuit:
 		return "Quit Pentecter? [y/n]"
-	case ModeCopy:
-		return "copy mode [up/down, space mark, y yank, q/esc close]"
 	}
 	return ""
 }
@@ -1764,19 +1479,6 @@ func (a *App) buildStatusTextLocked() string {
 	if a.outputScroll > 0 {
 		parts = append(parts, fmt.Sprintf("scroll:%d (PgDn/Ctrl+End)", a.outputScroll))
 	}
-	if a.inputMode == ModeCopy {
-		width := a.width
-		if width <= 0 {
-			width = defaultWidth
-		}
-		lines := a.wrappedOutputLinesLocked(width)
-		start, end, ok := a.copySelectionBoundsLocked(len(lines))
-		if ok {
-			parts = append(parts, fmt.Sprintf("COPY %d-%d y:yank q:exit", start+1, end+1))
-		} else {
-			parts = append(parts, "COPY y:yank q:exit")
-		}
-	}
 
 	if len(parts) == 0 {
 		return ""
@@ -1883,7 +1585,8 @@ func (a *App) printWelcome() {
 	}
 	lines = append(lines,
 		"Input: ip/domain or /target HOST",
-		"Commands: /targets, /model, /approve, /attackdata, /copy, /skip-recon, /fold, /status",
+		"Commands: /targets, /model, /attackdata, /skip-recon, /fold, /status",
+		"Keys: Ctrl+O toggle tool output, Ctrl+T toggle thinking blocks",
 	)
 	if a.CurrentModel != "" {
 		lines = append(lines, fmt.Sprintf("Model: %s/%s", a.CurrentProvider, a.CurrentModel))
