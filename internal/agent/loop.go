@@ -251,17 +251,6 @@ func (l *Loop) Run(ctx context.Context) {
 			l.target.SetStatusSafe(StatusScanning)
 		}
 
-		// Phase gate: Recon SubAgent 実行中は Brain.Think() を呼ばず完了を待つ。
-		// ユーザー入力は常に受け付ける。完了タスクの drain も定期的に行う。
-		if l.shouldGateForRecon(userMsg) {
-			l.emit(Event{Type: EventLog, Source: SourceSystem,
-				Message: "Phase gate: waiting for HTTPAgent to complete recon..."})
-			userMsg = l.waitForReconGate(ctx)
-			if userMsg == "" && ctx.Err() != nil {
-				return // context cancelled
-			}
-		}
-
 		l.emit(Event{Type: EventTurnStart, TurnNumber: l.turnCount})
 
 		// 完了済みサブタスクの結果を自動注入（Push モデル）
@@ -922,44 +911,6 @@ func (l *Loop) buildReconQueue() string {
 	}
 	l.attackData.UpdateAllChecklists(l.extractCommandStrings())
 	return l.attackData.RenderIntel()
-}
-
-// shouldGateForRecon は Phase gate を有効にすべきかを判定する。
-// AttackDataTree が存在し、かつ Recon SubAgent が実行中（Active > 0）で、
-// ユーザーメッセージが無い場合にゲートを有効にする。
-func (l *Loop) shouldGateForRecon(userMsg string) bool {
-	return l.attackData != nil && l.attackData.Active() > 0 && userMsg == ""
-}
-
-// waitForReconGate は Recon 完了またはユーザー入力を待つブロッキング関数。
-// 2秒ごとに Recon 状態と完了タスクをチェックする。
-// 戻り値はユーザーメッセージ（なければ空文字）。
-func (l *Loop) waitForReconGate(ctx context.Context) string {
-	for {
-		// 完了タスクを drain（CompleteAllPortTasks が呼ばれ Active が減る可能性がある）
-		if completedOutput := l.drainCompletedTasks(ctx); completedOutput != "" {
-			l.lastToolOutput = completedOutput
-			return ""
-		}
-
-		// Recon が完了したらゲート解除
-		if l.attackData.Active() <= 0 {
-			return ""
-		}
-
-		// ユーザー入力 or コンテキストキャンセル or タイムアウトを待つ
-		select {
-		case <-ctx.Done():
-			return ""
-		case msg := <-l.userMsg:
-			if l.skillsReg != nil {
-				msg = l.skillsReg.Expand(msg)
-			}
-			return msg
-		case <-time.After(2 * time.Second):
-			// 定期チェック: 次のループで Active() を再確認
-		}
-	}
 }
 
 func (l *Loop) buildSnapshot() string {

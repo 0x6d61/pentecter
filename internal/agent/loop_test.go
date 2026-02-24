@@ -18,8 +18,8 @@ import (
 type mockBrain struct {
 	actions []*schema.Action
 	idx     int
-	inputs  []brain.Input // Think() に渡された Input を記録
-	errors  []error       // non-nil entries cause Think() to return error
+	inputs  []brain.Input     // Think() に渡された Input を記録
+	errors  []error           // non-nil entries cause Think() to return error
 	onThink func(callIdx int) // Think() 呼び出し時に実行されるコールバック（テスト同期用）
 }
 
@@ -2084,12 +2084,12 @@ func TestTeam_AddTarget_Duplicate_AfterStart(t *testing.T) {
 }
 
 // =============================================================================
-// Phase Gate Tests
+// No Phase Gate Tests
 // =============================================================================
 
-// TestLoop_PhaseGate_BlocksDuringRecon tests that Brain.Think() is NOT called
-// while recon SubAgents are active.
-func TestLoop_PhaseGate_BlocksDuringRecon(t *testing.T) {
+// TestLoop_NoPhaseGate_DoesNotBlockDuringRecon tests that Brain.Think() is
+// called even while recon SubAgents are active.
+func TestLoop_NoPhaseGate_DoesNotBlockDuringRecon(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 
 	thinkCalled := make(chan struct{}, 10)
@@ -2121,27 +2121,24 @@ func TestLoop_PhaseGate_BlocksDuringRecon(t *testing.T) {
 		}
 	}()
 
-	// Brain.Think() should NOT be called while recon is active
+	// Brain.Think() should be called even while recon is active
 	select {
 	case <-thinkCalled:
-		t.Fatal("Brain.Think() was called while recon is active — phase gate should block it")
+		// expected
 	case <-time.After(2 * time.Second):
-		// Good — Think was not called
+		t.Fatal("Brain.Think() was not called while recon is active")
 	}
 	cancel()
 }
 
-// TestLoop_PhaseGate_UnblocksOnUserMsg tests that user message unblocks the gate.
-func TestLoop_PhaseGate_UnblocksOnUserMsg(t *testing.T) {
+// TestLoop_NoPhaseGate_UserMsgPassedDuringRecon tests that user messages are
+// passed to Brain while recon is active.
+func TestLoop_NoPhaseGate_UserMsgPassedDuringRecon(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 
-	thinkCalled := make(chan struct{}, 10)
 	mb := &mockBrain{
 		actions: []*schema.Action{
 			{Thought: "responding to user", Action: schema.ActionComplete},
-		},
-		onThink: func(_ int) {
-			thinkCalled <- struct{}{}
 		},
 	}
 
@@ -2153,88 +2150,25 @@ func TestLoop_PhaseGate_UnblocksOnUserMsg(t *testing.T) {
 	tree.StartPortRecon(tree.Ports[0])
 	loop.WithAttackData(tree)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go loop.Run(ctx)
-
-	// Wait a bit, then send user message
-	time.Sleep(500 * time.Millisecond)
+	// 先にユーザー入力を積む（ゲートなしでも通常どおり反映される）
 	userMsg <- "what is the status?"
 
-	// Brain.Think() should be called after user message unblocks the gate
-	select {
-	case <-thinkCalled:
-		// Good — user message unblocked the gate
-		// Verify the user message was passed to Brain
-		if len(mb.inputs) > 0 {
-			lastInput := mb.inputs[len(mb.inputs)-1]
-			if lastInput.UserMessage == "" {
-				t.Error("UserMessage should be non-empty after gate unblock")
-			}
-		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("Brain.Think() was never called — user message should unblock the phase gate")
-	}
-
-	// Wait for completion
-	deadline := time.After(3 * time.Second)
-	for {
-		select {
-		case e := <-events:
-			if e.Type == agent.EventComplete {
-				return
-			}
-		case <-deadline:
-			t.Fatal("timeout waiting for EventComplete")
-		}
-	}
-}
-
-// TestLoop_PhaseGate_UnblocksWhenReconCompletes tests that the gate unblocks
-// when all recon SubAgents finish (Active goes to 0).
-func TestLoop_PhaseGate_UnblocksWhenReconCompletes(t *testing.T) {
-	target := agent.NewTarget(1, "10.0.0.1")
-
-	thinkCalled := make(chan struct{}, 10)
-	mb := &mockBrain{
-		actions: []*schema.Action{
-			{Thought: "recon done, analyzing", Action: schema.ActionComplete},
-		},
-		onThink: func(_ int) {
-			thinkCalled <- struct{}{}
-		},
-	}
-
-	loop, events, _, _ := newTestLoop(target, mb)
-
-	// Set up AttackDataTree with active recon
-	tree := agent.NewAttackDataTree("10.0.0.1", 2, 0)
-	tree.AddPort(80, "http", "Apache")
-	tree.StartPortRecon(tree.Ports[0])
-	loop.WithAttackData(tree)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go loop.Run(ctx)
 
-	// Wait a bit, then simulate recon completion
-	time.Sleep(500 * time.Millisecond)
-	tree.CompleteAllPortTasks(80)
-
-	// Brain.Think() should be called after recon completes
-	select {
-	case <-thinkCalled:
-		// Good — recon completion unblocked the gate
-	case <-time.After(4 * time.Second):
-		t.Fatal("Brain.Think() was never called — recon completion should unblock the phase gate")
-	}
-
 	// Wait for completion
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
 		case e := <-events:
 			if e.Type == agent.EventComplete {
+				if len(mb.inputs) == 0 {
+					t.Fatal("expected at least one Think() call")
+				}
+				if mb.inputs[0].UserMessage == "" {
+					t.Fatal("UserMessage should be passed to Brain during active recon")
+				}
 				return
 			}
 		case <-deadline:
@@ -2243,9 +2177,8 @@ func TestLoop_PhaseGate_UnblocksWhenReconCompletes(t *testing.T) {
 	}
 }
 
-// TestLoop_PhaseGate_NoGateWithoutAttackData tests that the gate does NOT
-// activate when AttackDataTree is nil.
-func TestLoop_PhaseGate_NoGateWithoutAttackData(t *testing.T) {
+// TestLoop_NoPhaseGate_NoAttackData tests normal completion when AttackDataTree is nil.
+func TestLoop_NoPhaseGate_NoAttackData(t *testing.T) {
 	target := agent.NewTarget(1, "10.0.0.1")
 
 	mb := &mockBrain{
@@ -2255,14 +2188,14 @@ func TestLoop_PhaseGate_NoGateWithoutAttackData(t *testing.T) {
 	}
 
 	loop, events, _, _ := newTestLoop(target, mb)
-	// Do NOT set AttackData — no gate should activate
-	_ = loop // suppress unused warning
+	// Do NOT set AttackData.
+	_ = loop
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go loop.Run(ctx)
 
-	// Should complete normally without blocking
+	// Should complete normally.
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
@@ -2271,7 +2204,7 @@ func TestLoop_PhaseGate_NoGateWithoutAttackData(t *testing.T) {
 				return
 			}
 		case <-deadline:
-			t.Fatal("timeout — loop should complete normally without AttackData")
+			t.Fatal("timeout — loop should complete normally")
 		}
 	}
 }
