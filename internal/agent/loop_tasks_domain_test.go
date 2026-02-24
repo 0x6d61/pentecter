@@ -46,6 +46,17 @@ func TestDrainCompletedTasks_WebReconComplete_OnlyWhenNoPending(t *testing.T) {
 func TestDrainCompletedTasks_WebReconComplete_WhenNoPending(t *testing.T) {
 	tree := NewAttackDataTree("10.0.0.1", 2, 3)
 	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/login", 200)
+	tree.AddParameter("10.0.0.1", 80, "/login", "username", "query")
+	// 子ノードに pending が残っていると WebReconComplete は emit されないため、
+	// このケースでは「最終完了相当」として child task を complete に寄せる。
+	if len(tree.Ports[0].Children) > 0 {
+		child := tree.Ports[0].Children[0]
+		child.SetAttackDataStatusForTest(TaskEndpointEnum, StatusComplete)
+		child.SetAttackDataStatusForTest(TaskParamFuzz, StatusComplete)
+		child.SetAttackDataStatusForTest(TaskValueFuzz, StatusComplete)
+		child.SetAttackDataStatusForTest(TaskProfiling, StatusComplete)
+	}
 	port := tree.Ports[0]
 	if !tree.StartPortRecon(port) {
 		t.Fatal("StartPortRecon should succeed")
@@ -63,13 +74,33 @@ func TestDrainCompletedTasks_WebReconComplete_WhenNoPending(t *testing.T) {
 	events := drainDomainEvents(domainEvents)
 
 	hasWebReconComplete := false
+	hasEndpoint := false
+	hasParam := false
 	for _, evt := range events {
-		if _, ok := evt.(WebReconComplete); ok {
+		if wr, ok := evt.(WebReconComplete); ok {
 			hasWebReconComplete = true
+			for _, ep := range wr.Endpoints {
+				if ep.Path == "/login" {
+					hasEndpoint = true
+					break
+				}
+			}
+			for _, p := range wr.Params {
+				if p.Path == "/login" && p.Name == "username" {
+					hasParam = true
+					break
+				}
+			}
 		}
 	}
 	if !hasWebReconComplete {
 		t.Fatal("expected WebReconComplete event when no pending tasks remain")
+	}
+	if !hasEndpoint {
+		t.Fatal("expected endpoint snapshot in WebReconComplete")
+	}
+	if !hasParam {
+		t.Fatal("expected parameter snapshot in WebReconComplete")
 	}
 }
 

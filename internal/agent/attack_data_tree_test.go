@@ -2772,3 +2772,46 @@ func TestCompleteAllPortTasks_DecrementsActive_WithPendingChildrenOnly(t *testin
 		t.Error("PortHasPendingChildren should remain true")
 	}
 }
+
+func TestSnapshotWebSurface(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(80, "http", "Apache")
+	tree.AddEndpointWithStatus("10.0.0.1", 80, "/", "/login", 200)
+	tree.AddParameter("10.0.0.1", 80, "/login", "username", "query")
+	tree.AddVhost("10.0.0.1", 80, "admin.10.0.0.1")
+
+	endpoints, params, vhosts := tree.SnapshotWebSurface(80)
+
+	foundEndpoint := false
+	for _, ep := range endpoints {
+		if ep.Path == "/login" {
+			foundEndpoint = true
+			break
+		}
+	}
+	if !foundEndpoint {
+		t.Fatal("expected /login endpoint in snapshot")
+	}
+
+	foundParam := false
+	for _, p := range params {
+		if p.Path == "/login" && p.Name == "username" && p.ParamType == "query" {
+			foundParam = true
+			break
+		}
+	}
+	if !foundParam {
+		t.Fatal("expected username parameter in snapshot")
+	}
+
+	foundVhost := false
+	for _, v := range vhosts {
+		if v == "admin.10.0.0.1" {
+			foundVhost = true
+			break
+		}
+	}
+	if !foundVhost {
+		t.Fatal("expected discovered vhost in snapshot")
+	}
+}

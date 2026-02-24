@@ -245,6 +245,124 @@ func TestMainCoordinator_DeferredPort_RetriedOnWebReconAgentComplete(t *testing.
 	}, "deferred port should be retried when slot is free")
 }
 
+func TestMainCoordinator_WebReconComplete_RoutesToWebAttack(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 8)
+	tm := newCoordinatorTaskManager(uiEvents)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    tm,
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	domainEvents <- WebReconComplete{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindWebRecon),
+		Port:            80,
+		Endpoints: []EndpointInfo{
+			{Host: "10.0.0.1", Port: 80, Path: "/login"},
+		},
+		Params: []ParamInfo{
+			{Host: "10.0.0.1", Port: 80, Path: "/login", Name: "username", ParamType: "query"},
+		},
+		Vhosts: []string{"admin.10.0.0.1"},
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.webAttackByPort[80]
+		return ok
+	}, "expected WebAttackAgent spawn for web recon completion")
+
+	taskID := coordinator.webAttackByPort[80]
+	task, ok := tm.GetTask(taskID)
+	if !ok {
+		t.Fatalf("spawned task %s not found", taskID)
+	}
+	if task.Metadata.Phase != "web_attack" {
+		t.Fatalf("task phase = %q, want web_attack", task.Metadata.Phase)
+	}
+}
+
+func TestMainCoordinator_WebReconComplete_Duplicate_DoesNotDoubleSpawnWebAttack(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 8)
+	tm := newCoordinatorTaskManager(uiEvents)
+	rr := NewReconRunner(ReconRunnerConfig{
+		Tree:       tree,
+		TaskMgr:    tm,
+		Events:     uiEvents,
+		TargetHost: "10.0.0.1",
+		TargetID:   1,
+	})
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		ReconRunner:  rr,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	evt := WebReconComplete{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindWebRecon),
+		Port:            80,
+	}
+	domainEvents <- evt
+	domainEvents <- evt
+
+	waitUntil(t, 3*time.Second, func() bool {
+		return len(tm.AllTasks(1)) >= 1
+	}, "expected at least one web attack task")
+	time.Sleep(100 * time.Millisecond)
+	if got := len(tm.AllTasks(1)); got != 1 {
+		t.Fatalf("task count = %d, want 1", got)
+	}
+}
+
+func TestBuildWebAttackPrompt(t *testing.T) {
+	prompt := buildWebAttackPrompt(
+		"10.0.0.1",
+		80,
+		[]EndpointInfo{{Path: "/login"}},
+		[]ParamInfo{{Path: "/login", Name: "username", ParamType: "query"}},
+		[]string{"admin.10.0.0.1"},
+	)
+	if !strings.Contains(prompt, "/login") {
+		t.Fatal("expected endpoint in prompt")
+	}
+	if !strings.Contains(prompt, "username") {
+		t.Fatal("expected parameter in prompt")
+	}
+	if !strings.Contains(prompt, "Do NOT run broad web reconnaissance tools") {
+		t.Fatal("expected prohibition for broad web recon tools")
+	}
+}
+
 func waitUntil(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

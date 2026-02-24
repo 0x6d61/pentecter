@@ -14,30 +14,35 @@ type MainCoordinatorConfig struct {
 	Events       chan<- Event
 	ReconRunner  *ReconRunner
 	AttackData   *AttackDataTree
+	TaskMgr      *TaskManager
 }
 
 // MainCoordinator はドメインイベントを受け取り、ルールベースで専門エージェントへ委譲する。
 // 注意: これは段階的移行用の最小実装で、既存 Loop と並行稼働する。
 type MainCoordinator struct {
-	targetID     int
-	targetHost   string
-	domainEvents <-chan DomainEvent
-	events       chan<- Event
-	reconRunner  *ReconRunner
-	attackData   *AttackDataTree
-	deferredHTTP map[int]struct{}
+	targetID        int
+	targetHost      string
+	domainEvents    <-chan DomainEvent
+	events          chan<- Event
+	reconRunner     *ReconRunner
+	attackData      *AttackDataTree
+	taskMgr         *TaskManager
+	deferredHTTP    map[int]struct{}
+	webAttackByPort map[int]string
 }
 
 // NewMainCoordinator は MainCoordinator を構築する。
 func NewMainCoordinator(cfg MainCoordinatorConfig) *MainCoordinator {
 	return &MainCoordinator{
-		targetID:     cfg.TargetID,
-		targetHost:   cfg.TargetHost,
-		domainEvents: cfg.DomainEvents,
-		events:       cfg.Events,
-		reconRunner:  cfg.ReconRunner,
-		attackData:   cfg.AttackData,
-		deferredHTTP: make(map[int]struct{}),
+		targetID:        cfg.TargetID,
+		targetHost:      cfg.TargetHost,
+		domainEvents:    cfg.DomainEvents,
+		events:          cfg.Events,
+		reconRunner:     cfg.ReconRunner,
+		attackData:      cfg.AttackData,
+		taskMgr:         cfg.TaskMgr,
+		deferredHTTP:    make(map[int]struct{}),
+		webAttackByPort: make(map[int]string),
 	}
 }
 
@@ -67,6 +72,7 @@ func (mc *MainCoordinator) handle(ctx context.Context, evt DomainEvent) {
 		mc.emitLog(fmt.Sprintf("MainCoordinator received WebReconComplete %s:%d (endpoints=%d params=%d vhosts=%d)",
 			e.Host, e.Port, len(e.Endpoints), len(e.Params), len(e.Vhosts)))
 		mc.retryDeferredHTTP(ctx)
+		mc.handleWebReconComplete(ctx, e)
 	case AgentComplete:
 		if e.AgentType == string(AgentKindWebRecon) {
 			mc.retryDeferredHTTP(ctx)
@@ -126,6 +132,56 @@ func (mc *MainCoordinator) retryDeferredHTTP(ctx context.Context) {
 	}
 }
 
+func (mc *MainCoordinator) handleWebReconComplete(ctx context.Context, evt WebReconComplete) {
+	if evt.Port <= 0 {
+		return
+	}
+	if mc.taskMgr == nil || !mc.taskMgr.CanSpawnSmart() {
+		mc.emitLog(fmt.Sprintf("MainCoordinator skip WebAttackAgent for %s:%d (TaskManager/subBrain unavailable)", evt.Host, evt.Port))
+		return
+	}
+	if _, exists := mc.webAttackByPort[evt.Port]; exists {
+		mc.emitLog(fmt.Sprintf("MainCoordinator skip WebAttackAgent for %s:%d (already spawned)", evt.Host, evt.Port))
+		return
+	}
+
+	host := evt.Host
+	if host == "" {
+		host = mc.targetHost
+	}
+	service := "http"
+	if mc.attackData != nil {
+		if node := mc.attackData.FindPortNode(evt.Port); node != nil && node.Service != "" {
+			service = node.Service
+		}
+	}
+
+	goal := fmt.Sprintf("Web vulnerability assessment on %s:%d", host, evt.Port)
+	taskID, err := mc.taskMgr.SpawnTask(ctx, SpawnTaskRequest{
+		Kind:           TaskKindSmart,
+		Goal:           goal,
+		Command:        buildWebAttackPrompt(host, evt.Port, evt.Endpoints, evt.Params, evt.Vhosts),
+		TargetHost:     host,
+		TargetID:       mc.targetID,
+		MaxTurns:       30,
+		AttackDataTree: mc.attackData,
+		AgentKind:      AgentKindWebAttack,
+		Metadata: TaskMetadata{
+			Port:    evt.Port,
+			Service: service,
+			Phase:   "web_attack",
+		},
+	})
+	if err != nil {
+		mc.emitLog(fmt.Sprintf("MainCoordinator failed to route WebReconComplete %s:%d -> WebAttackAgent: %v", host, evt.Port, err))
+		return
+	}
+
+	mc.webAttackByPort[evt.Port] = taskID
+	mc.emitSubTaskStart(taskID, goal, AgentKindWebAttack)
+	mc.emitLog(fmt.Sprintf("MainCoordinator routed WebReconComplete %s:%d -> WebAttackAgent (%s)", host, evt.Port, taskID))
+}
+
 func (mc *MainCoordinator) emitLog(msg string) {
 	if mc.events == nil {
 		return
@@ -139,6 +195,63 @@ func (mc *MainCoordinator) emitLog(msg string) {
 	}:
 	default:
 	}
+}
+
+func (mc *MainCoordinator) emitSubTaskStart(taskID, message string, kind AgentKind) {
+	if mc.events == nil {
+		return
+	}
+	select {
+	case mc.events <- Event{
+		TargetID:  mc.targetID,
+		Type:      EventSubTaskStart,
+		TaskID:    taskID,
+		Message:   message,
+		AgentKind: kind,
+	}:
+	default:
+	}
+}
+
+func buildWebAttackPrompt(host string, port int, endpoints []EndpointInfo, params []ParamInfo, vhosts []string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "You are a WebAttackAgent for %s:%d.\n", host, port)
+	sb.WriteString("Focus on targeted vulnerability validation using discovered attack surface.\n")
+	sb.WriteString("Do NOT run broad web reconnaissance tools (webfuzz dir/vhost, dirb, gobuster, nikto).\n")
+	sb.WriteString("Use curl/sqlmap/manual payload checks on known endpoints and parameters.\n")
+	sb.WriteString("Record important findings with memory action and use complete when work is done.\n\n")
+
+	sb.WriteString("Known endpoints:\n")
+	if len(endpoints) == 0 {
+		sb.WriteString("- (none)\n")
+	} else {
+		for _, ep := range endpoints {
+			fmt.Fprintf(&sb, "- %s\n", ep.Path)
+		}
+	}
+
+	sb.WriteString("\nKnown parameters:\n")
+	if len(params) == 0 {
+		sb.WriteString("- (none)\n")
+	} else {
+		for _, p := range params {
+			fmt.Fprintf(&sb, "- %s (%s) on %s\n", p.Name, p.ParamType, p.Path)
+		}
+	}
+
+	sb.WriteString("\nKnown virtual hosts:\n")
+	if len(vhosts) == 0 {
+		sb.WriteString("- (none)\n")
+	} else {
+		for _, vhost := range vhosts {
+			fmt.Fprintf(&sb, "- %s\n", vhost)
+		}
+	}
+
+	sb.WriteString("\nPrioritize high-value checks first: auth bypass, SQLi, command injection, path traversal, IDOR.\n")
+	sb.WriteString("Avoid repeated identical commands when previous attempts had no signal.\n")
+
+	return sb.String()
 }
 
 func isHTTPService(service string) bool {

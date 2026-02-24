@@ -22,6 +22,7 @@ func (l *Loop) ensureDomainCoordinator(ctx context.Context) {
 		Events:       l.events,
 		ReconRunner:  l.reconRunner,
 		AttackData:   l.attackData,
+		TaskMgr:      l.taskMgr,
 	})
 	go l.coordinator.Run(ctx)
 	l.emit(Event{

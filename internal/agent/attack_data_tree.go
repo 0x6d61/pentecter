@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -696,6 +697,91 @@ func (t *AttackDataTree) SnapshotPorts() []PortSnapshot {
 		})
 	}
 	return out
+}
+
+// SnapshotWebSurface returns discovered web recon artifacts for a specific port.
+// Endpoint status is not persisted in AttackDataTree, so EndpointInfo.Status is 0.
+func (t *AttackDataTree) SnapshotWebSurface(port int) ([]EndpointInfo, []ParamInfo, []string) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	var portNode *AttackDataNode
+	for _, node := range t.Ports {
+		if node.Port == port {
+			portNode = node
+			break
+		}
+	}
+	if portNode == nil {
+		return nil, nil, nil
+	}
+
+	var endpoints []EndpointInfo
+	var params []ParamInfo
+	endpointSeen := make(map[string]struct{})
+	paramSeen := make(map[string]struct{})
+	vhostSet := make(map[string]struct{})
+
+	var walk func(*AttackDataNode)
+	walk = func(node *AttackDataNode) {
+		if node == nil {
+			return
+		}
+
+		if node.Host != "" && node.Host != t.Host {
+			vhostSet[node.Host] = struct{}{}
+		}
+
+		if node.Path != "" {
+			epKey := node.Host + "|" + node.Path
+			if _, exists := endpointSeen[epKey]; !exists {
+				endpointSeen[epKey] = struct{}{}
+				endpoints = append(endpoints, EndpointInfo{
+					Host:   node.Host,
+					Port:   node.Port,
+					Path:   node.Path,
+					Status: 0,
+				})
+			}
+
+			for _, p := range node.Parameters {
+				paramKey := node.Host + "|" + node.Path + "|" + p.Name + "|" + p.Type
+				if _, exists := paramSeen[paramKey]; exists {
+					continue
+				}
+				paramSeen[paramKey] = struct{}{}
+				params = append(params, ParamInfo{
+					Host:      node.Host,
+					Port:      node.Port,
+					Path:      node.Path,
+					Name:      p.Name,
+					ParamType: p.Type,
+				})
+			}
+		}
+
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+
+	walk(portNode)
+
+	// Also include dedicated vhost roots for this port.
+	for _, vhostNode := range t.Vhosts {
+		if vhostNode.Port != port {
+			continue
+		}
+		walk(vhostNode)
+	}
+
+	vhosts := make([]string, 0, len(vhostSet))
+	for host := range vhostSet {
+		vhosts = append(vhosts, host)
+	}
+	sort.Strings(vhosts)
+
+	return endpoints, params, vhosts
 }
 
 // findNode はホスト/ポート/パスでノードを検索する。

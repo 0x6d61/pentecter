@@ -55,9 +55,13 @@ func (l *Loop) drainCompletedTasks(ctx context.Context) string {
 				Summary:         task.Summary(),
 			})
 			if task.Status == TaskStatusCompleted && l.attackData != nil && !l.attackData.PortHasPending(task.Metadata.Port) {
+				endpoints, params, vhosts := l.attackData.SnapshotWebSurface(task.Metadata.Port)
 				l.emitDomainEvent(ctx, WebReconComplete{
 					DomainEventBase: NewDomainEventBase(l.target.ID, l.target.Host, AgentKindWebRecon),
 					Port:            task.Metadata.Port,
+					Endpoints:       endpoints,
+					Params:          params,
+					Vhosts:          vhosts,
 				})
 			}
 		}
