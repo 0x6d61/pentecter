@@ -32,6 +32,9 @@ func (a *App) handleCommand(fullText string) bool {
 	case "/fold":
 		a.toggleFold()
 		return true
+	case "/thinkfold":
+		a.toggleThinkingFold()
+		return true
 	case "/status":
 		a.printStatusLine()
 		return true
@@ -165,10 +168,6 @@ func (a *App) handleTargetsCommand() {
 			}
 			a.selected = idx
 			host := a.targets[idx].Host
-			a.outputScroll = 0
-			a.outputFollow = true
-			a.outputPrevWrapped = 0
-			a.outputPrevWrapWidth = 0
 			if a.targets[idx].GetProposal() != nil {
 				a.inputMode = ModeProposal
 			} else if a.inputMode == ModeProposal {
