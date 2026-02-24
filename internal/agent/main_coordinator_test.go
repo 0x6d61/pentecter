@@ -134,6 +134,56 @@ func TestMainCoordinator_PortDiscoveredNonHTTP_NoRouting(t *testing.T) {
 	}
 }
 
+func TestMainCoordinator_ServiceIdentified_RoutesToAttack(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH 7.2")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 8)
+	tm := newCoordinatorTaskManager(uiEvents)
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	domainEvents <- ServiceIdentified{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            22,
+		Service:         "ssh",
+		CVEs:            []string{"CVE-2016-0777"},
+		AttackVectors:   []string{"credential brute force"},
+		Notes:           "OpenSSH 7.2 research result",
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.attackByPort[22]
+		return ok
+	}, "expected AttackAgent spawn for service_identified")
+
+	taskID := coordinator.attackByPort[22]
+	task, ok := tm.GetTask(taskID)
+	if !ok {
+		t.Fatalf("spawned task %s not found", taskID)
+	}
+	if task.Metadata.Phase != "attack" {
+		t.Fatalf("task phase = %q, want attack", task.Metadata.Phase)
+	}
+	if task.Metadata.Service != "ssh" {
+		t.Fatalf("task service = %q, want ssh", task.Metadata.Service)
+	}
+	if !strings.Contains(task.Command, "CVE-2016-0777") {
+		t.Fatalf("attack prompt should include CVE context, got: %q", task.Command)
+	}
+}
+
 func TestMainCoordinator_DuplicatePortDiscovered_DoesNotDoubleSpawn(t *testing.T) {
 	tree := NewAttackDataTree("10.0.0.1", 2, 0)
 	tree.AddPort(80, "http", "Apache")
@@ -174,6 +224,44 @@ func TestMainCoordinator_DuplicatePortDiscovered_DoesNotDoubleSpawn(t *testing.T
 	time.Sleep(100 * time.Millisecond)
 	if tree.Active() != 1 {
 		t.Fatalf("Active = %d, want 1 (duplicate event should not double-spawn)", tree.Active())
+	}
+}
+
+func TestMainCoordinator_ServiceIdentified_Duplicate_DoesNotDoubleSpawnAttack(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(21, "ftp", "vsftpd")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 8)
+	tm := newCoordinatorTaskManager(uiEvents)
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	evt := ServiceIdentified{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            21,
+		Service:         "ftp",
+		CVEs:            []string{"CVE-2011-2523"},
+	}
+	domainEvents <- evt
+	domainEvents <- evt
+
+	waitUntil(t, 3*time.Second, func() bool {
+		return len(tm.AllTasks(1)) >= 1
+	}, "expected at least one attack task")
+	time.Sleep(100 * time.Millisecond)
+	if got := len(tm.AllTasks(1)); got != 1 {
+		t.Fatalf("task count = %d, want 1", got)
 	}
 }
 
@@ -401,6 +489,59 @@ func TestMainCoordinator_WebAttackComplete_AllowsRespawn(t *testing.T) {
 		id, ok := coordinator.webAttackByPort[80]
 		return ok && id != "" && id != firstTaskID
 	}, "expected web attack respawn after completion")
+}
+
+func TestMainCoordinator_AttackComplete_AllowsRespawn(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(21, "ftp", "vsftpd")
+
+	uiEvents := make(chan Event, 128)
+	domainEvents := make(chan DomainEvent, 16)
+	tm := newCoordinatorTaskManager(uiEvents)
+	coordinator := NewMainCoordinator(MainCoordinatorConfig{
+		TargetID:     1,
+		TargetHost:   "10.0.0.1",
+		DomainEvents: domainEvents,
+		Events:       uiEvents,
+		AttackData:   tree,
+		TaskMgr:      tm,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go coordinator.Run(ctx)
+
+	first := ServiceIdentified{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindRecon),
+		Port:            21,
+		Service:         "ftp",
+		CVEs:            []string{"CVE-2011-2523"},
+	}
+	domainEvents <- first
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.attackByPort[21]
+		return ok
+	}, "expected first attack spawn")
+	firstTaskID := coordinator.attackByPort[21]
+
+	domainEvents <- AgentComplete{
+		DomainEventBase: NewDomainEventBase(1, "10.0.0.1", AgentKindAttack),
+		AgentID:         firstTaskID,
+		AgentType:       string(AgentKindAttack),
+		Summary:         "done",
+	}
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := coordinator.attackByPort[21]
+		return !ok
+	}, "expected attack slot cleared")
+
+	domainEvents <- first
+	waitUntil(t, 3*time.Second, func() bool {
+		id, ok := coordinator.attackByPort[21]
+		return ok && id != "" && id != firstTaskID
+	}, "expected attack respawn after completion")
 }
 
 func TestBuildWebAttackPrompt(t *testing.T) {

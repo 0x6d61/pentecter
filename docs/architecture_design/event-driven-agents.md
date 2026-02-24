@@ -378,9 +378,9 @@ WebAttackAgent(port 80):
 
 | 不足 | 対応 |
 |------|------|
-| vhost タスク完了漏れ | CompleteTask(TaskVhostDiscov) を webfuzz vhost モード完了時に呼ぶ |
-| パラメータ未記録 | `AddParameter()` を TreeUpdater に追加 |
-| Finding 未記録 | `AddFinding()` を TreeUpdater に追加 |
+| ~~vhost タスク完了漏れ~~ | ~~CompleteTask(TaskVhostDiscov) を webfuzz vhost モード完了時に呼ぶ~~ |
+| ~~パラメータ未記録~~ | ~~`AddParameter()` を TreeUpdater に追加~~ |
+| ~~Finding 未記録~~ | ~~`AddFinding()` を TreeUpdater に追加~~ |
 | 認証情報 | `AddCredential()` を新設 |
 | HackTricks 知見 | `AddInsight()` を新設 |
 
@@ -465,11 +465,11 @@ type Insight struct {
 4. ~~webfuzz ストリーミング化~~ → 実装済み
 5. ~~テスト~~ → 実装済み
 
-### Phase 2: ReconAgent 実装
-1. ReconAgent を SmartSubAgent ベースで実装
-2. nmap 実行 + HackTricks 調査を ReconAgent に移管
-3. MainAgent の initial_scans を ReconAgent 経由に変更
-4. PortDiscovered / ServiceIdentified イベント追加
+### Phase 2: ReconAgent 実装（完了）
+1. ~~ReconAgent を SmartSubAgent ベースで実装~~ → 実装済み
+2. ~~nmap 実行 + HackTricks 調査を ReconAgent に移管~~ → 実装済み
+3. ~~MainAgent の initial_scans を ReconAgent 経由に変更~~ → 実装済み
+4. ~~PortDiscovered / ServiceIdentified イベント追加~~ → 実装済み
 
 ### Phase 3: MainAgent → MainCoordinator 変換
 
@@ -485,12 +485,12 @@ type Insight struct {
 > 3. 最後に自律ループを廃止
 
 1. イベントループに書き換え（自律ループ廃止）
-2. ルールベースルーティング実装
+2. ~~ルールベースルーティング実装~~（HTTP→WebRecon, WebReconComplete→WebAttack は実装済み）
 3. Brain 呼び出しをイベントトリガーに限定
 4. Phase gate 廃止
 
 ### Phase 4: WebAttackAgent 実装
-1. WebReconComplete イベント受信で起動
+1. ~~WebReconComplete イベント受信で起動~~
 2. パラメータ+エンドポイントベースの攻撃計画
 3. VulnFound / ExploitSuccess イベント emit
 

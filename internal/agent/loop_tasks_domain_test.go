@@ -164,6 +164,40 @@ func TestDrainCompletedTasks_ReconTask_DoesNotEmitReconCompleteDomainEvent(t *te
 	}
 }
 
+func TestDrainCompletedTasks_ReconTask_EmitsServiceIdentified(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 0)
+	tree.AddPort(22, "ssh", "OpenSSH 7.2")
+
+	loop, tm, domainEvents := newDomainDrainTestLoop(tree)
+	task := NewSubTask("task-recon-2", TaskKindSmart, "recon")
+	task.Metadata = TaskMetadata{Phase: "recon"}
+	task.Status = TaskStatusCompleted
+	task.Findings = []string{"[note] ssh research: CVE-2016-0777 potential information leak"}
+	task.AppendOutput("OpenSSH 7.2 identified on port 22")
+	task.Complete()
+	tm.InjectTask(task.ID, task)
+	tm.InjectDone(task.ID)
+
+	_ = loop.drainCompletedTasks(context.Background())
+	events := drainDomainEvents(domainEvents)
+
+	for _, evt := range events {
+		if si, ok := evt.(ServiceIdentified); ok {
+			if si.Port != 22 {
+				t.Fatalf("ServiceIdentified.Port = %d, want 22", si.Port)
+			}
+			if si.Service != "ssh" {
+				t.Fatalf("ServiceIdentified.Service = %q, want ssh", si.Service)
+			}
+			if len(si.CVEs) == 0 || si.CVEs[0] != "CVE-2016-0777" {
+				t.Fatalf("ServiceIdentified.CVEs = %v, want [CVE-2016-0777]", si.CVEs)
+			}
+			return
+		}
+	}
+	t.Fatal("expected ServiceIdentified event for completed recon task")
+}
+
 func TestDrainCompletedTasks_WebAttackTask_EmitsAgentComplete(t *testing.T) {
 	tree := NewAttackDataTree("10.0.0.1", 2, 3)
 	tree.AddPort(80, "http", "Apache")
@@ -191,6 +225,35 @@ func TestDrainCompletedTasks_WebAttackTask_EmitsAgentComplete(t *testing.T) {
 		}
 	}
 	t.Fatal("expected AgentComplete event for web_attack task")
+}
+
+func TestDrainCompletedTasks_AttackTask_EmitsAgentComplete(t *testing.T) {
+	tree := NewAttackDataTree("10.0.0.1", 2, 3)
+	tree.AddPort(21, "ftp", "vsftpd")
+
+	loop, tm, domainEvents := newDomainDrainTestLoop(tree)
+	task := NewSubTask("task-attack-1", TaskKindSmart, "attack 21")
+	task.Metadata = TaskMetadata{Phase: "attack", Port: 21, Service: "ftp"}
+	task.Status = TaskStatusCompleted
+	task.Complete()
+	tm.InjectTask(task.ID, task)
+	tm.InjectDone(task.ID)
+
+	_ = loop.drainCompletedTasks(context.Background())
+	events := drainDomainEvents(domainEvents)
+
+	for _, evt := range events {
+		if ac, ok := evt.(AgentComplete); ok {
+			if ac.AgentType != string(AgentKindAttack) {
+				t.Fatalf("AgentType = %q, want %q", ac.AgentType, AgentKindAttack)
+			}
+			if ac.AgentID != "task-attack-1" {
+				t.Fatalf("AgentID = %q, want task-attack-1", ac.AgentID)
+			}
+			return
+		}
+	}
+	t.Fatal("expected AgentComplete event for attack task")
 }
 
 func newDomainDrainTestLoop(tree *AttackDataTree) (*Loop, *TaskManager, chan DomainEvent) {

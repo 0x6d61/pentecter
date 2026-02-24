@@ -29,6 +29,7 @@ type MainCoordinator struct {
 	taskMgr         *TaskManager
 	deferredHTTP    map[int]struct{}
 	webAttackByPort map[int]string
+	attackByPort    map[int]string
 }
 
 // NewMainCoordinator は MainCoordinator を構築する。
@@ -43,6 +44,7 @@ func NewMainCoordinator(cfg MainCoordinatorConfig) *MainCoordinator {
 		taskMgr:         cfg.TaskMgr,
 		deferredHTTP:    make(map[int]struct{}),
 		webAttackByPort: make(map[int]string),
+		attackByPort:    make(map[int]string),
 	}
 }
 
@@ -68,6 +70,8 @@ func (mc *MainCoordinator) handle(ctx context.Context, evt DomainEvent) {
 	switch e := evt.(type) {
 	case PortDiscovered:
 		mc.handlePortDiscovered(ctx, e)
+	case ServiceIdentified:
+		mc.handleServiceIdentified(ctx, e)
 	case WebReconComplete:
 		mc.emitLog(fmt.Sprintf("MainCoordinator received WebReconComplete %s:%d (endpoints=%d params=%d vhosts=%d)",
 			e.Host, e.Port, len(e.Endpoints), len(e.Params), len(e.Vhosts)))
@@ -79,6 +83,10 @@ func (mc *MainCoordinator) handle(ctx context.Context, evt DomainEvent) {
 		} else if e.AgentType == string(AgentKindWebAttack) {
 			if port, cleared := mc.clearWebAttackByTaskID(e.AgentID); cleared {
 				mc.emitLog(fmt.Sprintf("MainCoordinator cleared WebAttackAgent slot for %s:%d (%s)", mc.targetHost, port, e.AgentID))
+			}
+		} else if e.AgentType == string(AgentKindAttack) {
+			if port, cleared := mc.clearAttackByTaskID(e.AgentID); cleared {
+				mc.emitLog(fmt.Sprintf("MainCoordinator cleared AttackAgent slot for %s:%d (%s)", mc.targetHost, port, e.AgentID))
 			}
 		}
 	case ReconComplete:
@@ -134,6 +142,54 @@ func (mc *MainCoordinator) retryDeferredHTTP(ctx context.Context) {
 			delete(mc.deferredHTTP, port)
 		}
 	}
+}
+
+func (mc *MainCoordinator) handleServiceIdentified(ctx context.Context, evt ServiceIdentified) {
+	service := strings.TrimSpace(evt.Service)
+	if evt.Port <= 0 || service == "" || isHTTPService(service) {
+		return
+	}
+	if mc.taskMgr == nil || !mc.taskMgr.CanSpawnSmart() {
+		mc.emitLog(fmt.Sprintf("MainCoordinator skip AttackAgent for %s:%d (%s): TaskManager/subBrain unavailable",
+			evt.Host, evt.Port, evt.Service))
+		return
+	}
+	if _, exists := mc.attackByPort[evt.Port]; exists {
+		mc.emitLog(fmt.Sprintf("MainCoordinator skip AttackAgent for %s:%d (%s): already spawned",
+			evt.Host, evt.Port, evt.Service))
+		return
+	}
+
+	host := evt.Host
+	if host == "" {
+		host = mc.targetHost
+	}
+	goal := fmt.Sprintf("Infrastructure attack assessment on %s:%d (%s)", host, evt.Port, evt.Service)
+	taskID, err := mc.taskMgr.SpawnTask(ctx, SpawnTaskRequest{
+		Kind:           TaskKindSmart,
+		Goal:           goal,
+		Command:        buildAttackPrompt(host, evt),
+		TargetHost:     host,
+		TargetID:       mc.targetID,
+		MaxTurns:       30,
+		AttackDataTree: mc.attackData,
+		AgentKind:      AgentKindAttack,
+		Metadata: TaskMetadata{
+			Port:    evt.Port,
+			Service: service,
+			Phase:   "attack",
+		},
+	})
+	if err != nil {
+		mc.emitLog(fmt.Sprintf("MainCoordinator failed to route ServiceIdentified %s:%d (%s) -> AttackAgent: %v",
+			host, evt.Port, evt.Service, err))
+		return
+	}
+
+	mc.attackByPort[evt.Port] = taskID
+	mc.emitSubTaskStart(taskID, goal, AgentKindAttack)
+	mc.emitLog(fmt.Sprintf("MainCoordinator routed ServiceIdentified %s:%d (%s) -> AttackAgent (%s)",
+		host, evt.Port, evt.Service, taskID))
 }
 
 func (mc *MainCoordinator) handleWebReconComplete(ctx context.Context, evt WebReconComplete) {
@@ -227,6 +283,16 @@ func (mc *MainCoordinator) clearWebAttackByTaskID(taskID string) (port int, clea
 	return 0, false
 }
 
+func (mc *MainCoordinator) clearAttackByTaskID(taskID string) (port int, cleared bool) {
+	for p, id := range mc.attackByPort {
+		if id == taskID {
+			delete(mc.attackByPort, p)
+			return p, true
+		}
+	}
+	return 0, false
+}
+
 func buildWebAttackPrompt(host string, port int, endpoints []EndpointInfo, params []ParamInfo, vhosts []string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "You are a WebAttackAgent for %s:%d.\n", host, port)
@@ -265,6 +331,46 @@ func buildWebAttackPrompt(host string, port int, endpoints []EndpointInfo, param
 	sb.WriteString("\nPrioritize high-value checks first: auth bypass, SQLi, command injection, path traversal, IDOR.\n")
 	sb.WriteString("Avoid repeated identical commands when previous attempts had no signal.\n")
 
+	return sb.String()
+}
+
+func buildAttackPrompt(host string, evt ServiceIdentified) string {
+	service := evt.Service
+	if service == "" {
+		service = "unknown"
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "You are an AttackAgent for non-HTTP service %s:%d (%s).\n", host, evt.Port, service)
+	sb.WriteString("Focus on service-specific validation and exploitation steps only for this port.\n")
+	sb.WriteString("Do NOT run broad web reconnaissance tools (webfuzz dir/vhost, dirb, gobuster, nikto).\n")
+	sb.WriteString("Use memory action for important findings (credentials, vulnerabilities, access level), then complete.\n\n")
+
+	sb.WriteString("Known CVEs:\n")
+	if len(evt.CVEs) == 0 {
+		sb.WriteString("- (none)\n")
+	} else {
+		for _, cve := range evt.CVEs {
+			fmt.Fprintf(&sb, "- %s\n", cve)
+		}
+	}
+
+	sb.WriteString("\nKnown attack vectors:\n")
+	if len(evt.AttackVectors) == 0 {
+		sb.WriteString("- (none)\n")
+	} else {
+		for _, v := range evt.AttackVectors {
+			fmt.Fprintf(&sb, "- %s\n", v)
+		}
+	}
+
+	if evt.Notes != "" {
+		sb.WriteString("\nRecon notes:\n")
+		sb.WriteString(evt.Notes)
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\nPrioritize: known CVE validation -> authentication weaknesses -> misconfiguration abuse.\n")
 	return sb.String()
 }
 
