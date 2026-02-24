@@ -23,7 +23,8 @@ func (a *App) runSpinner(ctx context.Context) {
 			if !a.spinnerActive.Load() {
 				continue
 			}
-			a.enqueueUIEvent(uiEventMsg{kind: uiEventSpinnerTick})
+			a.spinnerIdx.Add(1)
+			a.refreshPrompt()
 		}
 	}
 }
@@ -57,28 +58,15 @@ func (a *App) toggleFold() {
 	a.mu.Lock()
 	a.logsExpanded = !a.logsExpanded
 	a.mu.Unlock()
-	if a.testWriter != nil {
-		a.clearAndReprint()
-	}
+	a.clearAndReprint()
 }
 
-// clearAndReprint emits current active target text only in tests.
-func (a *App) clearAndReprint() {
-	if a.testWriter == nil {
-		return
-	}
-
+// toggleThinkingFold toggles thinking block visibility.
+func (a *App) toggleThinkingFold() {
 	a.mu.Lock()
-	width := a.width
-	if width <= 0 {
-		width = defaultWidth
-	}
-	lines := a.buildOutputLinesLocked(width)
+	a.thinkingExpanded = !a.thinkingExpanded
 	a.mu.Unlock()
-
-	for _, l := range lines {
-		_, _ = fmt.Fprintln(a.testWriter, l)
-	}
+	a.clearAndReprint()
 }
 
 // printAttackData appends attack data tree output as a system block.
@@ -135,10 +123,8 @@ func (a *App) printAttackData(host, treeOutput string) {
 		a.globalLogs = append(a.globalLogs, strings.Split(treeOutput, "\n")...)
 	}
 	a.invalidateOutputCacheLocked()
-	if a.testWriter != nil {
-		_, _ = fmt.Fprintln(a.testWriter, msg)
-	}
 	a.mu.Unlock()
+	a.clearAndReprint()
 }
 
 func sanitizeAttackDataRow(s string) string {

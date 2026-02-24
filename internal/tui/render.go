@@ -88,14 +88,24 @@ func renderCommandBlock(b *agent.DisplayBlock, width int, expanded bool) string 
 // renderThinkingBlock は思考中/処理中ブロックをレンダリングする。
 // 処理中: <spinnerFrame> Thinking... (アニメーション付きスピナー)
 // 完了: ✻ Completed in Xs
-func renderThinkingBlock(b *agent.DisplayBlock, spinnerFrame string) string {
-	if b.ThinkingDone {
-		dur := formatDuration(b.ThinkDuration)
-		style := lipgloss.NewStyle().Foreground(colorSecondary)
-		return "\n" + style.Render(fmt.Sprintf("✻ Completed in %s", dur)) + "\n\n"
+func renderThinkingBlock(b *agent.DisplayBlock, _ string, expanded bool) string {
+	if !expanded {
+		style := lipgloss.NewStyle().Foreground(colorMuted)
+		if b.ThinkingDone {
+			return "\n" + style.Render("… Thinking block folded (Ctrl+T)") + "\n\n"
+		}
+		return "\n" + style.Render("… Thinking… (folded, Ctrl+T to expand)") + "\n\n"
 	}
+
 	style := lipgloss.NewStyle().Foreground(colorSecondary)
-	return "\n" + style.Render(spinnerFrame+" Thinking...") + "\n\n"
+	if !b.ThinkingDone {
+		// Keep spinner animation in the prompt only, but keep a colored
+		// thinking marker in the log stream.
+		return "\n" + style.Render("✻ Thinking...") + "\n\n"
+	}
+
+	dur := formatDuration(b.ThinkDuration)
+	return "\n" + style.Render(fmt.Sprintf("✻ Completed in %s", dur)) + "\n\n"
 }
 
 // renderAIMessageBlock は AI レスポンスブロックをレンダリングする。
@@ -226,12 +236,12 @@ func formatDuration(d time.Duration) string {
 
 // renderBlock は単一の DisplayBlock をレンダリングする。
 // spinnerFrame はアクティブな thinking/subtask ブロックに表示するスピナーの現在フレーム。
-func renderBlock(b *agent.DisplayBlock, width int, expanded bool, spinnerFrame string) string {
+func renderBlock(b *agent.DisplayBlock, width int, expanded bool, thinkingExpanded bool, spinnerFrame string) string {
 	switch b.Type {
 	case agent.BlockCommand:
 		return renderCommandBlock(b, width, expanded)
 	case agent.BlockThinking:
-		return renderThinkingBlock(b, spinnerFrame)
+		return renderThinkingBlock(b, spinnerFrame, thinkingExpanded)
 	case agent.BlockAIMessage:
 		return renderAIMessageBlock(b, width)
 	case agent.BlockMemory:
@@ -250,11 +260,14 @@ func renderBlock(b *agent.DisplayBlock, width int, expanded bool, spinnerFrame s
 // renderBlocks は全ての DisplayBlock をビューポート用コンテンツにレンダリングする。
 // spinnerFrame はアクティブな thinking/subtask ブロックに表示するスピナーの現在フレーム。
 // 完了済みブロックはレンダーキャッシュを利用し、再レンダリングをスキップする。
-func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinnerFrame string) string {
+func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, thinkingExpanded bool, spinnerFrame string) string {
 	var sb strings.Builder
 	for _, b := range blocks {
 		// キャッシュヒット判定
-		if b.RenderedCache != "" && b.CacheWidth == width && b.CacheExpanded == expanded {
+		if b.RenderedCache != "" &&
+			b.CacheWidth == width &&
+			b.CacheExpanded == expanded &&
+			b.CacheThinkingExpanded == thinkingExpanded {
 			sb.WriteString(b.RenderedCache)
 			continue
 		}
@@ -267,7 +280,7 @@ func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinne
 			rendered = renderCommandBlock(b, width, expanded)
 			cacheable = b.Completed
 		case agent.BlockThinking:
-			rendered = renderThinkingBlock(b, spinnerFrame)
+			rendered = renderThinkingBlock(b, spinnerFrame, thinkingExpanded)
 			cacheable = b.ThinkingDone
 		case agent.BlockAIMessage:
 			rendered = renderAIMessageBlock(b, width)
@@ -291,6 +304,7 @@ func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinne
 			b.RenderedCache = rendered
 			b.CacheWidth = width
 			b.CacheExpanded = expanded
+			b.CacheThinkingExpanded = thinkingExpanded
 		}
 
 		sb.WriteString(rendered)

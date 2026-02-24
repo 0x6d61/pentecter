@@ -258,9 +258,6 @@ Chat commands:
 	app.CurrentProvider = string(selectedProvider)
 	app.CurrentModel = brainCfg.Model
 
-	// Connect CommandRunner for /approve command
-	app.Runner = runner
-
 	// BrainFactory for /model command
 	app.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
 		cfg, err := brain.LoadConfig(hint)

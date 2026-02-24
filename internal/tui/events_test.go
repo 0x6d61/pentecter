@@ -420,23 +420,29 @@ func TestHandleAgentEvent_EventCmdOutput_FoldAtThreshold(t *testing.T) {
 		t.Error("should not contain fold indicator within threshold")
 	}
 
-	buf.Reset()
-
-	// 6th line should trigger fold indicator
+	// 6th line should trigger fold indicator in folded render.
 	a.handleAgentEvent(agent.Event{
 		TargetID:   1,
 		Type:       agent.EventCmdOutput,
 		OutputLine: "output line 6",
 	})
 
-	output = buf.String()
-	if !strings.Contains(output, "ctrl+o") {
+	last := target.LastBlock()
+	if last == nil || last.Type != agent.BlockCommand {
+		t.Fatal("expected last block to be command block")
+	}
+	if len(last.Output) != 6 {
+		t.Fatalf("expected 6 output lines in block, got %d", len(last.Output))
+	}
+
+	rendered := renderCommandBlock(last, 80, false)
+	if !strings.Contains(rendered, "ctrl+o") {
 		t.Error("expected fold indicator at 6th output line")
 	}
-	if !strings.Contains(output, "+3") {
+	if !strings.Contains(rendered, "+3") {
 		t.Error("expected '+3' in fold indicator (6 - 3 = 3)")
 	}
-	if strings.Contains(output, "output line 6") {
+	if strings.Contains(rendered, "output line 6") {
 		t.Error("should not show line content past threshold")
 	}
 }
