@@ -6,7 +6,7 @@
 |---|---|
 | **名称** | `Pentecter`（Penetration + Detector + Specter） |
 | **役割** | 自律型ペネトレーションテストエージェント（TUIベース） |
-| **スタック** | Go (Golang 1.23+), terminal line-input + ANSI rendering, Anthropic/OpenAI API (Brain) |
+| **スタック** | Go (Golang 1.23+), ergochat/readline (TUI), glamour/lipgloss (rendering), Anthropic/OpenAI API (Brain) |
 | **デプロイ** | 単一スタティックバイナリ / Docker (Kali Linux ベース) |
 
 ---
@@ -27,11 +27,10 @@
 }
 ```
 
-### B. The TUI（pi-style Terminal UI）
-- **アーキテクチャ**: pi-style のシンプルなターミナル出力 + ライン入力
-- **出力**: append-only ブロックを stdout に出力（スクロール履歴はターミナル標準機能を利用）
-- **入力**: 通常入力 + 複数行入力（`Shift+Enter` / `Ctrl+Enter` / `Ctrl+J`）
-- **表示操作**: `Ctrl+O`（tool output 折りたたみ）/ `Ctrl+T`（thinking 折りたたみ）
+### B. The TUI（Hybrid Terminal UI）
+- **アーキテクチャ**: readline ベースのハイブリッドターミナル UI
+- **出力**: stdout 直書き（ターミナルがスクロール管理）
+- **入力**: readline がブロッキング管理
 - **goroutine 構成**:
   - **goroutine A（入力）**: readline.Readline() ブロッキングループ — ユーザー入力の受け付け、コマンドディスパッチ
   - **goroutine B（イベント消費）**: agentEvents チャネル受信 → handleAgentEvent() でブロック更新 → rl.Stdout() 経由で即座に印字

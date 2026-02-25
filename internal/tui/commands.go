@@ -17,6 +17,9 @@ func (a *App) handleCommand(fullText string) bool {
 	cmd := fields[0]
 
 	switch cmd {
+	case "/approve":
+		a.handleApproveCommand(fullText)
+		return true
 	case "/model":
 		a.handleModelCommand(fullText)
 		return true
@@ -32,15 +35,48 @@ func (a *App) handleCommand(fullText string) bool {
 	case "/fold":
 		a.toggleFold()
 		return true
-	case "/thinkfold":
-		a.toggleThinkingFold()
-		return true
 	case "/status":
 		a.printStatusLine()
+		return true
+	case "/copy":
+		a.handleCopyCommand()
 		return true
 	default:
 		return false
 	}
+}
+
+// handleApproveCommand processes /approve commands.
+func (a *App) handleApproveCommand(_ string) {
+	if a.Runner == nil {
+		a.logSystem("Auto-approve not available")
+		return
+	}
+
+	currentStatus := "OFF"
+	if a.Runner.AutoApprove() {
+		currentStatus = "ON"
+	}
+	a.showSelect(
+		fmt.Sprintf("Auto-approve (current: %s):", currentStatus),
+		[]SelectOption{
+			{Label: "ON  -- auto-approve all commands", Value: "on"},
+			{Label: "OFF -- require approval", Value: "off"},
+		},
+		func(a *App, value string) {
+			if a.Runner == nil {
+				return
+			}
+			switch value {
+			case "on":
+				a.Runner.SetAutoApprove(true)
+				a.logSystem("Auto-approve: ON -- all commands will execute without confirmation")
+			case "off":
+				a.Runner.SetAutoApprove(false)
+				a.logSystem("Auto-approve: OFF -- proposals will require confirmation")
+			}
+		},
+	)
 }
 
 // modelsForProvider returns a list of models for the given provider.
@@ -168,6 +204,10 @@ func (a *App) handleTargetsCommand() {
 			}
 			a.selected = idx
 			host := a.targets[idx].Host
+			a.outputScroll = 0
+			a.outputFollow = true
+			a.outputPrevWrapped = 0
+			a.outputPrevWrapWidth = 0
 			if a.targets[idx].GetProposal() != nil {
 				a.inputMode = ModeProposal
 			} else if a.inputMode == ModeProposal {
@@ -217,4 +257,11 @@ func (a *App) handleSkipReconCommand() {
 	pending := rt.CountPending()
 	rt.Unlock()
 	a.logSystem(fmt.Sprintf("RECON phase unlocked (%d pending tasks skipped). Agent will proceed to ANALYZE.", pending))
+}
+
+// handleCopyCommand enters log copy mode.
+func (a *App) handleCopyCommand() {
+	a.mu.Lock()
+	a.enterCopyModeLocked()
+	a.mu.Unlock()
 }

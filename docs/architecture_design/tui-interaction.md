@@ -1,101 +1,167 @@
-# TUI Interaction Design (pi-style)
+# TUI インタラクション設計
 
-## Overview
-This document defines operator interactions for the pi-style terminal UI.
-The focus is command handling, key bindings, and input mode transitions.
+> **注意: このドキュメントは Bubble Tea ベースの旧 TUI 仕様です。**
+> 現行の readline ベース Hybrid TUI には適用されません。
+> 現行仕様は [`hybrid-tui-scroll-region.md`](./hybrid-tui-scroll-region.md) および
+> [`ui-spec.md`](./ui-spec.md) を参照してください。
 
-## Command Surface
-| Command | Description |
-|---|---|
-| `/model` | Show provider/model selector, or switch directly when args are given |
-| `/targets` | Show target selector |
-| `/target <host>` | Add target host |
-| `/recontree` | Print recon tree in ASCII |
-| `/skip-recon` | Unlock recon phase manually |
-| `/status` | Print runtime status summary |
-| `/fold` | Toggle tool-output folding (same action as `Ctrl+O`) |
+## 概要
 
-Explicitly removed:
-- `/copy`
-- `/approve`
+TUI のユーザー操作・コマンド・選択UI の設計。
 
-## Selection UI
-Selection UI is used for commands that require choosing one option.
+## コマンド一覧
 
-Current selection entry points:
-- `/model` without arguments
-- `/targets` without arguments
+| コマンド | 説明 |
+|---------|------|
+| `/model` | LLM プロバイダー/モデルの選択・切り替え |
+| `/approve` | Auto-approve の ON/OFF 切り替え |
+| `/targets` | ターゲット一覧表示と切り替え |
+| `/target <host>` | ターゲットの追加 |
+| `/recontree` | 偵察ツリーの ASCII 表示 |
+| `/skip-recon` | RECON フェーズロックの手動解除 |
+| `/fold` | コマンド出力の折りたたみ切り替え |
+| `/status` | ステータスライン表示 |
+| `<IP>` | IP アドレス入力でターゲット追加 |
+| 自然言語 | AI エージェントへの指示 |
 
-Example:
-```text
-> /model
+## 選択UI
 
-Select provider:
-  1. anthropic
-  2. openai
-  3. ollama
+`/model` や `/approve`、`/targets` を引数なしで実行した場合、番号入力による選択UIを表示する。
 
-select [1-3/q] >
+### 動作
+
+```
+> /approve
+
+Auto-approve (current: OFF):
+  1. ON — auto-approve all commands
+  2. OFF — require approval
+
+├──────────────────────────────────────────────────────────┤
+│ select [1-2/q] > █
+╰──────────────────────────────────────────────────────────╯
 ```
 
-Selection keys:
-- `1`-`N`: choose option and execute callback
-- `q`: cancel and return to normal mode
+### キー操作
 
-## Autocomplete
-Typing `/` shows slash-command suggestions.
-Suggested commands:
-- `/model`
-- `/targets`
-- `/target`
-- `/recontree`
-- `/skip-recon`
-- `/status`
-- `/fold`
+| キー | 動作 |
+|------|------|
+| `1`〜`N` | 対応する番号の選択肢を確定し、コールバックを実行 |
+| `q` | キャンセルして通常モードに戻る |
 
-## Proposal Mode (Optional)
-Approval prompt is not controlled by slash command anymore.
-If startup policy requires approval, prompt changes to:
+### 実装
 
-```text
-approve? [y/n/e] >
+- `App.inputMode` で `ModeNormal` / `ModeSelect` / `ModeProposal` / `ModeConfirmQuit` を管理
+- `ModeSelect` 時はテキスト入力を無効化し、番号入力のみ受け付ける
+- `showSelect(title, options, callback)` メソッドで選択UIを起動
+- 後方互換: `/approve on` `/approve off` のテキスト指定も引き続き動作
+
+## コマンドサジェスト
+
+入力フィールドで `/` を入力すると、利用可能なコマンドをオートコンプリート候補として表示。
+オートコンプリートは readline のネイティブ機能（`AutoComplete` 設定）により処理される。
+
+登録済みサジェスト: `/model`, `/approve`, `/targets`, `/target`, `/recontree`, `/skip-recon`, `/fold`, `/status`
+
+## Proposal（承認ゲート）
+
+承認が必要なコマンドは PROPOSAL ボックスとして出力エリアに表示される。
+入力プロンプトが `approve? [y/n/e] >` に変化し、以下の入力を受け付ける:
+
+| キー | 動作 |
+|------|------|
+| `y` | 承認 → コマンドを実行 |
+| `n` | 拒否 → Brain に「ユーザーが拒否した」と伝える |
+| `e` | 編集 → コマンドを表示して編集方法を提示 |
+
+## Agent イベントと表示
+
+### イベントタイプ一覧
+
+Agent Loop から TUI へ送信されるイベントの全種別:
+
+| イベントタイプ | 値 | 説明 |
+|---------------|-----|------|
+| `EventLog` | `"log"` | 通常のログ行（AI の思考・ツール出力・システムメッセージ） |
+| `EventProposal` | `"proposal"` | Brain がエクスプロイト等の重要アクションを提案 |
+| `EventComplete` | `"complete"` | ターゲットのアセスメントが完了 |
+| `EventError` | `"error"` | リカバリー不能なエラーが発生 |
+| `EventAddTarget` | `"add_target"` | 横展開で新ターゲットを追加 |
+| `EventStalled` | `"stalled"` | 連続失敗でユーザーの方針指示を待機 |
+| `EventTurnStart` | `"turn_start"` | Brain 思考サイクルの開始 |
+| `EventCommandResult` | `"command_result"` | コマンド実行結果のサマリー |
+
+### Event 構造体のフィールド
+
+```go
+type Event struct {
+    TargetID   int       // どのターゲットのイベントか（TUI のルーティング用）
+    Type       EventType
+    Source     LogSource // EventLog 時に使用
+    Message    string
+    Proposal   *Proposal // EventProposal 時に使用
+    NewHost    string    // EventAddTarget 時に使用
+    TurnNumber int       // EventTurnStart 時のターン番号
+    ExitCode   int       // EventCommandResult 時の exit code
+}
 ```
 
-Keys in proposal mode:
-- `y`: approve
-- `n`: reject
-- `e`: edit command text
+### LogEntry の拡張フィールド
 
-## Folding and Visibility
-- `Ctrl+O`: collapse/expand tool-output blocks globally.
-- `Ctrl+T`: collapse/expand thinking blocks globally.
-- `/fold`: same behavior as `Ctrl+O`.
+セッションログの各エントリ（`LogEntry`）は、通常のログ情報に加えて以下のフィールドを持つ:
 
-## Multi-line Input
-Default behavior is single-line submit.
-
-- `Enter`: submit input.
-- `Shift+Enter`: insert newline.
-- `Ctrl+Enter`: insert newline on terminals that do not emit Shift+Enter distinctly (common on Windows Terminal).
-- `Ctrl+J`: fallback newline insertion.
-
-Example:
-```text
-> investigate /admin endpoint and
-  then focus SQLi with time-based payloads
+```go
+type LogEntry struct {
+    Time       time.Time
+    Source     LogSource
+    Message    string
+    Type       EventType // "turn_start", "command_result", or "" (通常ログ)
+    TurnNumber int       // EventTurnStart 時のターン番号
+    ExitCode   int       // EventCommandResult 時の exit code
+}
 ```
 
-## Input Modes
-| Mode | Prompt |
-|---|---|
-| `Normal` | `> ` |
-| `Select` | `select [1-N/q] > ` |
-| `Proposal` (optional) | `approve? [y/n/e] > ` |
-| `ConfirmQuit` | `Quit Pentecter? [y/n] > ` |
+| フィールド | 使用条件 | 説明 |
+|-----------|---------|------|
+| `Type` | 常に設定可 | `EventTurnStart` または `EventCommandResult` の場合に特殊表示を行う。空文字は通常ログ |
+| `TurnNumber` | `Type == EventTurnStart` | ターン区切り表示に使用するターン番号（1始まり） |
+| `ExitCode` | `Type == EventCommandResult` | コマンド結果サマリーの色分けに使用 |
 
-## Related Files
-- `internal/tui/app.go`
-- `internal/tui/input.go`
-- `internal/tui/commands.go`
-- `internal/tui/output.go`
-- `internal/tui/events.go`
+### ターン区切りの表示仕様
+
+`EventTurnStart` イベントを受信すると、セッションログにターン区切り線を描画する:
+
+```
+───────────── Turn 3 ─────────────
+```
+
+- 区切り線は `─` 記号でターミナル幅いっぱいに描画
+- ターン番号は中央に配置
+- スタイル: 薄い色（`colorMuted`）で表示し、通常のログとの視覚的区別を明確にする
+
+### コマンド結果サマリーの表示仕様
+
+`EventCommandResult` イベントを受信すると、コマンド実行結果を1行サマリーで表示する:
+
+- **成功時（exit code == 0）**: 緑色で表示
+  ```
+  ✓ exit 0 (42 lines)
+  ```
+- **失敗時（exit code != 0）**: 赤色太字で表示
+  ```
+  ✗ exit 1: Connection refused
+  ```
+
+サマリーの生成ロジック（`buildCommandSummary()`）:
+- 成功時: exit code と出力行数を表示
+- 失敗時: exit code と出力の1行目（最大80文字、超過分は `...` で切り捨て）を表示
+
+## 関連ファイル
+
+- `internal/tui/app.go` — App 構造体、Run() メインループ、InputMode 定義
+- `internal/tui/input.go` — コマンドパース、選択UI の入力処理
+- `internal/tui/output.go` — スピナー、折りたたみ、Proposal/Status 表示
+- `internal/tui/events.go` — イベント消費 goroutine、handleAgentEvent()
+- `internal/tui/commands.go` — /model, /approve, /targets 等のハンドラ、SelectOption
+- `internal/agent/event.go` — EventType 定義、Event 構造体
+- `internal/agent/target.go` — LogEntry 構造体（Type, TurnNumber, ExitCode フィールド）

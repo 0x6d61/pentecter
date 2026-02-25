@@ -191,6 +191,7 @@ func TestRenderCommandBlock_ShortCommandNotTruncated(t *testing.T) {
 	}
 }
 
+
 // ---------------------------------------------------------------------------
 // renderThinkingBlock
 // ---------------------------------------------------------------------------
@@ -199,9 +200,10 @@ func TestRenderThinkingBlock_InProgress(t *testing.T) {
 	b := agent.NewThinkingBlock()
 	b.ThinkingDone = false
 
-	result := renderThinkingBlock(b, "x", true)
+	result := renderThinkingBlock(b, "⠋")
+
 	if !strings.Contains(result, "Thinking...") {
-		t.Errorf("expected 'Thinking...' for in-progress thinking block, got: %q", result)
+		t.Errorf("expected 'Thinking...' for in-progress thinking, got: %q", result)
 	}
 }
 
@@ -209,13 +211,14 @@ func TestRenderThinkingBlock_InProgress_WithSpinner(t *testing.T) {
 	b := agent.NewThinkingBlock()
 	b.ThinkingDone = false
 
-	for _, frame := range []string{"a", "b", "c", "d"} {
-		result := renderThinkingBlock(b, frame, true)
-		if !strings.Contains(result, "Thinking...") {
-			t.Errorf("expected 'Thinking...' text for active thinking frame %q, got: %q", frame, result)
+	// 各スピナーフレームが出力に反映されることを確認
+	for _, frame := range []string{"⠋", "⠙", "⠹", "⠸"} {
+		result := renderThinkingBlock(b, frame)
+		if !strings.Contains(result, frame) {
+			t.Errorf("expected spinner frame %q in output, got: %q", frame, result)
 		}
-		if strings.Contains(result, frame) {
-			t.Errorf("expected no spinner frame %q in thinking block output, got: %q", frame, result)
+		if !strings.Contains(result, "Thinking...") {
+			t.Errorf("expected 'Thinking...' text alongside spinner frame %q, got: %q", frame, result)
 		}
 	}
 }
@@ -225,8 +228,11 @@ func TestRenderThinkingBlock_Completed(t *testing.T) {
 	b.ThinkingDone = true
 	b.ThinkDuration = 12 * time.Second
 
-	result := renderThinkingBlock(b, "⠋", true)
+	result := renderThinkingBlock(b, "⠋")
 
+	if !strings.Contains(result, "✻") {
+		t.Error("expected '✻' in completed thinking block")
+	}
 	if !strings.Contains(result, "Completed in 12s") {
 		t.Errorf("expected 'Completed in 12s', got: %q", result)
 	}
@@ -241,7 +247,7 @@ func TestRenderThinkingBlock_CompletedMinutes(t *testing.T) {
 	b.ThinkingDone = true
 	b.ThinkDuration = 1*time.Minute + 23*time.Second
 
-	result := renderThinkingBlock(b, "⠋", true)
+	result := renderThinkingBlock(b, "⠋")
 
 	if !strings.Contains(result, "Completed in 1m23s") {
 		t.Errorf("expected 'Completed in 1m23s', got: %q", result)
@@ -253,7 +259,7 @@ func TestRenderThinkingBlock_CompletedSubSecond(t *testing.T) {
 	b.ThinkingDone = true
 	b.ThinkDuration = 500 * time.Millisecond
 
-	result := renderThinkingBlock(b, "⠋", true)
+	result := renderThinkingBlock(b, "⠋")
 
 	if !strings.Contains(result, "<1s") {
 		t.Errorf("expected '<1s' for sub-second duration, got: %q", result)
@@ -557,7 +563,7 @@ func TestFormatDuration_ExactMinute(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRenderBlocks_Empty(t *testing.T) {
-	result := renderBlocks(nil, 80, false, true, "⠋")
+	result := renderBlocks(nil, 80, false, "⠋")
 	if result != "" {
 		t.Errorf("expected empty string for nil blocks, got %q", result)
 	}
@@ -576,7 +582,7 @@ func TestRenderBlocks_MultipleTypes(t *testing.T) {
 		agent.NewMemoryBlock("MEDIUM", "Open SSH port"),
 	}
 
-	result := renderBlocks(blocks, 80, false, true, "⠋")
+	result := renderBlocks(blocks, 80, false, "⠋")
 	stripped := stripANSI(result)
 
 	if !strings.Contains(stripped, "Session started") {
@@ -607,7 +613,7 @@ func TestRenderBlocks_NoSessionHeader(t *testing.T) {
 		agent.NewSystemBlock("Session started"),
 	}
 
-	result := renderBlocks(blocks, 80, false, true, "⠋")
+	result := renderBlocks(blocks, 80, false, "⠋")
 
 	// New renderer should NOT contain the old session header
 	if strings.Contains(result, "═══ Session:") {
@@ -624,7 +630,7 @@ func TestRenderBlocks_ThinkingThenCommand(t *testing.T) {
 	cmd.Output = []string{"root"}
 
 	blocks := []*agent.DisplayBlock{thinking, cmd}
-	result := renderBlocks(blocks, 80, false, true, "⠋")
+	result := renderBlocks(blocks, 80, false, "⠋")
 
 	if !strings.Contains(result, "Completed in 3s") {
 		t.Error("expected thinking completion")
@@ -638,18 +644,17 @@ func TestRenderBlocks_ThinkingThenCommand(t *testing.T) {
 }
 
 func TestRenderBlocks_SpinnerFramePassedToThinkingAndSubTask(t *testing.T) {
+	// 処理中の thinking + subtask の両方にスピナーフレームが渡されることを確認
 	blocks := []*agent.DisplayBlock{
 		agent.NewThinkingBlock(),
 		agent.NewSubTaskBlock("task-1", "Run exploit"),
 	}
 
-	result := renderBlocks(blocks, 80, false, true, "*")
+	result := renderBlocks(blocks, 80, false, "⠹")
 
-	if !strings.Contains(result, "Thinking...") {
-		t.Errorf("expected active thinking block to be visible, got:\n%s", result)
-	}
-	if !strings.Contains(result, "*") {
-		t.Errorf("expected spinner frame '*' in output for active subtask, got:\n%s", result)
+	// Both blocks should contain the spinner frame "⠹"
+	if !strings.Contains(result, "⠹") {
+		t.Errorf("expected spinner frame '⠹' in output for active blocks, got:\n%s", result)
 	}
 }
 
@@ -699,7 +704,7 @@ func TestBlockCache_CompletedThinking(t *testing.T) {
 	b.ThinkDuration = 5 * time.Second
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Error("expected RenderedCache to be set for completed thinking block")
 	}
@@ -713,7 +718,7 @@ func TestBlockCache_ActiveThinking(t *testing.T) {
 	b.ThinkingDone = false
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache != "" {
 		t.Error("expected RenderedCache to be empty for active thinking block")
 	}
@@ -725,7 +730,7 @@ func TestBlockCache_CompletedCommand(t *testing.T) {
 	b.Completed = true
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Error("expected RenderedCache to be set for completed command block")
 	}
@@ -736,7 +741,7 @@ func TestBlockCache_ActiveCommand(t *testing.T) {
 	b.Completed = false
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache != "" {
 		t.Error("expected RenderedCache to be empty for active command block")
 	}
@@ -746,7 +751,7 @@ func TestBlockCache_AIMessage(t *testing.T) {
 	b := agent.NewAIMessageBlock("Hello world")
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Error("expected RenderedCache to be set for AI message block")
 	}
@@ -757,13 +762,13 @@ func TestBlockCache_WidthChange(t *testing.T) {
 	blocks := []*agent.DisplayBlock{b}
 
 	// First render at width 80
-	result1 := renderBlocks(blocks, 80, false, true, "⠋")
+	result1 := renderBlocks(blocks, 80, false, "⠋")
 	if b.CacheWidth != 80 {
 		t.Fatalf("expected CacheWidth 80, got %d", b.CacheWidth)
 	}
 
 	// Second render at different width — should re-render
-	result2 := renderBlocks(blocks, 40, false, true, "⠋")
+	result2 := renderBlocks(blocks, 40, false, "⠋")
 	if b.CacheWidth != 40 {
 		t.Errorf("expected CacheWidth updated to 40, got %d", b.CacheWidth)
 	}
@@ -777,13 +782,13 @@ func TestBlockCache_CacheHit(t *testing.T) {
 	blocks := []*agent.DisplayBlock{b}
 
 	// First render — sets cache
-	result1 := renderBlocks(blocks, 80, false, true, "⠋")
+	result1 := renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Fatal("expected cache to be set after first render")
 	}
 
 	// Second render — should use cache (same output)
-	result2 := renderBlocks(blocks, 80, false, true, "⠋")
+	result2 := renderBlocks(blocks, 80, false, "⠋")
 	if result1 != result2 {
 		t.Error("expected identical output from cached render")
 	}
@@ -795,7 +800,7 @@ func TestBlockCache_CompletedSubTask(t *testing.T) {
 	b.TaskDuration = 3 * time.Second
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Error("expected RenderedCache to be set for completed subtask block")
 	}
@@ -806,7 +811,7 @@ func TestBlockCache_ActiveSubTask(t *testing.T) {
 	b.TaskDone = false
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache != "" {
 		t.Error("expected RenderedCache to be empty for active subtask block")
 	}
@@ -816,7 +821,7 @@ func TestBlockCache_MemoryBlock(t *testing.T) {
 	b := agent.NewMemoryBlock("HIGH", "SQL Injection")
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Error("expected RenderedCache to be set for memory block")
 	}
@@ -826,7 +831,7 @@ func TestBlockCache_UserInputBlock(t *testing.T) {
 	b := agent.NewUserInputBlock("scan target")
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.RenderedCache == "" {
 		t.Error("expected RenderedCache to be set for user input block")
 	}
@@ -839,14 +844,14 @@ func TestBlockCache_ExpandedChange(t *testing.T) {
 	blocks := []*agent.DisplayBlock{b}
 
 	// Render with expanded=false
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 	if b.CacheExpanded != false {
 		t.Error("expected CacheExpanded=false")
 	}
 	cachedFolded := b.RenderedCache
 
 	// Render with expanded=true — cache should be invalidated
-	_ = renderBlocks(blocks, 80, true, true, "⠋")
+	_ = renderBlocks(blocks, 80, true, "⠋")
 	if b.CacheExpanded != true {
 		t.Error("expected CacheExpanded=true after re-render")
 	}
@@ -893,11 +898,11 @@ func BenchmarkRenderBlocks_50Blocks_Cached(b *testing.B) {
 	}
 
 	// Warm up cache
-	_ = renderBlocks(blocks, 80, false, true, "⠋")
+	_ = renderBlocks(blocks, 80, false, "⠋")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = renderBlocks(blocks, 80, false, true, "⠋")
+		_ = renderBlocks(blocks, 80, false, "⠋")
 	}
 }
 
@@ -929,6 +934,6 @@ func BenchmarkRenderBlocks_50Blocks_NoCacheBaseline(b *testing.B) {
 				blocks[j] = blk
 			}
 		}
-		_ = renderBlocks(blocks, 80, false, true, "⠋")
+		_ = renderBlocks(blocks, 80, false, "⠋")
 	}
 }

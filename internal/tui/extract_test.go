@@ -6,6 +6,7 @@ import (
 
 	"github.com/0x6d61/pentecter/internal/agent"
 	"github.com/0x6d61/pentecter/internal/brain"
+	"github.com/0x6d61/pentecter/internal/tools"
 )
 
 func TestExtractHostFromText(t *testing.T) {
@@ -198,5 +199,71 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected system block about no providers")
+	}
+}
+
+func TestHandleApproveCommand_ShowState(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
+	a.Runner = runner
+
+	a.handleApproveCommand("/approve")
+
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
+	}
+	if len(a.selectOpts) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(a.selectOpts))
+	}
+}
+
+func TestHandleApproveCommand_WithArgs_ShowsSelectUI(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
+	a.Runner = runner
+
+	a.handleApproveCommand("/approve on")
+
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
+	}
+	if len(a.selectOpts) != 2 {
+		t.Errorf("expected 2 options (ON/OFF), got %d", len(a.selectOpts))
+	}
+}
+
+func TestHandleApproveCommand_OffArgs_ShowsSelectUI(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+	runner := tools.NewCommandRunner(tools.NewRegistry(), tools.NewBlacklist(nil), tools.NewLogStore())
+	runner.SetAutoApprove(true)
+	a.Runner = runner
+
+	a.handleApproveCommand("/approve off")
+
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
+	}
+	if !runner.AutoApprove() {
+		t.Error("auto-approve should remain ON until user selects from UI")
+	}
+}
+
+func TestHandleApproveCommand_NilRunner(t *testing.T) {
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+
+	a.handleApproveCommand("/approve")
+
+	found := false
+	for _, b := range target.Blocks {
+		if b.Type == agent.BlockSystem && b.SystemMsg == "Auto-approve not available" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected system block about auto-approve not available")
 	}
 }
