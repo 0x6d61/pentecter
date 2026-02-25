@@ -475,3 +475,95 @@ func TestHandleAgentEvent_EventCmdOutput_NoFoldWhenExpanded(t *testing.T) {
 		t.Error("should not contain fold indicator when expanded")
 	}
 }
+
+// --- cmdOutputDirty バッチ化テスト ---
+
+func TestHandleAgentEvent_EventCmdOutput_SetsDirtyFlag(t *testing.T) {
+	// EventCmdOutput は outputVersion を直接変更せず、cmdOutputDirty フラグを設定する
+	target := agent.NewTarget(1, "10.0.0.1")
+	var buf bytes.Buffer
+	a := NewApp([]*agent.Target{target})
+	a.testWriter = &buf
+
+	// コマンド開始
+	a.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdStart,
+		Message:  "webfuzz http://target/FUZZ",
+	})
+
+	// outputVersion を記録
+	a.mu.Lock()
+	versionBefore := a.outputVersion
+	a.mu.Unlock()
+
+	// 出力行を送信
+	a.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "200 /admin",
+	})
+
+	a.mu.Lock()
+	dirty := a.cmdOutputDirty
+	versionAfter := a.outputVersion
+	a.mu.Unlock()
+
+	// cmdOutputDirty がセットされていること
+	if !dirty {
+		t.Error("expected cmdOutputDirty=true after EventCmdOutput")
+	}
+
+	// outputVersion は変わらないこと（バッチ化のため）
+	if versionAfter != versionBefore {
+		t.Errorf("expected outputVersion to remain %d, got %d (should not increment on EventCmdOutput)", versionBefore, versionAfter)
+	}
+
+	// Output 自体は追加されていること
+	if len(target.Blocks[0].Output) != 1 {
+		t.Fatalf("expected 1 output line, got %d", len(target.Blocks[0].Output))
+	}
+}
+
+func TestHandleAgentEvent_EventCmdDone_ClearsDirtyFlag(t *testing.T) {
+	// EventCmdDone は cmdOutputDirty をクリアし、outputVersion を更新する
+	target := agent.NewTarget(1, "10.0.0.1")
+	var buf bytes.Buffer
+	a := NewApp([]*agent.Target{target})
+	a.testWriter = &buf
+
+	a.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdStart,
+		Message:  "webfuzz http://target/FUZZ",
+	})
+
+	// 出力を追加して dirty にする
+	a.handleAgentEvent(agent.Event{
+		TargetID:   1,
+		Type:       agent.EventCmdOutput,
+		OutputLine: "200 /admin",
+	})
+
+	a.mu.Lock()
+	if !a.cmdOutputDirty {
+		t.Fatal("expected cmdOutputDirty=true before CmdDone")
+	}
+	a.mu.Unlock()
+
+	// コマンド完了
+	a.handleAgentEvent(agent.Event{
+		TargetID: 1,
+		Type:     agent.EventCmdDone,
+		ExitCode: 0,
+		Duration: 2 * time.Second,
+	})
+
+	a.mu.Lock()
+	dirty := a.cmdOutputDirty
+	a.mu.Unlock()
+
+	if dirty {
+		t.Error("expected cmdOutputDirty=false after EventCmdDone")
+	}
+}

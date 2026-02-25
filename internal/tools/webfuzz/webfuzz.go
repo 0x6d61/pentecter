@@ -181,24 +181,19 @@ func fuzzOne(ctx context.Context, client *http.Client, opts Options, word string
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// レスポンスボディ読み取り
-	body, err := io.ReadAll(resp.Body)
+	// Drain response body without buffering whole payload into memory.
+	// This keeps connection reuse while reducing allocation/GC pressure.
+	bodyBytes, err := io.Copy(io.Discard, resp.Body)
 	if err != nil {
 		return Hit{}, false, err
 	}
-
-	bodyStr := string(body)
-	length := len(body)
-	wordCount := countWords(bodyStr)
-	lineCount := countLines(bodyStr)
+	length := int(bodyBytes)
 
 	hit := Hit{
 		Input:      word,
 		URL:        url,
 		StatusCode: resp.StatusCode,
 		Length:     length,
-		Words:      wordCount,
-		Lines:      lineCount,
 	}
 
 	// マッチ/フィルタ判定

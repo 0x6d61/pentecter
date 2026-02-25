@@ -113,7 +113,8 @@ func (a *App) handleAgentEvent(e agent.Event) {
 		last := t.LastBlock()
 		if last != nil && last.Type == agent.BlockCommand && !last.Completed {
 			last.Output = append(last.Output, e.OutputLine)
-			displayChanged = true
+			// キャッシュ無効化はスピナーティックまたは EventCmdDone でバッチ処理
+			a.cmdOutputDirty = true
 		}
 
 	case agent.EventCmdDone:
@@ -124,6 +125,7 @@ func (a *App) handleAgentEvent(e agent.Event) {
 			last.Duration = e.Duration
 			displayChanged = true
 		}
+		a.cmdOutputDirty = false // CmdDone で最終状態を確定
 		spinnerStateChanged = true
 
 	case agent.EventSubTaskStart:

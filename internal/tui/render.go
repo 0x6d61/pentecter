@@ -255,8 +255,11 @@ func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinne
 	for _, b := range blocks {
 		// キャッシュヒット判定
 		if b.RenderedCache != "" && b.CacheWidth == width && b.CacheExpanded == expanded {
-			sb.WriteString(b.RenderedCache)
-			continue
+			// 未完了コマンドブロックは出力行数が変わらない場合のみキャッシュ有効
+			if b.Type != agent.BlockCommand || b.Completed || b.CacheOutputLen == len(b.Output) {
+				sb.WriteString(b.RenderedCache)
+				continue
+			}
 		}
 
 		// レンダリング実行
@@ -291,6 +294,12 @@ func renderBlocks(blocks []*agent.DisplayBlock, width int, expanded bool, spinne
 			b.RenderedCache = rendered
 			b.CacheWidth = width
 			b.CacheExpanded = expanded
+		} else if b.Type == agent.BlockCommand && !b.Completed && rendered != "" {
+			// 未完了コマンドブロック: 出力行数でキャッシュを追跡
+			b.RenderedCache = rendered
+			b.CacheWidth = width
+			b.CacheExpanded = expanded
+			b.CacheOutputLen = len(b.Output)
 		}
 
 		sb.WriteString(rendered)

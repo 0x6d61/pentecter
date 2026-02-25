@@ -191,7 +191,6 @@ func TestRenderCommandBlock_ShortCommandNotTruncated(t *testing.T) {
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // renderThinkingBlock
 // ---------------------------------------------------------------------------
@@ -738,12 +737,33 @@ func TestBlockCache_CompletedCommand(t *testing.T) {
 
 func TestBlockCache_ActiveCommand(t *testing.T) {
 	b := agent.NewCommandBlock("running...")
+	b.Output = []string{"first line"}
 	b.Completed = false
 	blocks := []*agent.DisplayBlock{b}
 
-	_ = renderBlocks(blocks, 80, false, "⠋")
-	if b.RenderedCache != "" {
-		t.Error("expected RenderedCache to be empty for active command block")
+	// 未完了コマンドでも部分キャッシュが設定される
+	result1 := renderBlocks(blocks, 80, false, "⠋")
+	if b.RenderedCache == "" {
+		t.Error("expected RenderedCache to be set for active command block (partial cache)")
+	}
+	if b.CacheOutputLen != 1 {
+		t.Errorf("expected CacheOutputLen=1, got %d", b.CacheOutputLen)
+	}
+
+	// 同じ出力行数でキャッシュヒット
+	result2 := renderBlocks(blocks, 80, false, "⠋")
+	if result1 != result2 {
+		t.Error("expected cache hit when output length unchanged")
+	}
+
+	// 出力追加でキャッシュミス → 再レンダリング
+	b.Output = append(b.Output, "second line")
+	result3 := renderBlocks(blocks, 80, false, "⠋")
+	if b.CacheOutputLen != 2 {
+		t.Errorf("expected CacheOutputLen=2 after new output, got %d", b.CacheOutputLen)
+	}
+	if result3 == result1 {
+		t.Error("expected different output after adding new line")
 	}
 }
 

@@ -1019,7 +1019,7 @@ func (l *Loop) streamAndCollect(ctx context.Context, linesCh <-chan tools.Output
 		}
 		lastLine = line.Content
 		now := time.Now()
-		if now.Sub(lastEmit) >= 100*time.Millisecond {
+		if now.Sub(lastEmit) >= 500*time.Millisecond {
 			l.emit(Event{Type: EventCmdOutput, OutputLine: lastLine})
 			lastEmit = now
 		}
