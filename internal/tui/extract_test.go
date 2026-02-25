@@ -130,6 +130,7 @@ func newTestApp(targets []*agent.Target) *App {
 func TestHandleModelCommand_ListProviders(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -156,10 +157,38 @@ func TestHandleModelCommand_ListProviders(t *testing.T) {
 	}
 }
 
+func TestHandleModelCommand_ListProviders_AnthropicOAuthTokenAlias(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "sk-ant-ocp01-alias")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+
+	a.handleModelCommand("/model")
+
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
+	}
+	found := false
+	for _, opt := range a.selectOpts {
+		if opt.Value == "anthropic" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'anthropic' in select options when ANTHROPIC_OAUTH_TOKEN is set")
+	}
+}
+
 func TestHandleModelCommand_WithArgs_ShowsSelectUI(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 
@@ -180,6 +209,7 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 

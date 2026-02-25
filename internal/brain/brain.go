@@ -154,6 +154,7 @@ func DetectAvailableProviders() []Provider {
 	// Anthropic: API key or OAuth token
 	if os.Getenv("ANTHROPIC_API_KEY") != "" ||
 		os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" ||
+		os.Getenv("ANTHROPIC_OAUTH_TOKEN") != "" ||
 		os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" {
 		providers = append(providers, ProviderAnthropic)
 	}
@@ -182,7 +183,9 @@ type ConfigHint struct {
 //
 // Anthropic 優先順位:
 //  1. ANTHROPIC_API_KEY       → AuthAPIKey
-//  2. ANTHROPIC_AUTH_TOKEN    → AuthOAuthToken（`claude auth token` の出力）
+//  2. CLAUDE_CODE_OAUTH_TOKEN → AuthOAuthToken（公式）
+//  3. ANTHROPIC_OAUTH_TOKEN   → AuthOAuthToken（互換）
+//  4. ANTHROPIC_AUTH_TOKEN    → AuthOAuthToken（互換）
 //
 // OpenAI:
 //  1. OPENAI_API_KEY          → AuthAPIKey
@@ -207,8 +210,8 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			cfg.AuthType = AuthAPIKey
 			return cfg, nil
 		}
-		// Claude Code OAuth token: CLAUDE_CODE_OAUTH_TOKEN (公式) or ANTHROPIC_AUTH_TOKEN (互換)
-		for _, envKey := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"} {
+		// Claude/Anthropic OAuth token aliases.
+		for _, envKey := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"} {
 			if token := os.Getenv(envKey); token != "" {
 				cfg.Token = token
 				cfg.AuthType = AuthOAuthToken
@@ -216,7 +219,7 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 			}
 		}
 		return cfg, errors.New(
-			"brain: Anthropic credentials not found, set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN",
+			"brain: Anthropic credentials not found, set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_OAUTH_TOKEN)",
 		)
 
 	case ProviderOpenAI:

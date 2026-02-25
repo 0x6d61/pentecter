@@ -110,7 +110,7 @@ func modelsForProvider(p brain.Provider) []SelectOption {
 func (a *App) handleModelCommand(_ string) {
 	detected := brain.DetectAvailableProviders()
 	if len(detected) == 0 {
-		a.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
+		a.logSystem("No providers detected. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_OAUTH_TOKEN), OPENAI_API_KEY, or OLLAMA_BASE_URL.")
 		return
 	}
 

@@ -44,6 +44,8 @@ Flags:
 Environment:
   ANTHROPIC_API_KEY          Anthropic API key
   CLAUDE_CODE_OAUTH_TOKEN    Claude Code OAuth token (claude setup-token)
+  ANTHROPIC_OAUTH_TOKEN      Anthropic OAuth token (alias)
+  ANTHROPIC_AUTH_TOKEN       Anthropic auth token (compat alias)
   OPENAI_API_KEY        OpenAI API key
   OLLAMA_BASE_URL       Ollama server URL (default: http://localhost:11434)
   OLLAMA_MODEL          Ollama model name (default: llama3.2)
@@ -68,7 +70,7 @@ Chat commands:
 		detected := brain.DetectAvailableProviders()
 		if len(detected) == 0 {
 			fmt.Fprintln(os.Stderr, "No LLM provider detected. Set one of:")
-			fmt.Fprintln(os.Stderr, "  ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, or OLLAMA_BASE_URL")
+			fmt.Fprintln(os.Stderr, "  ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_OAUTH_TOKEN, OPENAI_API_KEY, or OLLAMA_BASE_URL")
 			os.Exit(1)
 		}
 		selectedProvider = detected[0]

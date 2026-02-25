@@ -215,6 +215,7 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 func TestLoadConfig_OAuthEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-ocp01-oauth")
 
 	cfg, err := brain.LoadConfig(brain.ConfigHint{
@@ -301,6 +302,7 @@ func TestLoadConfig_Ollama_CustomURL(t *testing.T) {
 func TestDetectAvailableProviders_AnthropicAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -317,6 +319,24 @@ func TestDetectAvailableProviders_AnthropicAPIKey(t *testing.T) {
 func TestDetectAvailableProviders_OAuthToken(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-ocp01-test")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	providers := brain.DetectAvailableProviders()
+	if len(providers) == 0 {
+		t.Fatal("expected at least one provider")
+	}
+	if providers[0] != brain.ProviderAnthropic {
+		t.Errorf("first provider: got %q, want anthropic", providers[0])
+	}
+}
+
+func TestDetectAvailableProviders_AnthropicOAuthTokenAlias(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "sk-ant-ocp01-alias")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -333,6 +353,7 @@ func TestDetectAvailableProviders_OAuthToken(t *testing.T) {
 func TestDetectAvailableProviders_OpenAI(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -349,6 +370,7 @@ func TestDetectAvailableProviders_OpenAI(t *testing.T) {
 func TestDetectAvailableProviders_Multiple(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -369,6 +391,7 @@ func TestDetectAvailableProviders_Multiple(t *testing.T) {
 func TestDetectAvailableProviders_None(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -382,6 +405,7 @@ func TestDetectAvailableProviders_None(t *testing.T) {
 func TestDetectAvailableProviders_OllamaExplicitURL(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "http://gpu-server:11434")
@@ -1396,6 +1420,7 @@ func TestOpenAIBrain_ExtractTarget_ContextCanceled(t *testing.T) {
 func TestLoadConfig_Anthropic_NoCredentials(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 
 	_, err := brain.LoadConfig(brain.ConfigHint{Provider: brain.ProviderAnthropic})
@@ -1424,6 +1449,7 @@ func TestLoadConfig_Anthropic_DefaultModel(t *testing.T) {
 func TestLoadConfig_Anthropic_ClaudeCodeOAuthToken(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-ocp01-claude-code")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 
 	cfg, err := brain.LoadConfig(brain.ConfigHint{Provider: brain.ProviderAnthropic})
@@ -1438,10 +1464,29 @@ func TestLoadConfig_Anthropic_ClaudeCodeOAuthToken(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_Anthropic_OAuthTokenAlias(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "sk-ant-ocp01-alias")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+
+	cfg, err := brain.LoadConfig(brain.ConfigHint{Provider: brain.ProviderAnthropic})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Token != "sk-ant-ocp01-alias" {
+		t.Errorf("Token: got %q, want sk-ant-ocp01-alias", cfg.Token)
+	}
+	if cfg.AuthType != brain.AuthOAuthToken {
+		t.Errorf("AuthType: got %q, want %q", cfg.AuthType, brain.AuthOAuthToken)
+	}
+}
+
 // LoadConfig: Anthropic API KEY は OAuth より優先されること。
 func TestLoadConfig_Anthropic_APIKeyPriority(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-apikey")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-ocp01-oauth")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "sk-ant-ocp01-alias")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-auth")
 
 	cfg, err := brain.LoadConfig(brain.ConfigHint{Provider: brain.ProviderAnthropic})
@@ -1759,6 +1804,7 @@ func TestOpenAIBrain_ExtractTarget_BaseURLWithV1(t *testing.T) {
 func TestDetectAvailableProviders_AnthropicAuthToken(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-auth-test")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
@@ -1776,6 +1822,7 @@ func TestDetectAvailableProviders_AnthropicAuthToken(t *testing.T) {
 func TestDetectAvailableProviders_All(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
 	t.Setenv("OLLAMA_BASE_URL", "http://localhost:11434")
