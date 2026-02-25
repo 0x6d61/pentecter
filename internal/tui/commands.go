@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
 )
@@ -79,6 +81,95 @@ func (a *App) handleApproveCommand(_ string) {
 	)
 }
 
+func parseModelArg(fullText string) string {
+	fields := strings.Fields(fullText)
+	if len(fields) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(fields[1:], " "))
+}
+
+func modelOptionsFromOpenRouter(models []brain.OpenRouterModel) []SelectOption {
+	opts := make([]SelectOption, 0, len(models))
+	for _, m := range models {
+		label := m.ID
+		if m.Name != "" && !strings.EqualFold(m.Name, m.ID) {
+			label = fmt.Sprintf("%s (%s)", m.ID, m.Name)
+		}
+		opts = append(opts, SelectOption{Label: label, Value: m.ID})
+	}
+	return opts
+}
+
+func resolveOpenRouterModel(query string, models []brain.OpenRouterModel) (string, bool) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return "", false
+	}
+	for _, m := range models {
+		if strings.EqualFold(m.ID, q) {
+			return m.ID, true
+		}
+	}
+	return "", false
+}
+
+func filterOpenRouterModels(query string, models []brain.OpenRouterModel) []brain.OpenRouterModel {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return models
+	}
+	filtered := make([]brain.OpenRouterModel, 0, len(models))
+	for _, m := range models {
+		if strings.Contains(strings.ToLower(m.ID), q) || strings.Contains(strings.ToLower(m.Name), q) {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
+func (a *App) fetchOpenRouterModels(ctx context.Context) ([]brain.OpenRouterModel, error) {
+	if a.OpenRouterModelFetcher != nil {
+		return a.OpenRouterModelFetcher(ctx)
+	}
+	return brain.FetchOpenRouterModels(ctx)
+}
+
+func (a *App) showOpenRouterModelSelect(query string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	models, err := a.fetchOpenRouterModels(ctx)
+	if err != nil {
+		a.logSystem(fmt.Sprintf("Failed to fetch OpenRouter models: %v", err))
+		return
+	}
+	if len(models) == 0 {
+		a.logSystem("No models returned by OpenRouter.")
+		return
+	}
+
+	if query != "" {
+		if exact, ok := resolveOpenRouterModel(query, models); ok {
+			a.switchModel(brain.ProviderOpenRouter, exact)
+			return
+		}
+		models = filterOpenRouterModels(query, models)
+		if len(models) == 0 {
+			a.logSystem(fmt.Sprintf("No OpenRouter model matches: %s", query))
+			return
+		}
+	}
+
+	a.showSelect(
+		fmt.Sprintf("Select model (%s, %d):", brain.ProviderOpenRouter, len(models)),
+		modelOptionsFromOpenRouter(models),
+		func(a *App, modelValue string) {
+			a.switchModel(brain.ProviderOpenRouter, modelValue)
+		},
+	)
+}
+
 // modelsForProvider returns a list of models for the given provider.
 func modelsForProvider(p brain.Provider) []SelectOption {
 	switch p {
@@ -107,10 +198,16 @@ func modelsForProvider(p brain.Provider) []SelectOption {
 }
 
 // handleModelCommand processes /model commands.
-func (a *App) handleModelCommand(_ string) {
+func (a *App) handleModelCommand(fullText string) {
 	detected := brain.DetectAvailableProviders()
 	if len(detected) == 0 {
-		a.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
+		a.logSystem("No providers detected. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_OAUTH_TOKEN), OPENAI_API_KEY, OPENROUTER_API_KEY, or OLLAMA_BASE_URL.")
+		return
+	}
+	query := parseModelArg(fullText)
+
+	if len(detected) == 1 && detected[0] == brain.ProviderOpenRouter {
+		a.showOpenRouterModelSelect(query)
 		return
 	}
 
@@ -127,6 +224,10 @@ func (a *App) handleModelCommand(_ string) {
 		options,
 		func(a *App, providerValue string) {
 			provider := brain.Provider(providerValue)
+			if provider == brain.ProviderOpenRouter {
+				a.showOpenRouterModelSelect(query)
+				return
+			}
 			models := modelsForProvider(provider)
 			if len(models) == 0 {
 				a.switchModel(provider, "")
