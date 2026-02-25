@@ -103,9 +103,6 @@ func modelOptionsFromOpenRouter(models []brain.OpenRouterModel) []SelectOption {
 
 func resolveOpenRouterModel(query string, models []brain.OpenRouterModel) (string, bool) {
 	q := strings.TrimSpace(query)
-	if len(q) > len("openrouter/") && strings.HasPrefix(strings.ToLower(q), "openrouter/") {
-		q = strings.TrimSpace(q[len("openrouter/"):])
-	}
 	if q == "" {
 		return "", false
 	}
@@ -118,11 +115,7 @@ func resolveOpenRouterModel(query string, models []brain.OpenRouterModel) (strin
 }
 
 func filterOpenRouterModels(query string, models []brain.OpenRouterModel) []brain.OpenRouterModel {
-	q := strings.TrimSpace(query)
-	if len(q) > len("openrouter/") && strings.HasPrefix(strings.ToLower(q), "openrouter/") {
-		q = strings.TrimSpace(q[len("openrouter/"):])
-	}
-	q = strings.ToLower(q)
+	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return models
 	}
