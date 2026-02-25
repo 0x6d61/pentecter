@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/0x6d61/pentecter/internal/agent"
@@ -133,6 +134,7 @@ func TestHandleModelCommand_ListProviders(t *testing.T) {
 	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
@@ -163,6 +165,7 @@ func TestHandleModelCommand_ListProviders_AnthropicOAuthTokenAlias(t *testing.T)
 	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "sk-ant-ocp01-alias")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
@@ -190,6 +193,7 @@ func TestHandleModelCommand_WithArgs_ShowsSelectUI(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
@@ -211,6 +215,7 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
@@ -229,6 +234,68 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected system block about no providers")
+	}
+}
+
+func TestHandleModelCommand_ListProviders_IncludesOpenRouter(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+
+	a.handleModelCommand("/model")
+
+	if a.inputMode != ModeSelect {
+		t.Fatalf("expected ModeSelect mode, got %d", a.inputMode)
+	}
+	found := false
+	for _, opt := range a.selectOpts {
+		if opt.Value == "openrouter" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'openrouter' in provider options")
+	}
+}
+
+func TestHandleModelCommand_OpenRouterSingleProvider_ShowsModelSelection(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+	t.Setenv("OLLAMA_BASE_URL", "")
+
+	target := agent.NewTarget(1, "10.0.0.1")
+	a := newTestApp([]*agent.Target{target})
+	a.OpenRouterModelFetcher = func(context.Context) ([]brain.OpenRouterModel, error) {
+		return []brain.OpenRouterModel{
+			{ID: "openai/gpt-4o-mini", Name: "GPT-4o Mini"},
+			{ID: "anthropic/claude-3.5-sonnet", Name: "Claude 3.5 Sonnet"},
+		}, nil
+	}
+
+	a.handleModelCommand("/model")
+
+	if a.inputMode != ModeSelect {
+		t.Fatalf("expected ModeSelect mode, got %d", a.inputMode)
+	}
+	if len(a.selectOpts) == 0 {
+		t.Fatal("expected model options")
+	}
+	found := false
+	for _, opt := range a.selectOpts {
+		if opt.Value == "openai/gpt-4o-mini" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected openrouter model option to be shown")
 	}
 }
 
