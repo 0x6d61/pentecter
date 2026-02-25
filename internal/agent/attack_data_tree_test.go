@@ -2934,3 +2934,172 @@ func TestSnapshotRestore_PreservesCredentialAndInsight(t *testing.T) {
 		t.Fatalf("restored insight topic = %q, want default_credentials", node.Insights[0].Topic)
 	}
 }
+
+// --- EndpointPriority テスト ---
+
+func TestEndpointPriority_Classification(t *testing.T) {
+	tests := []struct {
+		path string
+		want EndpointPriority
+	}{
+		// High priority
+		{"/api", PriorityHigh},
+		{"/admin", PriorityHigh},
+		{"/login", PriorityHigh},
+		{"/auth", PriorityHigh},
+		{"/dashboard", PriorityHigh},
+		{"/upload", PriorityHigh},
+		{"/config", PriorityHigh},
+		{"/debug", PriorityHigh},
+		{"/console", PriorityHigh},
+		{"/graphql", PriorityHigh},
+
+		// Low priority
+		{"/static", PriorityLow},
+		{"/js", PriorityLow},
+		{"/css", PriorityLow},
+		{"/images", PriorityLow},
+		{"/img", PriorityLow},
+		{"/fonts", PriorityLow},
+		{"/assets", PriorityLow},
+		{"/vendor", PriorityLow},
+		{"/node_modules", PriorityLow},
+		{"/dist", PriorityLow},
+		{"/build", PriorityLow},
+
+		// Normal priority (デフォルト)
+		{"/", PriorityNormal},
+		{"/about", PriorityNormal},
+		{"/contact", PriorityNormal},
+		{"/blog", PriorityNormal},
+		{"/products", PriorityNormal},
+	}
+
+	for _, tt := range tests {
+		got := endpointPriority(tt.path)
+		if got != tt.want {
+			t.Errorf("endpointPriority(%q) = %d, want %d", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestEndpointPriority_NestedPath(t *testing.T) {
+	// 先頭セグメントで判定するため、/api/static は High
+	tests := []struct {
+		path string
+		want EndpointPriority
+	}{
+		{"/api/static", PriorityHigh},   // 先頭 = api → High
+		{"/api/v1/users", PriorityHigh}, // 先頭 = api → High
+		{"/static/api", PriorityLow},    // 先頭 = static → Low
+		{"/js/app.js", PriorityLow},     // 先頭 = js → Low
+		{"/admin/users", PriorityHigh},  // 先頭 = admin → High
+	}
+
+	for _, tt := range tests {
+		got := endpointPriority(tt.path)
+		if got != tt.want {
+			t.Errorf("endpointPriority(%q) = %d, want %d", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestNextBatch_EndpointPriorityOrder(t *testing.T) {
+	// High 優先度のエンドポイントが Low より先に返されること
+	tree := NewAttackDataTree("10.10.11.100", 10, 0) // 高い max_parallel で全部返す
+	tree.AddPort(80, "http", "Apache")
+
+	// Low → Normal → High の順で追加（逆順）
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/static", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/js", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/about", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/admin", 200)
+
+	// ポートレベルのタスクを完了にして、子タスクだけにする
+	tree.CompleteTask("10.10.11.100", 80, "", TaskEndpointEnum)
+	tree.CompleteTask("10.10.11.100", 80, "", TaskVhostDiscov)
+
+	batch := tree.NextBatch()
+	if len(batch) == 0 {
+		t.Fatal("NextBatch returned empty")
+	}
+
+	// endpoint_enum タスクだけ取り出して順序確認
+	var enumTasks []*ReconTask
+	for _, task := range batch {
+		if task.Type == TaskEndpointEnum {
+			enumTasks = append(enumTasks, task)
+		}
+	}
+
+	if len(enumTasks) < 2 {
+		t.Fatalf("expected at least 2 endpoint_enum tasks, got %d", len(enumTasks))
+	}
+
+	// High 優先度のタスクが先に来ていること
+	for i := 0; i < len(enumTasks)-1; i++ {
+		if enumTasks[i].Node.Priority > enumTasks[i+1].Node.Priority {
+			t.Errorf("endpoint_enum tasks not sorted by priority: [%d]=%q(prio=%d) before [%d]=%q(prio=%d)",
+				i, enumTasks[i].Path, enumTasks[i].Node.Priority,
+				i+1, enumTasks[i+1].Path, enumTasks[i+1].Node.Priority)
+		}
+	}
+}
+
+func TestAddEndpointWithStatus_LowPrioritySkipsParamFuzz(t *testing.T) {
+	tree := NewAttackDataTree("10.10.11.100", 2, 0)
+	tree.AddPort(80, "http", "Apache")
+
+	// Low 優先度パス
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/static", 200)
+	// High 優先度パス
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/api", 200)
+	// Normal 優先度パス
+	tree.AddEndpointWithStatus("10.10.11.100", 80, "/", "/about", 200)
+
+	port := tree.Ports[0]
+
+	// /static は EndpointEnum のみ Pending、ParamFuzz/ValueFuzz/Profiling は None
+	for _, child := range port.Children {
+		switch child.Path {
+		case "/static":
+			if child.Priority != PriorityLow {
+				t.Errorf("/static Priority = %d, want Low(%d)", child.Priority, PriorityLow)
+			}
+			if child.EndpointEnum != StatusPending {
+				t.Errorf("/static EndpointEnum = %d, want Pending", child.EndpointEnum)
+			}
+			if child.ParamFuzz != StatusNone {
+				t.Errorf("/static ParamFuzz = %d, want None (low priority skip)", child.ParamFuzz)
+			}
+			if child.ValueFuzz != StatusNone {
+				t.Errorf("/static ValueFuzz = %d, want None (low priority skip)", child.ValueFuzz)
+			}
+			if child.Profiling != StatusNone {
+				t.Errorf("/static Profiling = %d, want None (low priority skip)", child.Profiling)
+			}
+
+		case "/api":
+			if child.Priority != PriorityHigh {
+				t.Errorf("/api Priority = %d, want High(%d)", child.Priority, PriorityHigh)
+			}
+			// High パスは全タスク Pending
+			if child.ParamFuzz != StatusPending {
+				t.Errorf("/api ParamFuzz = %d, want Pending", child.ParamFuzz)
+			}
+			if child.ValueFuzz != StatusPending {
+				t.Errorf("/api ValueFuzz = %d, want Pending", child.ValueFuzz)
+			}
+
+		case "/about":
+			if child.Priority != PriorityNormal {
+				t.Errorf("/about Priority = %d, want Normal(%d)", child.Priority, PriorityNormal)
+			}
+			// Normal パスも全タスク Pending
+			if child.ParamFuzz != StatusPending {
+				t.Errorf("/about ParamFuzz = %d, want Pending", child.ParamFuzz)
+			}
+		}
+	}
+}
