@@ -106,6 +106,8 @@ type AttackDataNode struct {
 	Path    string // "/", "/api", "/api/v1" (endpoint nodes only)
 	// HTTPStatus is the observed status code for endpoint nodes (0 = unknown/not recorded).
 	HTTPStatus int
+	// Priority はパス名に基づくエンドポイント優先度（0=High, 1=Normal, 2=Low）
+	Priority EndpointPriority
 
 	// タスクステータス（ノードタイプによって使うフィールドが異なる）
 	EndpointEnum AttackDataStatus
@@ -293,6 +295,55 @@ func isStaticFileExt(ext string) bool {
 	return staticFileExts[ext]
 }
 
+// EndpointPriority はエンドポイントの攻撃価値に基づく優先度。
+type EndpointPriority int
+
+const (
+	// PriorityHigh は攻撃面が広い高価値エンドポイント（/api, /admin 等）
+	PriorityHigh EndpointPriority = iota
+	// PriorityNormal はデフォルト優先度
+	PriorityNormal
+	// PriorityLow は静的リソースディレクトリ（/static, /js 等）
+	PriorityLow
+)
+
+// highPrioritySegments は攻撃価値の高いパスの先頭セグメント。
+var highPrioritySegments = map[string]bool{
+	"api": true, "admin": true, "login": true, "auth": true,
+	"dashboard": true, "panel": true, "manage": true, "user": true,
+	"account": true, "upload": true, "config": true, "settings": true,
+	"debug": true, "console": true, "graphql": true, "webhook": true,
+}
+
+// lowPrioritySegments は静的リソースディレクトリの先頭セグメント。
+var lowPrioritySegments = map[string]bool{
+	"static": true, "js": true, "css": true, "images": true,
+	"img": true, "fonts": true, "assets": true, "media": true,
+	"vendor": true, "lib": true, "node_modules": true,
+	"bower_components": true, "public": true, "dist": true,
+	"build": true, "bundle": true,
+}
+
+// endpointPriority はパスの先頭セグメントに基づいて優先度を返す。
+func endpointPriority(p string) EndpointPriority {
+	trimmed := strings.Trim(p, "/")
+	if trimmed == "" {
+		return PriorityNormal
+	}
+	// 先頭セグメントを取得
+	seg := strings.ToLower(trimmed)
+	if idx := strings.Index(seg, "/"); idx > 0 {
+		seg = seg[:idx]
+	}
+	if highPrioritySegments[seg] {
+		return PriorityHigh
+	}
+	if lowPrioritySegments[seg] {
+		return PriorityLow
+	}
+	return PriorityNormal
+}
+
 // AddEndpoint は ffuf で発見した endpoint を親ノードの子として追加する。
 // httpStatus=0 として AddEndpointWithStatus に委譲する（後方互換）。
 func (t *AttackDataTree) AddEndpoint(host string, port int, parentPath, newPath string) {
@@ -368,6 +419,14 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 		profiling = StatusNone
 	}
 
+	// Low priority path check: 静的リソースディレクトリは ParamFuzz/ValueFuzz/Profiling をスキップ
+	prio := endpointPriority(newPath)
+	if paramFuzz != StatusNone && prio == PriorityLow {
+		paramFuzz = StatusNone
+		valueFuzz = StatusNone
+		profiling = StatusNone
+	}
+
 	// Depth check: if beyond MaxDepth, skip directory enumeration
 	if endpointEnum != StatusNone && t.MaxDepth > 0 && pathDepth(newPath) > t.MaxDepth {
 		endpointEnum = StatusNone
@@ -378,6 +437,7 @@ func (t *AttackDataTree) AddEndpointWithStatus(host string, port int, parentPath
 		Port:         port,
 		Path:         newPath,
 		HTTPStatus:   httpStatus,
+		Priority:     prio,
 		EndpointEnum: endpointEnum,
 		ParamFuzz:    paramFuzz,
 		ValueFuzz:    valueFuzz,
@@ -523,19 +583,23 @@ func (t *AttackDataTree) NextBatch() []*ReconTask {
 	return tasks
 }
 
-// collectPending は指定タイプの pending タスクを DFS で収集する
+// collectPending は指定タイプの pending タスクを DFS で収集し、優先度順にソートする
 func (t *AttackDataTree) collectPending(tasks *[]*ReconTask, taskType ReconTaskType, limit int) {
+	startIdx := len(*tasks)
 	for _, node := range t.Ports {
-		if len(*tasks) >= limit {
-			return
-		}
-		t.collectPendingFromNode(tasks, node, taskType, limit)
+		t.collectPendingFromNode(tasks, node, taskType, limit*2) // ソート用に多めに収集
 	}
 	for _, node := range t.Vhosts {
-		if len(*tasks) >= limit {
-			return
-		}
-		t.collectPendingFromNode(tasks, node, taskType, limit)
+		t.collectPendingFromNode(tasks, node, taskType, limit*2)
+	}
+	// 同一タスクタイプ内で優先度順にソート（High → Normal → Low）
+	newTasks := (*tasks)[startIdx:]
+	sort.SliceStable(newTasks, func(i, j int) bool {
+		return newTasks[i].Node.Priority < newTasks[j].Node.Priority
+	})
+	// limit を超えた分を切り詰め
+	if len(*tasks) > startIdx+limit {
+		*tasks = (*tasks)[:startIdx+limit]
 	}
 }
 
