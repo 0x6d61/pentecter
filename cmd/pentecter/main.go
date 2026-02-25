@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -70,6 +71,15 @@ Chat commands:
 	// Auto-detect provider if not specified
 	selectedProvider := brain.Provider(*provider)
 	if *provider == "" {
+		// If model explicitly targets OpenRouter, prioritize OpenRouter provider.
+		trimmedModel := strings.TrimSpace(*model)
+		if len(trimmedModel) > len("openrouter/") && strings.HasPrefix(strings.ToLower(trimmedModel), "openrouter/") {
+			selectedProvider = brain.ProviderOpenRouter
+			*model = strings.TrimSpace(trimmedModel[len("openrouter/"):])
+			fmt.Fprintln(os.Stderr, "Auto-selected provider: openrouter (from -model prefix)")
+		}
+	}
+	if *provider == "" && selectedProvider == "" {
 		detected := brain.DetectAvailableProviders()
 		if len(detected) == 0 {
 			fmt.Fprintln(os.Stderr, "No LLM provider detected. Set one of:")

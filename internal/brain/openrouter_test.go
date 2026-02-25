@@ -32,6 +32,21 @@ func TestLoadConfig_OpenRouter_Defaults(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_OpenRouter_StripsOpenRouterPrefix(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+	cfg, err := brain.LoadConfig(brain.ConfigHint{
+		Provider: brain.ProviderOpenRouter,
+		Model:    "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig openrouter: %v", err)
+	}
+	if cfg.Model != "qwen/qwen3-next-80b-a3b-instruct:free" {
+		t.Errorf("Model: got %q, want %q", cfg.Model, "qwen/qwen3-next-80b-a3b-instruct:free")
+	}
+}
+
 func TestOpenRouterBrain_Think(t *testing.T) {
 	action := `{"thought":"test","action":"wait","seconds":1}`
 	srv := mockOpenAIServer(t, openAIResponse(action))

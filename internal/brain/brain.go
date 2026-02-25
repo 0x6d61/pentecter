@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/0x6d61/pentecter/pkg/schema"
 )
@@ -211,6 +212,10 @@ func LoadConfig(hint ConfigHint) (Config, error) {
 
 		if cfg.Model == "" {
 			cfg.Model = os.Getenv("OPENROUTER_MODEL")
+		}
+		cfg.Model = strings.TrimSpace(cfg.Model)
+		if len(cfg.Model) > len("openrouter/") && strings.HasPrefix(strings.ToLower(cfg.Model), "openrouter/") {
+			cfg.Model = strings.TrimSpace(cfg.Model[len("openrouter/"):])
 		}
 		if cfg.Model == "" {
 			cfg.Model = "openai/gpt-4o-mini"
