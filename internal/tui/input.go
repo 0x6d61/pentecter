@@ -299,9 +299,5 @@ func (a *App) showSelect(title string, options []SelectOption, callback func(a *
 			_, _ = fmt.Fprintf(a.testWriter, "  %d. %s\n", i+1, opt.Label)
 		}
 		_, _ = fmt.Fprintf(a.testWriter, "  [1-%d/q]\n", len(options))
-		return
 	}
-
-	// In line-mode runtime, mode changes are not visible until we re-render.
-	a.clearAndReprint()
 }

@@ -27,7 +27,7 @@ func main() {
 	_ = godotenv.Load()
 
 	var (
-		provider    = flag.String("provider", "openrouter", "LLM provider (fixed: openrouter)")
+		provider    = flag.String("provider", "", "LLM provider: anthropic, openai, ollama (auto-detect if empty)")
 		model       = flag.String("model", "", "Model name (default: provider's default)")
 		autoApprove = flag.Bool("auto-approve", false, "Auto-approve all commands without proposal")
 	)
@@ -42,14 +42,16 @@ Flags:
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Environment:
-  OPENROUTER_API_KEY    OpenRouter API key
-  OPENROUTER_BASE_URL   OpenRouter API base URL (default: https://openrouter.ai/api/v1)
-  OPENROUTER_MODEL      OpenRouter model (default: openai/gpt-4o-mini)
+  ANTHROPIC_API_KEY          Anthropic API key
+  CLAUDE_CODE_OAUTH_TOKEN    Claude Code OAuth token (claude setup-token)
+  OPENAI_API_KEY        OpenAI API key
+  OLLAMA_BASE_URL       Ollama server URL (default: http://localhost:11434)
+  OLLAMA_MODEL          Ollama model name (default: llama3.2)
 
 Examples:
   pentecter                                          # Start without targets (add via chat)
   pentecter 10.0.0.5                                 # Start with a target
-  pentecter -provider openrouter 10.0.0.5 10.0.0.8   # Multiple targets
+  pentecter -provider ollama 10.0.0.5 10.0.0.8       # Multiple targets
 
 Chat commands:
   10.0.0.5             Enter an IP address to add a target
@@ -60,18 +62,17 @@ Chat commands:
 	flag.Parse()
 
 	// --- Brain ---
+	// Auto-detect provider if not specified
 	selectedProvider := brain.Provider(*provider)
-	if selectedProvider == "" {
-		selectedProvider = brain.ProviderOpenRouter
-	}
-	if selectedProvider != brain.ProviderOpenRouter {
-		fmt.Fprintf(
-			os.Stderr,
-			"Unsupported provider %q. Only %q is allowed.\n",
-			selectedProvider,
-			brain.ProviderOpenRouter,
-		)
-		os.Exit(1)
+	if *provider == "" {
+		detected := brain.DetectAvailableProviders()
+		if len(detected) == 0 {
+			fmt.Fprintln(os.Stderr, "No LLM provider detected. Set one of:")
+			fmt.Fprintln(os.Stderr, "  ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, or OLLAMA_BASE_URL")
+			os.Exit(1)
+		}
+		selectedProvider = detected[0]
+		fmt.Fprintf(os.Stderr, "Auto-detected provider: %s\n", selectedProvider)
 	}
 
 	// --- Tools ---（Brain より先にロードし、ツール名をシステムプロンプトに注入する）
@@ -127,7 +128,7 @@ Chat commands:
 	}
 
 	// --- SubBrain for SmartSubAgent ---
-	// Defaults to same config as main brain; override with SUBAGENT_MODEL.
+	// Defaults to same config as main brain; override with SUBAGENT_MODEL / SUBAGENT_PROVIDER.
 	// IsSubAgent = true により SubAgent 用のシンプルなプロンプトが使われる
 	// （spawn_task 等の無限ループを防ぐ）。
 	subBrainCfg := brainCfg // copy main config
@@ -137,8 +138,17 @@ Chat commands:
 		subBrainCfg.Model = model
 	}
 	if provider := os.Getenv("SUBAGENT_PROVIDER"); provider != "" {
-		if brain.Provider(provider) != brain.ProviderOpenRouter {
-			log.Printf("SUBAGENT_PROVIDER=%q ignored: only openrouter is supported", provider)
+		subBrainCfg.Provider = brain.Provider(provider)
+		// Reload config for the new provider
+		reloaded, err := brain.LoadConfig(brain.ConfigHint{
+			Provider: brain.Provider(provider),
+			Model:    subBrainCfg.Model,
+		})
+		if err == nil {
+			subBrainCfg = reloaded
+			subBrainCfg.ToolNames = toolNames
+			subBrainCfg.IsSubAgent = true
+			subBrainCfg.IsEventDrivenMain = false
 		}
 	}
 	subBrain, err := brain.New(subBrainCfg)

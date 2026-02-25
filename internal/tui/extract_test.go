@@ -2,7 +2,6 @@ package tui
 
 import (
 	"bytes"
-	"context"
 	"testing"
 
 	"github.com/0x6d61/pentecter/internal/agent"
@@ -127,17 +126,15 @@ func newTestApp(targets []*agent.Target) *App {
 	return a
 }
 
-func TestHandleModelCommand_ListModels(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+func TestHandleModelCommand_ListProviders(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
 	a := newTestApp([]*agent.Target{target})
-	a.OpenRouterModelFetcher = func(context.Context) ([]brain.OpenRouterModel, error) {
-		return []brain.OpenRouterModel{
-			{ID: "openai/gpt-4o-mini", Name: "GPT-4o Mini"},
-			{ID: "anthropic/claude-3.5-sonnet", Name: "Claude 3.5 Sonnet"},
-		}, nil
-	}
 
 	a.handleModelCommand("/model")
 
@@ -145,48 +142,45 @@ func TestHandleModelCommand_ListModels(t *testing.T) {
 		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
 	if len(a.selectOpts) < 1 {
-		t.Error("expected at least 1 model in select options")
+		t.Error("expected at least 1 provider in select options")
 	}
 	found := false
 	for _, opt := range a.selectOpts {
-		if opt.Value == "openai/gpt-4o-mini" {
+		if opt.Value == "anthropic" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected 'openai/gpt-4o-mini' in select options")
+		t.Error("expected 'anthropic' in select options")
 	}
 }
 
-func TestHandleModelCommand_WithExactArg_SwitchesDirectly(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+func TestHandleModelCommand_WithArgs_ShowsSelectUI(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
 	a := newTestApp([]*agent.Target{target})
-	a.OpenRouterModelFetcher = func(context.Context) ([]brain.OpenRouterModel, error) {
-		return []brain.OpenRouterModel{
-			{ID: "openai/gpt-4o", Name: "GPT-4o"},
-		}, nil
-	}
 	a.BrainFactory = func(hint brain.ConfigHint) (brain.Brain, error) {
 		return nil, nil
 	}
 
 	a.handleModelCommand("/model openai/gpt-4o")
 
-	if a.inputMode == ModeSelect {
-		t.Errorf("expected direct switch mode, got select")
-	}
-	if a.CurrentProvider != "openrouter" {
-		t.Errorf("CurrentProvider: got %q, want openrouter", a.CurrentProvider)
-	}
-	if a.CurrentModel != "openai/gpt-4o" {
-		t.Errorf("CurrentModel: got %q, want openai/gpt-4o", a.CurrentModel)
+	if a.inputMode != ModeSelect {
+		t.Errorf("expected ModeSelect mode, got %d", a.inputMode)
 	}
 }
 
 func TestHandleModelCommand_NoProviders(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("OLLAMA_BASE_URL", "")
 
 	target := agent.NewTarget(1, "10.0.0.1")
 	a := newTestApp([]*agent.Target{target})

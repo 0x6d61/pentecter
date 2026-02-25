@@ -86,7 +86,7 @@ func renderCommandBlock(b *agent.DisplayBlock, width int, expanded bool) string 
 }
 
 // renderThinkingBlock は思考中/処理中ブロックをレンダリングする。
-// 処理中: … Thinking...
+// 処理中: <spinnerFrame> Thinking... (アニメーション付きスピナー)
 // 完了: ✻ Completed in Xs
 func renderThinkingBlock(b *agent.DisplayBlock, _ string, expanded bool) string {
 	if !expanded {
@@ -101,7 +101,7 @@ func renderThinkingBlock(b *agent.DisplayBlock, _ string, expanded bool) string 
 	if !b.ThinkingDone {
 		// Keep spinner animation in the prompt only, but keep a colored
 		// thinking marker in the log stream.
-		return "\n" + style.Render("… Thinking...") + "\n\n"
+		return "\n" + style.Render("✻ Thinking...") + "\n\n"
 	}
 
 	dur := formatDuration(b.ThinkDuration)
