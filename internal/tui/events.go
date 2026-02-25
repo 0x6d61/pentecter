@@ -16,7 +16,7 @@ func (a *App) consumeEvents(ctx context.Context) {
 			if !ok {
 				return
 			}
-			a.handleAgentEvent(e)
+			a.enqueueUIEvent(uiEventMsg{kind: uiEventAgent, agent: e})
 		}
 	}
 }
@@ -170,7 +170,9 @@ func (a *App) handleAgentEvent(e agent.Event) {
 		a.updateSpinnerState()
 	}
 
-	a.clearAndReprint()
+	if a.testWriter != nil {
+		a.clearAndReprint()
+	}
 }
 
 // updateSpinnerState checks if there are active blocks and updates the spinner.

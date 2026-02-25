@@ -28,8 +28,7 @@ Registry に登録済み？
 
 ### グローバル Auto-Approve
 
-`--auto-approve` フラグ（または設定ファイル）で有効化。
-UI からの `/approve` コマンド切り替えは廃止。
+`--auto-approve` フラグまたは TUI の `/approve on` コマンドで有効化。
 有効時は全コマンドが無条件で自動実行される。
 
 ## ツール定義（tools/*.yaml）

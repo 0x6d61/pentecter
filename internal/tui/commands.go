@@ -1,12 +1,9 @@
 package tui
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/0x6d61/pentecter/internal/brain"
 )
@@ -20,6 +17,9 @@ func (a *App) handleCommand(fullText string) bool {
 	cmd := fields[0]
 
 	switch cmd {
+	case "/approve":
+		a.handleApproveCommand(fullText)
+		return true
 	case "/model":
 		a.handleModelCommand(fullText)
 		return true
@@ -35,120 +35,110 @@ func (a *App) handleCommand(fullText string) bool {
 	case "/fold":
 		a.toggleFold()
 		return true
-	case "/thinkfold":
-		a.toggleThinkingFold()
-		return true
 	case "/status":
 		a.printStatusLine()
+		return true
+	case "/copy":
+		a.handleCopyCommand()
 		return true
 	default:
 		return false
 	}
 }
 
-func parseModelArg(fullText string) string {
-	fields := strings.Fields(fullText)
-	if len(fields) < 2 {
-		return ""
+// handleApproveCommand processes /approve commands.
+func (a *App) handleApproveCommand(_ string) {
+	if a.Runner == nil {
+		a.logSystem("Auto-approve not available")
+		return
 	}
-	return strings.TrimSpace(strings.Join(fields[1:], " "))
+
+	currentStatus := "OFF"
+	if a.Runner.AutoApprove() {
+		currentStatus = "ON"
+	}
+	a.showSelect(
+		fmt.Sprintf("Auto-approve (current: %s):", currentStatus),
+		[]SelectOption{
+			{Label: "ON  -- auto-approve all commands", Value: "on"},
+			{Label: "OFF -- require approval", Value: "off"},
+		},
+		func(a *App, value string) {
+			if a.Runner == nil {
+				return
+			}
+			switch value {
+			case "on":
+				a.Runner.SetAutoApprove(true)
+				a.logSystem("Auto-approve: ON -- all commands will execute without confirmation")
+			case "off":
+				a.Runner.SetAutoApprove(false)
+				a.logSystem("Auto-approve: OFF -- proposals will require confirmation")
+			}
+		},
+	)
 }
 
-func modelOptionsFromOpenRouter(models []brain.OpenRouterModel) []SelectOption {
-	opts := make([]SelectOption, 0, len(models))
-	for _, m := range models {
-		label := m.ID
-		if m.Name != "" && !strings.EqualFold(m.Name, m.ID) {
-			label = fmt.Sprintf("%s (%s)", m.ID, m.Name)
+// modelsForProvider returns a list of models for the given provider.
+func modelsForProvider(p brain.Provider) []SelectOption {
+	switch p {
+	case brain.ProviderAnthropic:
+		return []SelectOption{
+			{Label: "claude-sonnet-4-6 (recommended)", Value: "claude-sonnet-4-6"},
+			{Label: "claude-opus-4-6", Value: "claude-opus-4-6"},
+			{Label: "claude-haiku-4-5", Value: "claude-haiku-4-5-20251001"},
 		}
-		opts = append(opts, SelectOption{Label: label, Value: m.ID})
-	}
-	return opts
-}
-
-func resolveOpenRouterModel(query string, models []brain.OpenRouterModel) (string, bool) {
-	q := strings.TrimSpace(query)
-	if q == "" {
-		return "", false
-	}
-	for _, m := range models {
-		if strings.EqualFold(m.ID, q) {
-			return m.ID, true
+	case brain.ProviderOpenAI:
+		return []SelectOption{
+			{Label: "gpt-4o (recommended)", Value: "gpt-4o"},
+			{Label: "gpt-4o-mini", Value: "gpt-4o-mini"},
+			{Label: "o3-mini", Value: "o3-mini"},
 		}
-	}
-	return "", false
-}
-
-func filterOpenRouterModels(query string, models []brain.OpenRouterModel) []brain.OpenRouterModel {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return models
-	}
-	filtered := make([]brain.OpenRouterModel, 0, len(models))
-	for _, m := range models {
-		id := strings.ToLower(m.ID)
-		name := strings.ToLower(m.Name)
-		if strings.Contains(id, q) || strings.Contains(name, q) {
-			filtered = append(filtered, m)
+	case brain.ProviderOllama:
+		return []SelectOption{
+			{Label: "llama3.2 (recommended)", Value: "llama3.2"},
+			{Label: "llama3.2:3b", Value: "llama3.2:3b"},
+			{Label: "qwen2.5:7b", Value: "qwen2.5:7b"},
+			{Label: "gemma2:9b", Value: "gemma2:9b"},
 		}
+	default:
+		return nil
 	}
-	return filtered
-}
-
-func (a *App) fetchOpenRouterModels(ctx context.Context) ([]brain.OpenRouterModel, error) {
-	if a.OpenRouterModelFetcher != nil {
-		return a.OpenRouterModelFetcher(ctx)
-	}
-	return brain.FetchOpenRouterModels(ctx)
 }
 
 // handleModelCommand processes /model commands.
-func (a *App) handleModelCommand(fullText string) {
-	if os.Getenv("OPENROUTER_API_KEY") == "" {
-		a.logSystem("No providers detected. Set OPENROUTER_API_KEY.")
+func (a *App) handleModelCommand(_ string) {
+	detected := brain.DetectAvailableProviders()
+	if len(detected) == 0 {
+		a.logSystem("No providers detected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL.")
 		return
 	}
 
-	provider := brain.ProviderOpenRouter
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	models, err := a.fetchOpenRouterModels(ctx)
-	if err != nil {
-		a.logSystem(fmt.Sprintf("Failed to fetch OpenRouter models: %v", err))
-		return
-	}
-	if len(models) == 0 {
-		a.logSystem("No models returned by OpenRouter.")
-		return
-	}
-
-	arg := parseModelArg(fullText)
-	if arg != "" {
-		if exact, ok := resolveOpenRouterModel(arg, models); ok {
-			a.switchModel(provider, exact)
-			return
+	options := make([]SelectOption, len(detected))
+	for i, p := range detected {
+		options[i] = SelectOption{
+			Label: string(p),
+			Value: string(p),
 		}
-		filtered := filterOpenRouterModels(arg, models)
-		if len(filtered) == 0 {
-			a.logSystem(fmt.Sprintf("No OpenRouter model matches: %s", arg))
-			return
-		}
-		a.showSelect(
-			fmt.Sprintf("Select model (%s, %d matches):", provider, len(filtered)),
-			modelOptionsFromOpenRouter(filtered),
-			func(a *App, modelValue string) {
-				a.switchModel(provider, modelValue)
-			},
-		)
-		return
 	}
 
 	a.showSelect(
-		fmt.Sprintf("Select model (%s, %d total):", provider, len(models)),
-		modelOptionsFromOpenRouter(models),
-		func(a *App, modelValue string) {
-			a.switchModel(provider, modelValue)
+		"Select provider:",
+		options,
+		func(a *App, providerValue string) {
+			provider := brain.Provider(providerValue)
+			models := modelsForProvider(provider)
+			if len(models) == 0 {
+				a.switchModel(provider, "")
+				return
+			}
+			a.showSelect(
+				fmt.Sprintf("Select model (%s):", providerValue),
+				models,
+				func(a *App, modelValue string) {
+					a.switchModel(provider, modelValue)
+				},
+			)
 		},
 	)
 }
@@ -214,6 +204,10 @@ func (a *App) handleTargetsCommand() {
 			}
 			a.selected = idx
 			host := a.targets[idx].Host
+			a.outputScroll = 0
+			a.outputFollow = true
+			a.outputPrevWrapped = 0
+			a.outputPrevWrapWidth = 0
 			if a.targets[idx].GetProposal() != nil {
 				a.inputMode = ModeProposal
 			} else if a.inputMode == ModeProposal {
@@ -263,4 +257,11 @@ func (a *App) handleSkipReconCommand() {
 	pending := rt.CountPending()
 	rt.Unlock()
 	a.logSystem(fmt.Sprintf("RECON phase unlocked (%d pending tasks skipped). Agent will proceed to ANALYZE.", pending))
+}
+
+// handleCopyCommand enters log copy mode.
+func (a *App) handleCopyCommand() {
+	a.mu.Lock()
+	a.enterCopyModeLocked()
+	a.mu.Unlock()
 }

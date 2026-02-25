@@ -286,11 +286,14 @@ func TestHandleCommand_Status(t *testing.T) {
 	a.handleCommand("/status")
 }
 
-func TestHandleCommand_ApproveRemoved(t *testing.T) {
+func TestHandleCommand_Copy(t *testing.T) {
 	a := newTestApp(nil)
 
-	if a.handleCommand("/approve") {
-		t.Fatal("expected /approve command to be unhandled")
+	if !a.handleCommand("/copy") {
+		t.Fatal("expected /copy command to be handled")
+	}
+	if a.inputMode != ModeCopy {
+		t.Fatalf("expected ModeCopy after /copy, got %d", a.inputMode)
 	}
 }
 
