@@ -39,4 +39,4 @@ COPY config/ /app/config/
 # Docker 専用 config で上書き
 COPY demo/config.docker.yaml /app/config/config.yaml
 WORKDIR /app
-ENTRYPOINT ["pentecter"]
+ENTRYPOINT ["pentecter","-provider","openrouter","-model","anthropic/claude-sonnet-4.6"]

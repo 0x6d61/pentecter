@@ -102,6 +102,9 @@ type App struct {
 	outputPrevWrapped   int
 	outputPrevWrapWidth int
 
+	// コマンド出力のダーティフラグ（EventCmdOutput のキャッシュ無効化をバッチ化）
+	cmdOutputDirty bool
+
 	// Output render cache to avoid full re-wrap on every keypress.
 	outputVersion           uint64
 	outputCacheVersion      uint64
@@ -349,6 +352,13 @@ func (a *App) processUIEvents() bool {
 				if a.spinnerActive.Load() {
 					a.spinnerIdx.Add(1)
 				}
+				// コマンド出力のダーティフラグをフラッシュ（バッチ化された再描画）
+				a.mu.Lock()
+				if a.cmdOutputDirty {
+					a.invalidateOutputCacheLocked()
+					a.cmdOutputDirty = false
+				}
+				a.mu.Unlock()
 			}
 			if processedCount >= uiEventProcessMax || (processedCount%16 == 0 && time.Since(start) >= uiEventProcessBudget) {
 				if len(ch) > 0 {
@@ -1464,7 +1474,7 @@ func renderBlockCached(b *agent.DisplayBlock, width int, expanded bool, spinnerF
 	if b.RenderedCache != "" && b.CacheWidth == width && b.CacheExpanded == expanded {
 		switch b.Type {
 		case agent.BlockCommand:
-			if b.Completed {
+			if b.Completed || b.CacheOutputLen == len(b.Output) {
 				return b.RenderedCache
 			}
 		case agent.BlockThinking:
@@ -1501,6 +1511,12 @@ func renderBlockCached(b *agent.DisplayBlock, width int, expanded bool, spinnerF
 		b.RenderedCache = rendered
 		b.CacheWidth = width
 		b.CacheExpanded = expanded
+	} else if b.Type == agent.BlockCommand && !b.Completed {
+		// 未完了コマンドブロック: 出力行数でキャッシュを追跡
+		b.RenderedCache = rendered
+		b.CacheWidth = width
+		b.CacheExpanded = expanded
+		b.CacheOutputLen = len(b.Output)
 	}
 	return rendered
 }
@@ -1871,7 +1887,7 @@ func (a *App) printWelcome() {
 	a.welcomePrinted = true
 
 	lines := []string{
-		"PENTECTER - Autonomous Penetration Testing Agent",
+		"⛈PENTECTER - Autonomous Penetration Testing Agent",
 	}
 	if len(a.targets) == 0 {
 		lines = append(lines,
